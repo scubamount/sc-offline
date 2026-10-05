@@ -1,13 +1,46 @@
-# ChrisWareOffline
+# Star Citizen Offline Mod (ChrisWareOffline)
 
 ![A Vanduul holding a gun on a desert planet, with a line of Vanduul and a large ship behind it](images/screenshot.webp)
 
-An offline, single-player mod menu for Star Citizen.
+Offline single-player mod menu for **Star Citizen**. Spawn any ship or NPC, set your wallet, toggle god mode, build for free, wear Squadron 42 outfits, and start environmental missions — all on your own PC, with no servers.
 
 > [!WARNING]
 > This mod may result in a ban. Use it at your own risk. It is for **offline single player only**.
 
-**Jump to:** [Setup](#setup) · [Play](#play) · [Controls](#controls) · [Update](#update) · [Go back online](#go-back-online) · [Notes](#notes)
+**Jump to:** [Features](#features) · [Requirements](#requirements) · [Setup](#setup) · [Play](#play) · [Controls](#controls) · [Update](#update) · [Go back online](#go-back-online) · [Notes](#notes) · [Credits](#credits)
+
+---
+
+## Features
+
+Everything runs through one in-game menu. Press **M** to open it.
+
+| Feature | What it does |
+| --- | --- |
+| **Ships** | Spawn any vehicle in the game — 1102 entries, from the Bengal to the Idris-P. The menu sorts biggest first and skips anything your game version can't find. |
+| **Spawn NPC** | Spawn any NPC archetype (2239 entries), in front of you or overhead with you in the pilot seat. |
+| **Clear NPCs** | Remove every NPC the mod spawned. |
+| **Wallet** | Set your aUEC balance. Persists in `data/wallet.txt`. |
+| **God mode** | Toggle invulnerability. |
+| **Build mode (F6)** | Free build mode, 3746 buildable entries. |
+| **Item Picker** | Equip any item (1499 entries) from the gear menu. |
+| **Outfits** | Wear Squadron 42 outfits (178) and cast members' heads. Experimental — the SQ42 menus are flagged spoiler-bearing in-game. |
+| **Missions** | Start 34 environmental missions that normally need the online backend — combat assist, pirate blockades, and more. |
+| **Contracts** | 2153 generated contracts with their mission scripts wired up locally. |
+| **Teleport** | Save a position (F7) and teleport back to it (F8). |
+
+---
+
+## Requirements
+
+- **You must own Star Citizen.** This is a mod for the game, not a standalone app.
+- Windows. The mod is a `dinput8.dll` that the game loads.
+- About 1 GB of disk for the download.
+- Administrator rights, to copy the mod into your game folder.
+- **Easy Anti-Cheat must be off.** See [Setup](#setup).
+
+> [!NOTE]
+> There is no separate build step. This repo ships the prebuilt `dinput8.dll` you run. If you want to compile the mod yourself, see [Credits](#credits) for the source project.
 
 ---
 
@@ -50,7 +83,7 @@ This stops the launcher from downloading fresh EAC files.
 
 1. Click the green **Code** button at the top of this page and choose **Download ZIP**.
 2. Right-click the ZIP and choose **Extract All**.
-3. Place the `ChrisWareOffline-main` folder anywhere you like, such as your Desktop.
+3. Place the `sc-offline-main` folder anywhere you like, such as your Desktop.
 4. Keep all files together in that folder.
 
 The mod does **not** go in your game folder. `launch_offline.bat` copies it in when you play and removes it when you close the game.
@@ -78,12 +111,12 @@ C:\Program Files\Roberts Space Industries\StarCitizen\LIVE
 
 ## Controls
 
-| Key  | Action                                |
-| ---- | ------------------------------------- |
-| `M`  | Open / close the menu                 |
-| `F7` | Save your current position            |
-| `F8` | Teleport to your saved position       |
-| `F6` | Turn build mode on / off              |
+| Key | Action |
+| --- | --- |
+| `M` | Open / close the menu |
+| `F7` | Save your current position |
+| `F8` | Teleport to your saved position |
+| `F6` | Turn build mode on / off |
 
 ---
 
@@ -125,6 +158,18 @@ Everything is back to normal.
 
 - A game update can break the mod until the mod is updated.
 - A log of what the mod does is saved to `mod.log` in the `data` folder.
+- The lists the menu reads all live in `data/` as plain text — `ships.txt`, `npcs.txt`, `items.txt`, `buildables.txt`, `missions.txt`, `contract_scripts.txt`, `outfits.txt`. Each file documents its own format in a header comment. Trim a list down and the menu gets shorter.
+
+---
+
+## Credits
+
+**ChrisWareOffline** is not my project. The mod and its source belong to **Chris Ware**:
+
+- Source and issue tracker: <https://github.com/trionic1/chrisware-project> (GPL-3.0)
+- Upstream Discord: <https://discord.gg/979RRuMjDP>
+
+This repository redistributes the prebuilt `dinput8.dll` with expanded data files. Licensed under GPL-3.0 — see [LICENSE](LICENSE). To build the mod from source instead, follow the build steps in the upstream README (Visual Studio 2026, Desktop development with C++, Release x64).
 
 ---
 
