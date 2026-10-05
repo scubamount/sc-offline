@@ -1,8 +1,8 @@
 # Star Citizen Offline Mod (ChrisWareOffline)
 
-![A Vanduul holding a gun on a desert planet, with a line of Vanduul and a large ship behind it](images/screenshot.webp)
+<img src="images/banner.webp" alt="Star Citizen Offline Mod — offline single-player mod menu for Star Citizen" width="100%">
 
-Offline single-player mod menu for **Star Citizen**. Spawn any ship or NPC, set your wallet, toggle god mode, build for free, wear Squadron 42 outfits, and start environmental missions — all on your own PC, with no servers.
+Offline single-player mod menu for **Star Citizen**.
 
 > [!WARNING]
 > This mod may result in a ban. Use it at your own risk. It is for **offline single player only**.
@@ -28,6 +28,12 @@ Everything runs through one in-game menu. Press **M** to open it.
 | **Missions** | Start 34 environmental missions that normally need the online backend — combat assist, pirate blockades, and more. |
 | **Contracts** | 2153 generated contracts with their mission scripts wired up locally. |
 | **Teleport** | Save a position (F7) and teleport back to it (F8). |
+
+---
+
+## Screenshots
+
+![A Vanduul holding a gun on a desert planet, with a line of Vanduul and a large ship behind it](images/screenshot.webp)
 
 ---
 
