@@ -90,6 +90,75 @@ bool SetCVarNow(const char* name, float value) {
     }
 }
 
+bool GetCVarNow(const char* name, float& value) {
+    if (!g_console || !*g_console || !name || !*name) return false;
+    __try {
+        const uintptr_t cvar = VCall<uintptr_t>(*g_console, 0xC0, name);
+        if (!cvar) return false;
+        value = VCall<float>(cvar, 0x20);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// Squadron 42 tab settings. The shipped mod carries these four cvars XORed with a
+// per-blob key (Murmur-style fmix32 over the byte offset); these are the names
+// decrypted out of dinput8.dll's label table.
+static const struct { const char* label; const char* tip; const char* cvar; } kS42Settings[] = {
+    { "SQ42 auto targeting",
+      "\"Enables the auto targeting feature for SQ42\" (the game mode can override it).",
+      "i_target_selector.targeting2_enabled" },
+    { "Visor mini-map",
+      "The mini-map on your visor HUD.",
+      "pl_lensdisplay.minimap_enabled" },
+    { "Visor greebles",
+      "The decorative frame pieces on your visor HUD.",
+      "pl_lensdisplay.greebles_enabled" },
+    { "SQ42 menus (experimental)",
+      "\"Enable Squadron 42 Frontend\". Switches the pause menu and loading screens to SQ42's, whose data is "
+      "missing; turn it off before traveling or quitting if anything breaks.",
+      "g_squadron_frontend" },
+};
+constexpr int kS42SettingCount = sizeof(kS42Settings) / sizeof(kS42Settings[0]);
+
+static volatile LONG g_s42On[kS42SettingCount] = { -1, -1, -1, -1 };
+static SRWLOCK       g_s42Lock = SRWLOCK_INIT;
+static int           g_s42Pending = -1;
+static bool          g_s42PendingOn = false;
+
+int         Menu_S42SettingCount() { return kS42SettingCount; }
+const char* Menu_S42SettingLabel(int i) { return i >= 0 && i < kS42SettingCount ? kS42Settings[i].label : ""; }
+const char* Menu_S42SettingTip(int i)   { return i >= 0 && i < kS42SettingCount ? kS42Settings[i].tip   : ""; }
+bool        Menu_S42SettingOn(int i)    { return i >= 0 && i < kS42SettingCount && g_s42On[i] == 1; }
+
+void Menu_RequestS42Setting(int i, bool on) {
+    if (i < 0 || i >= kS42SettingCount) return;
+    AcquireSRWLockExclusive(&g_s42Lock);
+    g_s42Pending = i;
+    g_s42PendingOn = on;
+    ReleaseSRWLockExclusive(&g_s42Lock);
+}
+
+static void ApplyS42Setting(int i, bool on) {
+    const int want = on ? 1 : 0;
+    if (!SetCVarNow(kS42Settings[i].cvar, static_cast<float>(want))) {
+        char cmd[96];
+        snprintf(cmd, sizeof(cmd), "%s %d", kS42Settings[i].cvar, want);
+        if (!Execute(cmd)) { Log("[sq42] console unavailable: %s", cmd); return; }
+    }
+    Log("[sq42] %s = %d", kS42Settings[i].cvar, want);
+}
+
+// Game thread only: reads the four cvars back so the menu can show them.
+static void RefreshS42Settings() {
+    for (int i = 0; i < kS42SettingCount; ++i) {
+        float v = 0.0f;
+        const bool ok = GetCVarNow(kS42Settings[i].cvar, v);
+        InterlockedExchange(&g_s42On[i], ok && v != 0.0f ? 1 : 0);
+    }
+}
+
 void ResolveCVarsApi(const Section& text, const Section& rdata) {
     for (int i = 0; i < kKeptOnCount; ++i)
         if (!(g_keptOn[i] = FindCVarStorage(text, rdata, kKeptOn[i].cvar)))
@@ -130,6 +199,17 @@ static void KeepSettingsOn() {
 
 void ProcessCVars() {
     KeepSettingsOn();
+    {
+        int idx = -1;
+        bool on = false;
+        AcquireSRWLockExclusive(&g_s42Lock);
+        idx = g_s42Pending;
+        on = g_s42PendingOn;
+        g_s42Pending = -1;
+        ReleaseSRWLockExclusive(&g_s42Lock);
+        if (idx >= 0) ApplyS42Setting(idx, on);
+        RefreshS42Settings();
+    }
     if (InterlockedExchange(&g_commandPending, 0)) {
         char cmd[256];
         AcquireSRWLockExclusive(&g_lock);

@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 #include "spawner.h"
+#include "cvars.h"
 #include "third_party/imgui/imgui.h"
 #include "third_party/imgui/imgui_impl_win32.h"
 #include "third_party/imgui/imgui_impl_dx11.h"
@@ -404,6 +405,15 @@ static void DrawSq42Tab(bool& keepOpen) {
             Menu_RequestWearSq42();
             keepOpen = false;
         }
+    }
+
+    ImGui::SeparatorText("Settings");
+    for (int i = 0; i < Menu_S42SettingCount(); ++i) {
+        bool on = Menu_S42SettingOn(i);
+        ImGui::PushID(i);
+        if (ImGui::Checkbox(Menu_S42SettingLabel(i), &on)) Menu_RequestS42Setting(i, on);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Menu_S42SettingTip(i));
+        ImGui::PopID();
     }
 
     ImGui::SeparatorText("Ships");
