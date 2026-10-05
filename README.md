@@ -25,6 +25,7 @@ Everything runs through one in-game menu. Press **M** to open it.
 | **Build mode (F6)** | Free build mode, 3746 buildable entries. |
 | **Item Picker** | Equip any item (1499 entries) from the gear menu. |
 | **Outfits** | Wear Squadron 42 outfits (178) and cast members' heads. Experimental — the SQ42 menus are flagged spoiler-bearing in-game. |
+| **Squadron 42 tab** | Spoiler-gated tab: the outfit picker, the SQ42 ship list (Idris-P, Gladius, Retaliator, Starfarer, Avenger Stalker, Hornet, the Vanduul AI wing, Bengal A / Bengal B with its enemy side) and a console runner. |
 | **Missions** | Start 34 environmental missions that normally need the online backend — combat assist, pirate blockades, and more. |
 | **Contracts** | 2153 generated contracts with their mission scripts wired up locally. |
 | **Teleport** | Save a position (F7) and teleport back to it (F8). |
@@ -46,7 +47,7 @@ Everything runs through one in-game menu. Press **M** to open it.
 - **Easy Anti-Cheat must be off.** See [Setup](#setup).
 
 > [!NOTE]
-> There is no separate build step. This repo ships the prebuilt `dinput8.dll` you run. If you want to compile the mod yourself, see [Credits](#credits) for the source project.
+> This repo ships the prebuilt `dinput8.dll` you run. To build from source instead, see [Build](#build) below.
 
 ---
 
@@ -115,6 +116,25 @@ C:\Program Files\Roberts Space Industries\StarCitizen\LIVE
 
 ---
 
+## Build
+
+The full C++ source is in `src/`. To compile the mod yourself:
+
+1. Install **Visual Studio 2022** (17.10+) or **VS 2026** with the **Desktop development with C++** workload.
+2. Open `ChrisWareOffline.slnx` in Visual Studio.
+3. Select **Release | x64** and build (Ctrl+Shift+B).
+4. The output is `src/x64/Release/dinput8.dll`.
+
+Or from the command line:
+
+```powershell
+msbuild ChrisWareOffline.slnx /p:Configuration=Release /p:Platform=x64 /m
+```
+
+The DLL is also built automatically on every push via [GitHub Actions](.github/workflows/build.yml) — artifacts are attached to each run.
+
+---
+
 ## Controls
 
 | Key | Action |
@@ -175,7 +195,7 @@ Everything is back to normal.
 - Source and issue tracker: <https://github.com/trionic1/chrisware-project> (GPL-3.0)
 - Upstream Discord: <https://discord.gg/979RRuMjDP>
 
-This repository redistributes the prebuilt `dinput8.dll` with expanded data files. Licensed under GPL-3.0 — see [LICENSE](LICENSE). To build the mod from source instead, follow the build steps in the upstream README (Visual Studio 2026, Desktop development with C++, Release x64).
+This repository includes the full C++ source (merged from upstream) alongside the prebuilt `dinput8.dll`. Licensed under GPL-3.0 — see [LICENSE](LICENSE). See [Build](#build) above for compilation instructions.
 
 ---
 

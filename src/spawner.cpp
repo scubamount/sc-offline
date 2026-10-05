@@ -223,6 +223,7 @@ static volatile LONG g_menuWantShips = 0;
 static SRWLOCK       g_menuLock = SRWLOCK_INIT;
 static char          g_menuStatus[256] = "Pick a ship and press Spawn.";
 static struct { bool pending; int index; float height; bool sit; bool flightReady; bool daymar; } g_spawnRequest;
+static struct { bool pending; bool enemyWing; char cls[64]; float height; bool sit; bool flightReady; } g_classRequest;
 
 static bool g_startDaymarPending = false;
 static char g_startShip[64] = "DRAK_Cutlass_Black";
@@ -304,6 +305,54 @@ static uintptr_t ClassRegistry() { return VCall<uintptr_t>(*g_tp.entitySystem, 0
 static int VehicleSize(uintptr_t entityClass) {
     const uintptr_t rec = VCall<uintptr_t>(*g_sp.game, 0x298, entityClass);
     return rec ? static_cast<int>(Rd<uint32_t>(rec + 0x10)) : 0;
+}
+
+// The Vanduul wing that makes Bengal B an enemy-side spawn.
+static const char* const kEnemySideClasses[] = {
+    "VNCL_Blade_PU_AI_VAN", "VNCL_Scythe_PU_AI_VAN", "VNCL_Glaive_PU_AI_VAN",
+};
+
+static bool ClassInRegistry(const char* cls) {
+    if (!g_sp.ok || !cls || !*cls) return false;
+    bool found = false;
+    __try {
+        const uintptr_t registry = ClassRegistry();
+        found = registry && VCall<uintptr_t>(registry, 0x20, cls) != 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        found = false;
+    }
+    return found;
+}
+
+// -1 until it has been read once on the game thread; the menu thread only
+// ever reads the cached value, it never touches the registry itself.
+static volatile LONG g_enemySide = -1;
+
+static bool EnemySideInRegistry() {
+    for (const char* c : kEnemySideClasses)
+        if (ClassInRegistry(c)) return true;
+    return false;
+}
+
+void RefreshEnemySide() {
+    if (InterlockedCompareExchange(&g_enemySide, 0, 0) >= 0) return;
+    bool enemy = false;
+    __try { enemy = EnemySideInRegistry(); } __except (EXCEPTION_EXECUTE_HANDLER) { enemy = false; }
+    InterlockedExchange(&g_enemySide, enemy ? 1 : 0);
+}
+
+bool Menu_EnemySideAvailable() { return InterlockedCompareExchange(&g_enemySide, 0, 0) == 1; }
+
+void Menu_RequestSpawnClass(const char* cls, float heightAboveMe, bool sitInPilotSeat, bool flightReady, bool enemyWing) {
+    AcquireSRWLockExclusive(&g_menuLock);
+    g_classRequest = {};
+    g_classRequest.pending = true;
+    g_classRequest.enemyWing = enemyWing;
+    strncpy_s(g_classRequest.cls, cls ? cls : "", _TRUNCATE);
+    g_classRequest.height = heightAboveMe;
+    g_classRequest.sit = sitInPilotSeat;
+    g_classRequest.flightReady = flightReady;
+    ReleaseSRWLockExclusive(&g_menuLock);
 }
 
 static const struct { const char* prefix; float meters; } kHullLengths[] = {
@@ -805,6 +854,7 @@ void ProcessShipMenu(DWORD now) {
     if (!g_sp.ok) return;
     ProcessNoclip();
     ProcessGodMode(now);
+    RefreshEnemySide();
     if (g_menuShipCount < 0 && g_menuWantShips) {
         uintptr_t actor, entity;
         bool live = false;
@@ -820,8 +870,29 @@ void ProcessShipMenu(DWORD now) {
     AcquireSRWLockExclusive(&g_menuLock);
     const auto req = g_spawnRequest;
     g_spawnRequest.pending = false;
+    const auto classReq = g_classRequest;
+    g_classRequest.pending = false;
     ReleaseSRWLockExclusive(&g_menuLock);
-    if (req.pending && req.daymar && req.index >= 0 && req.index < g_menuShipCount) {
+    if (classReq.pending && classReq.cls[0]) {
+        uint64_t id = 0;
+        if (const char* err = SpawnShipAbovePlayer(classReq.cls, classReq.height, id))
+            SetMenuStatus("Spawning %s failed: %s", classReq.cls, err);
+        else if (classReq.enemyWing) {
+            for (const char* wing : kEnemySideClasses)
+                if (ClassInRegistry(wing)) {
+                    uint64_t wingId = 0;
+                    SpawnShipAbovePlayer(wing, classReq.height, wingId);
+                }
+            SetMenuStatus("%s spawned %.0f m above you with its enemy side in the wing.", classReq.cls, classReq.height);
+        } else if (!classReq.sit)
+            SetMenuStatus("Spawning %s %.0f m above you (big ships take up to a minute).", classReq.cls, classReq.height);
+        else {
+            g_seatJob = { id, now };
+            g_seatJob.flightReady = classReq.flightReady;
+            strncpy_s(g_seatJob.name, classReq.cls, _TRUNCATE);
+            SetMenuStatus("Spawning %s - you'll be put in the pilot seat as soon as it's there (big ships take up to a minute).", classReq.cls);
+        }
+    } else if (req.pending && req.daymar && req.index >= 0 && req.index < g_menuShipCount) {
         StartDaymarArrival(g_menuShips[req.index].name, now);
     } else if (req.pending && req.index >= 0 && req.index < g_menuShipCount) {
         const char* name = g_menuShips[req.index].name;

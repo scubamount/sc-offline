@@ -3,6 +3,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include "spawner.h"
 #include "third_party/imgui/imgui.h"
 #include "third_party/imgui/imgui_impl_win32.h"
 #include "third_party/imgui/imgui_impl_dx11.h"
@@ -359,6 +360,123 @@ static void DrawMainTab(bool& keepOpen) {
     }
 }
 
+static void DrawSq42Tab(bool& keepOpen) {
+    static bool spoilerOk = false;
+    if (!spoilerOk) {
+        ImGui::SeparatorText("Spoiler warning");
+        ImGui::TextWrapped("This tab could have Squadron 42 spoilers.");
+        if (ImGui::Button("Press OK to continue.", ImVec2(-1, 0))) spoilerOk = true;
+        return;
+    }
+
+    ImGui::SeparatorText("Outfits");
+    const int outfits = Menu_OutfitCount();
+    if (outfits < 0) {
+        ImGui::TextWrapped("Loading outfits... (you need to be spawned in the universe)");
+    } else if (outfits == 0) {
+        ImGui::TextWrapped("No outfits found - check outfits.txt.");
+    } else {
+        static int  outfit = 0;
+        static char filter[64] = "";
+        static bool visor = false;
+        if (outfit >= outfits) outfit = 0;
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputTextWithHint("##outfitFilter", "search outfits...", filter, sizeof(filter));
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::BeginCombo("##outfit", Menu_OutfitName(outfit), ImGuiComboFlags_HeightLargest)) {
+            for (int i = 0; i < outfits; ++i) {
+                const char* name = Menu_OutfitName(i);
+                if (!MatchesFilter(name, filter)) continue;
+                ImGui::PushID(i);
+                if (ImGui::Selectable(name, i == outfit)) {
+                    outfit = i;
+                    Menu_RequestWearOutfit(i);
+                    keepOpen = false;
+                }
+                if (i == outfit) ImGui::SetItemDefaultFocus();
+                ImGui::PopID();
+            }
+            ImGui::EndCombo();
+        }
+        if (ImGui::Checkbox("SQ42 visor HUD (applies on the next Equip or outfit)", &visor))
+            Menu_SetS42VisorHud(visor);
+        if (ImGui::Button("Wear SQ42 outfit", ImVec2(-1, 0))) {
+            Menu_RequestWearSq42();
+            keepOpen = false;
+        }
+    }
+
+    ImGui::SeparatorText("Ships");
+    struct Entry { const char* label; const char* cls; bool enemyWing; float height; bool sit; };
+    static const struct { const char* label; const char* cls; } kSq42Ships[] = {
+        { "Idris-P (the Stanton's class)", "AEGS_Idris_P" },
+        { "Gladius (SQ42 fighter)",        "AEGS_Gladius" },
+        { "Retaliator (has an S42 HUD)",   "AEGS_Retaliator" },
+        { "Starfarer (ch 5, 7, 9)",        "MISC_Starfarer" },
+        { "Avenger Stalker (S42 wreck)",   "AEGS_Avenger_Stalker" },
+        { "Hornet (Cal Mason's ship)",     "ANVL_Hornet_F7C" },
+        { "Vanduul Blade (AI)",            "VNCL_Blade_PU_AI_VAN" },
+        { "Vanduul Scythe (AI)",           "VNCL_Scythe_PU_AI_VAN" },
+        { "Vanduul Glaive (AI)",           "VNCL_Glaive_PU_AI_VAN" },
+        { "Vanduul Stinger (AI)",          "VNCL_Stinger_PU_AI_VAN" },
+    };
+    Entry list[16];
+    int   n = 0;
+    for (size_t i = 0; i < sizeof(kSq42Ships) / sizeof(kSq42Ships[0]); ++i)
+        list[n++] = { kSq42Ships[i].label, kSq42Ships[i].cls, false, 0.0f, true };
+    for (int i = 0; i < n; ++i)
+        if (strncmp(list[i].cls, "VNCL_", 5) == 0) { list[i].height = 300.0f; list[i].sit = false; }
+
+    static char bengalB[64];
+    const bool enemySide = Menu_EnemySideAvailable();
+    strcpy_s(bengalB, enemySide ? "Bengal B (enemy)" : "Bengal B (UEE, no enemy side found)");
+    list[n++] = { "Bengal A (UEE)", "RSI_Bengal_PU_AI_UEE", false,      1500.0f, false };
+    list[n++] = { bengalB,          "RSI_Bengal_PU_AI_UEE", enemySide, 1500.0f, false };
+
+    static int   pick = 0;
+    static char  sqFilter[64] = "";
+    static float height = 20.0f;
+    static bool  sit = true;
+    if (pick >= n) pick = 0;
+
+    ImGui::TextWrapped("Your ships put you in the pilot seat; the Vanduul ones spawn 300 m up and come for you.");
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##sq42shipFilter", "search ships...", sqFilter, sizeof(sqFilter));
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::BeginCombo("##sq42ships", list[pick].label, ImGuiComboFlags_HeightLargest)) {
+        for (int i = 0; i < n; ++i) {
+            if (sqFilter[0] && !MatchesFilter(list[i].label, sqFilter)) continue;
+            ImGui::PushID(i);
+            if (ImGui::Selectable(list[i].label, i == pick)) pick = i;
+            if (i == pick) ImGui::SetItemDefaultFocus();
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    if (list[pick].sit) {
+        ImGui::SliderFloat("height above me (m)", &height, 0.0f, 500.0f, "%.0f");
+        ImGui::Checkbox("put me in the pilot seat", &sit);
+    }
+    if (ImGui::Button("Spawn", ImVec2(-1, 42))) {
+        Menu_RequestSpawnClass(list[pick].cls,
+                               list[pick].sit ? height : list[pick].height,
+                               list[pick].sit && sit, list[pick].sit && sit,
+                               list[pick].enemyWing);
+        keepOpen = false;
+    }
+
+    ImGui::SeparatorText("Console");
+    static char cmd[192] = "";
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::InputTextWithHint("##console",
+                                 "a console command, e.g. i_target_selector.targeting2_enabled 1",
+                                 cmd, sizeof(cmd), ImGuiInputTextFlags_EnterReturnsTrue) && cmd[0]) {
+        Menu_RunConsole(cmd);
+        cmd[0] = 0;
+    }
+    ImGui::TextWrapped("Runs in the game's own console. What it did shows in the game's log, not here.");
+}
+
 static bool DrawMenu() {
     bool keepOpen = true;
     ImGui::SetNextWindowPos(ImVec2(0, 0));
@@ -367,8 +485,16 @@ static bool DrawMenu() {
                  ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings);
     ImGui::TextUnformatted("This mod is a work in progress and not done at all");
     ImGui::TextUnformatted("Join our Discord server https://discord.gg/bUAuKMJUJs");
+    char status[256];
+    Menu_GetStatus(status, sizeof(status));
+    if (status[0]) {
+        ImGui::Separator();
+        ImGui::TextWrapped("%s", status);
+        ImGui::Separator();
+    }
     if (ImGui::BeginTabBar("##tabs")) {
         if (ImGui::BeginTabItem("Main")) { DrawMainTab(keepOpen); ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Squadron 42")) { DrawSq42Tab(keepOpen); ImGui::EndTabItem(); }
         ImGui::EndTabBar();
     }
     ImGui::End();

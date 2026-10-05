@@ -15,6 +15,7 @@
 #include "quantum.h"
 #include "ammo.h"
 #include "services.h"
+#include "outfits.h"
 #include "menu.h"
 
 #pragma comment(lib, "shlwapi.lib")
@@ -86,6 +87,7 @@ static bool AntiCheatPresent() {
 }
 
 static bool g_offline = false;
+static bool g_outfitsOk = false;
 
 static void StartOffline() {
     g_offline = ApplyOfflinePatches();
@@ -102,6 +104,7 @@ static void StartOffline() {
         ResolveContractsApi(g_text, g_rdata);
         ResolveAmmoApi(g_text);
         ResolveHangarsApi(g_text, g_rdata);
+        g_outfitsOk = ResolveOutfitApi(g_text, g_rdata);
     }
 }
 
@@ -113,6 +116,8 @@ static void LogStartup() {
     else         Log("[!] teleport: unavailable (see above)");
     if (SpawnerReady()) Log("[+] ship spawner: ready (M = menu)");
     else                Log("[!] ship spawner: unavailable (see above)");
+    if (g_outfitsOk) Log("[+] outfits: ready (Squadron 42 tab, data/outfits.txt)");
+    else             Log("[!] outfits: unavailable (see above)");
     if (g_offline)
         Log("[i] check Game.log: \"Process sc-client started\" line should show bOnline[0].");
     else
@@ -134,6 +139,7 @@ static void OnMainThreadTick() {
     ProcessMissions();
     ProcessContracts();
     ProcessAmmo();
+    ProcessOutfits();
     TeleportTick(now);
 }
 

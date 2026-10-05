@@ -165,6 +165,7 @@
     <ClCompile Include="quantum.cpp" />
     <ClCompile Include="ammo.cpp" />
     <ClCompile Include="services.cpp" />
+    <ClCompile Include="outfits.cpp" />
     <ClCompile Include="menu.cpp" />
     <ClCompile Include="third_party\imgui\imgui.cpp" />
     <ClCompile Include="third_party\imgui\imgui_draw.cpp" />
@@ -189,6 +190,7 @@
     <ClInclude Include="dcb_patch.h" />
     <ClInclude Include="ammo.h" />
     <ClInclude Include="services.h" />
+    <ClInclude Include="outfits.h" />
     <ClInclude Include="menu.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

@@ -6,6 +6,12 @@ bool SpawnerReady();
 void ReadStartOptions();
 bool StartingOverDaymar();
 void ProcessShipMenu(DWORD now);
+
+// Squadron 42 tab: spawn an entity class the menu's ship list doesn't carry.
+// enemyWing also spawns the Vanduul AI wing next to it (Bengal B).
+bool Menu_EnemySideAvailable();
+void RefreshEnemySide();   // game thread only: caches the enemy-side lookup
+void Menu_RequestSpawnClass(const char* cls, float heightAboveMe, bool sitInPilotSeat, bool flightReady, bool enemyWing);
 const char* SpawnEntityNearPlayer(const char* entityClass, const double offset[3], uint64_t& id);
 uintptr_t EntityComponent(uintptr_t entity, const char* type);
 const char* SpawnEntityInPlayerZone(const char* entityClass, const double pos[3], const double rot[4], uint64_t& id);
