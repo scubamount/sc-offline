@@ -271,6 +271,13 @@ void Menu_RequestWearSq42() {
     ReleaseSRWLockExclusive(&g_outfitLock);
 }
 
+// Deliberately not inlined into ProcessOutfits: OutfitXml returns a std::string, and
+// a function that owns an object needing unwinding may not contain __try (C2712).
+static void WearRequested(bool sq42, int index) {
+    if (sq42) Equip(OutfitXml(kSq42Outfit));
+    else      EquipOutfit(index);
+}
+
 void ProcessOutfits() {
     if (!g_of.ok || !g_tp.ok) return;
     if (g_outfitState == 1) {
@@ -286,8 +293,5 @@ void ProcessOutfits() {
     const auto req = g_wearRequest;
     g_wearRequest.pending = false;
     ReleaseSRWLockExclusive(&g_outfitLock);
-    if (req.pending && g_outfitState == 2) {
-        if (req.sq42) Equip(OutfitXml(kSq42Outfit));
-        else          EquipOutfit(req.index);
-    }
+    if (req.pending && g_outfitState == 2) WearRequested(req.sq42, req.index);
 }
