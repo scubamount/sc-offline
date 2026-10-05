@@ -292,6 +292,9 @@ constexpr size_t   kSlotUrn = 0x1698;
 constexpr size_t   kAsopAtcId = 0x9F8;
 
 struct FleetShip { char name[64]; uint64_t guid[2]; };
+// Same bound as the spawn menu (spawner.cpp kMaxMenuShips): ships.txt holds 1102 entries, and the
+// old 1024 here dropped the last 78 from the fleet manager without saying so.
+constexpr int kMaxFleetShips = 2048;
 
 static FleetShip* g_ships = nullptr;
 static int        g_shipCount = 0;
@@ -371,16 +374,17 @@ static int BuildFleetShips() {
     if (!ShipsFilePath(path, sizeof(path)) || !g_tp.entitySystem || !*g_tp.entitySystem) return 0;
     FILE* f = _fsopen(path, "r", _SH_DENYNO);
     if (!f) { Log("[fleet] can't open %s", path); return 0; }
-    static FleetShip ships[1024];
-    static uintptr_t classes[1024];
+    static FleetShip ships[kMaxFleetShips];
+    static uintptr_t classes[kMaxFleetShips];
     g_ships = ships;
     int missing = 0;
     char line[128];
     const uintptr_t registry = VCall<uintptr_t>(*g_tp.entitySystem, 0xC0);
-    while (g_shipCount < 1024 && fgets(line, sizeof(line), f)) {
+    while (fgets(line, sizeof(line), f)) {
         line[strcspn(line, "\r\n#")] = 0;
         char* name = line + strspn(line, " \t");
         if (!*name) continue;
+        if (g_shipCount >= kMaxFleetShips) { Log("[fleet] more than %d ships in %s; the rest are left out", kMaxFleetShips, path); break; }
         const uintptr_t cls = VCall<uintptr_t>(registry, 0x20, static_cast<const char*>(name));
         if (!cls) { if (++missing <= 5) Log("[fleet] unknown ship class '%s' (skipped)", name); continue; }
         strncpy_s(ships[g_shipCount].name, name, _TRUNCATE);
