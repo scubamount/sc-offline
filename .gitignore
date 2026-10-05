@@ -20,3 +20,8 @@ data/*_test.txt
 data/list_first.txt
 data/ui_notify_off.txt
 discord.ini
+
+# your own menu background image (not part of the project)
+data/menu_background.*
+data/locations_found.txt
+data/bookmarks.txt

@@ -1,4 +1,5 @@
 #include "teleport.h"
+#include "menu.h"
 #include <cmath>
 #include <share.h>
 
@@ -68,10 +69,10 @@ bool ResolveTeleportApi(const Section& text, const Section& rdata) {
 }
 
 constexpr double kMaxLocalCoord = 1.0e12;
-constexpr int    kMaxZoneDepth = 12;
 
-struct ZoneSpot { char name[96]; double local[3]; };
-struct Spot { int n = 0; ZoneSpot z[kMaxZoneDepth] = {}; };
+// Returned when the only zone a spot shares with you is the universe root: the spot is in another
+// star system, which isn't loaded, so teleporting there leaves you floating in nothing.
+static const char* const kOtherSystem = "that spot is in another star system - travel to that system first";
 
 static bool PositionLooksValid(const double p[3]) {
     for (int i = 0; i < 3; ++i)
@@ -203,6 +204,7 @@ static const char* TeleportToSpot(const Spot& s, int& level) {
         if (!GetLocalPlayer(actor, entity)) return "player not spawned";
         level = FindSavedZone(s, entity, zone);
         if (level < 0) return "you're not in any of the saved spot's zones (different planet/system?)";
+        if (level > 0 && !ZoneParent(zone)) return kOtherSystem;
         const uint64_t zoneId = ZoneId(zone);
         if (!zoneId || ZoneFromId(zoneId) != zone) return "zone id lookup mismatch";
         const double* local = s.z[level].local;
@@ -219,6 +221,44 @@ static const char* TeleportToSpot(const Spot& s, int& level) {
         const uintptr_t comp = VCall<uintptr_t>(actor, 0x9D8);
         if (!comp) return "no teleport component";
         VCall<void>(comp, 0x158, params);
+        return nullptr;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return "fault while teleporting";
+    }
+}
+
+const char* TeleportToEntity(uint64_t entityId, double up) {
+    __try {
+        uintptr_t actor, entity;
+        if (!GetLocalPlayer(actor, entity)) return "player not spawned";
+        const uintptr_t es = *g_tp.entitySystem;
+        const uintptr_t target = es && entityId ? VCall<uintptr_t>(es, 0x120, entityId) : 0;
+        if (!target) return "no such entity here (not streamed in?)";
+        const uintptr_t zone = VCall<uintptr_t>(target, 0x6B8);
+        if (!zone) return "the entity isn't in a zone";
+        const uint64_t zoneId = ZoneId(zone);
+        if (!zoneId || ZoneFromId(zoneId) != zone) return "zone id lookup mismatch";
+        double local[3];
+        Vec3Out(target, 0x2B8, local);
+        const double r = sqrt(Dot(local, local));
+        if (r > 100000.0) for (int i = 0; i < 3; ++i) local[i] += local[i] / r * up;
+        else local[2] += up;
+        if (!PositionLooksValid(local)) return "position out of range";
+        double world[3];
+        LocalToWorld(zone, local, world);
+        alignas(16) uint8_t params[0x80] = {};
+        *reinterpret_cast<uint64_t*>(params + 0x00) = zoneId;
+        reinterpret_cast<double*>(params + 0x08)[3] = 1.0;
+        memcpy(params + 0x28, local, 3 * sizeof(double));
+        *reinterpret_cast<double*>(params + 0x40) = 1.0;
+        memcpy(params + 0x48, world, sizeof(world));
+        reinterpret_cast<float*>(params + 0x60)[3] = 1.0f;
+        params[0x7D] = 1;
+        const uintptr_t comp = VCall<uintptr_t>(actor, 0x9D8);
+        if (!comp) return "no teleport component";
+        VCall<void>(comp, 0x158, params);
+        Log("[tp] to entity %llu in '%s' (%.0f, %.0f, %.0f)", static_cast<unsigned long long>(entityId), ZoneName(zone),
+            local[0], local[1], local[2]);
         return nullptr;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return "fault while teleporting";
@@ -281,14 +321,101 @@ static bool KeyPressed(int vk, bool& wasDown) {
     return pressed;
 }
 
+static Spot  g_refineSpot;     // the spot being refined (F8's or a bookmark's)
 static int   g_refineLevel = 0;
 static DWORD g_refineSince = 0;
 
-static void StartRefine(int level, DWORD now, const char* why) {
-    if (level == 0) { Log("[tp] %s -> teleported to saved spot in '%s'", why, g_spot.z[0].name); return; }
-    Log("[tp] %s -> teleported via '%s' (waiting for '%s' to stream in)", why, g_spot.z[level].name, g_spot.z[0].name);
+static void StartRefine(const Spot& spot, int level, DWORD now, const char* why) {
+    if (level == 0) { Log("[tp] %s -> teleported to saved spot in '%s'", why, spot.z[0].name); g_refineLevel = 0; return; }
+    Log("[tp] %s -> teleported via '%s' (waiting for '%s' to stream in)", why, spot.z[level].name, spot.z[0].name);
+    g_refineSpot = spot;
     g_refineLevel = level;
     g_refineSince = now;
+}
+
+const char* GoToSpot(const Spot& s, DWORD now, const char* why) {
+    int level = -1;
+    if (const char* err = TeleportToSpot(s, level)) return err;
+    StartRefine(s, level, now, why);
+    return nullptr;
+}
+
+const char* CaptureCurrentSpot(Spot& s) {
+    double world[3] = {};
+    return CaptureSpot(s, world);
+}
+
+static void SystemFromZoneName(const char* name, char* out, size_t n) {
+    // OOC_Stanton_2b_Daymar -> Stanton
+    if (!name || _strnicmp(name, "OOC_", 4) != 0) return;
+    const char* sys = name + 4;
+    const size_t len = strcspn(sys, "_");
+    if (len && len < n) { memcpy(out, sys, len); out[len] = 0; }
+}
+
+void SpotSystemName(const Spot& s, char* out, size_t n) {
+    out[0] = 0;
+    for (int i = 0; i < s.n && !out[0]; ++i) SystemFromZoneName(s.z[i].name, out, n);
+}
+
+void CurrentSystemName(char* out, size_t n) {
+    out[0] = 0;
+    __try {
+        uintptr_t actor, entity;
+        if (!GetLocalPlayer(actor, entity)) return;
+        for (uintptr_t z = VCall<uintptr_t>(entity, 0x6B8); z && !out[0]; z = ZoneParent(z))
+            SystemFromZoneName(ZoneName(z), out, n);
+    } __except (EXCEPTION_EXECUTE_HANDLER) { out[0] = 0; }
+}
+
+void CurrentSystemZoneName(char* out, size_t n) {
+    out[0] = 0;
+    __try {
+        uintptr_t actor, entity;
+        if (!GetLocalPlayer(actor, entity)) return;
+        if (const uintptr_t sys = SystemZoneOf(VCall<uintptr_t>(entity, 0x6B8)))
+            if (const char* name = ZoneName(sys)) strncpy_s(out, n, name, _TRUNCATE);
+    } __except (EXCEPTION_EXECUTE_HANDLER) { out[0] = 0; }
+}
+
+// The "SolarSystem_*" zone a zone belongs to (or 0 for the root / unknown).
+uintptr_t SystemZoneOf(uintptr_t zone) {
+    for (uintptr_t z = zone; z; z = ZoneParent(z)) {
+        const char* name = ZoneName(z);
+        if (name && _strnicmp(name, "SolarSystem", 11) == 0) return z;
+    }
+    return 0;
+}
+
+const char* TeleportIntoZone(uintptr_t zone, const double local[3]) {
+    if (!zone) return "no zone";
+    if (!PositionLooksValid(local)) return "position out of range";
+    __try {
+        uintptr_t actor, entity;
+        if (!GetLocalPlayer(actor, entity)) return "player not spawned";
+        const uintptr_t mine = SystemZoneOf(VCall<uintptr_t>(entity, 0x6B8));
+        const uintptr_t theirs = SystemZoneOf(zone);
+        if (!theirs || (mine && mine != theirs)) return "that place is in another star system - travel to that system first";
+        const uint64_t zoneId = ZoneId(zone);
+        if (!zoneId || ZoneFromId(zoneId) != zone) return "zone id lookup mismatch";
+        double world[3];
+        LocalToWorld(zone, local, world);
+        alignas(16) uint8_t params[0x80] = {};
+        *reinterpret_cast<uint64_t*>(params + 0x00) = zoneId;
+        reinterpret_cast<double*>(params + 0x08)[3] = 1.0;
+        memcpy(params + 0x28, local, 3 * sizeof(double));
+        *reinterpret_cast<double*>(params + 0x40) = 1.0;
+        memcpy(params + 0x48, world, sizeof(world));
+        reinterpret_cast<float*>(params + 0x60)[3] = 1.0f;
+        params[0x7D] = 1;
+        const uintptr_t comp = VCall<uintptr_t>(actor, 0x9D8);
+        if (!comp) return "no teleport component";
+        VCall<void>(comp, 0x158, params);
+        Log("[tp] into zone '%s' at (%.0f, %.0f, %.0f)", ZoneName(zone), local[0], local[1], local[2]);
+        return nullptr;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return "fault while teleporting";
+    }
 }
 
 void LoadSavedSpot(bool startingOverDaymar) {
@@ -326,10 +453,8 @@ void TeleportTick(DWORD now) {
         }
     }
     if (KeyPressed(VK_F8, g_keyWasDown[1]) && focus) {
-        int level = -1;
         if (!g_spot.n) Log("[tp] F8: no saved spot yet (stand somewhere and press F7)");
-        else if (const char* err = TeleportToSpot(g_spot, level)) Log("[tp] F8 teleport failed: %s", err);
-        else StartRefine(level, now, "F8");
+        else if (const char* err = GoToSpot(g_spot, now, "F8")) { Log("[tp] F8 teleport failed: %s", err); SetMenuStatus("F8: %s.", err); }
     }
 
     if (g_autoTeleportPending) {
@@ -342,25 +467,24 @@ void TeleportTick(DWORD now) {
         static DWORD lastTry = 0;
         if (now - lastTry < 2000) return;
         lastTry = now;
-        int level = -1;
-        const char* err = TeleportToSpot(g_spot, level);
-        if (!err) { g_autoTeleportPending = false; StartRefine(level, now, "spawned"); }
-        else if (now - g_playerReadySince > 120000) { g_autoTeleportPending = false; Log("[tp] auto-teleport gave up: %s", err); }
+        const char* err = GoToSpot(g_spot, now, "spawned");
+        if (!err) g_autoTeleportPending = false;
+        else if (err == kOtherSystem || now - g_playerReadySince > 120000) { g_autoTeleportPending = false; Log("[tp] auto-teleport gave up: %s", err); }
     }
 
     if (g_refineLevel > 0) {
         static DWORD lastCheck = 0;
         if (now - lastCheck < 1000) return;
         lastCheck = now;
-        const int level = SavedZoneLevel(g_spot);
+        const int level = SavedZoneLevel(g_refineSpot);
         if (level >= 0 && level < g_refineLevel) {
             int got = -1;
-            if (TeleportToSpot(g_spot, got)) { g_refineLevel = 0; return; }
+            if (TeleportToSpot(g_refineSpot, got)) { g_refineLevel = 0; return; }
             g_refineLevel = got;
-            if (got == 0) Log("[tp] '%s' streamed in -> exact spot", g_spot.z[0].name);
+            if (got == 0) Log("[tp] '%s' streamed in -> exact spot", g_refineSpot.z[0].name);
         } else if (now - g_refineSince > 60000) {
-            Log("[tp] '%s' did not stream in within 60 s; stayed in '%s' (F8 = retry)", g_spot.z[0].name,
-                g_spot.z[g_refineLevel].name);
+            Log("[tp] '%s' did not stream in within 60 s; stayed in '%s' (F8 = retry)", g_refineSpot.z[0].name,
+                g_refineSpot.z[g_refineLevel].name);
             g_refineLevel = 0;
         }
     }
