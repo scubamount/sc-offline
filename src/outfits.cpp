@@ -1,41 +1,9 @@
 #include "outfits.h"
+#include "loadout.h"
 #include "teleport.h"
 #include "menu.h"
 #include <share.h>
 #include <string>
-
-static struct {
-    bool       ok = false;
-    uintptr_t* game = nullptr;
-    int32_t    frameworkSlot = 0;
-    int32_t    actorSlot = 0;
-    int32_t    loadSlot = 0;
-} g_of;
-
-bool ResolveOutfitApi(const Section& text, const Section& rdata) {
-    const uint8_t* folder = FindCString(rdata, "Scripts/Loadouts/Player");
-    // The scan below reads as far as h + 0x9A, i.e. p + 0x56 past the LEA it
-    // started from, so the loop bound has to leave that much room inside .text.
-    const uint8_t* const end = text.base + text.size - 0x5F;
-    for (uint8_t* p = text.base + 0x44; folder && p < end; ++p) {
-        p = static_cast<uint8_t*>(memchr(p, 0x48, static_cast<size_t>(end - p)));
-        if (!p) break;
-        if (p[1] != 0x8D || p[2] != 0x15 || p + 7 + Rel32(p + 3) != folder) continue;
-        const uint8_t* h = p - 0x44;
-        if (!BytesMatch(h, "40 53 48 83 EC 20 48 8B 01 48 8B D9 FF 50 08 83 F8 01")
-            || !BytesMatch(h + 0x18, "48 8B 0D") || !BytesMatch(h + 0x27, "FF 90") || !BytesMatch(h + 0x30, "48 8B 91")
-            || !BytesMatch(h + 0x88, "41 B1 01") || !BytesMatch(h + 0x90, "41 B8 08 00 00 00") || !BytesMatch(h + 0x99, "FF 90"))
-            continue;
-        g_of.game          = reinterpret_cast<uintptr_t*>(const_cast<uint8_t*>(h + 0x1F + Rel32(h + 0x1B)));
-        g_of.frameworkSlot = Rel32(h + 0x29);
-        g_of.actorSlot     = Rel32(h + 0x33);
-        g_of.loadSlot      = Rel32(h + 0x9B);
-        g_of.ok = true;
-        break;
-    }
-    if (!g_of.ok) Log("[outfit] loadout loader not found; outfit menu disabled");
-    return g_of.ok;
-}
 
 struct OutfitPiece {
     char port[64];
@@ -120,11 +88,6 @@ static const char* FindPiece(const Outfit& o, const char* port) {
     return nullptr;
 }
 
-static std::string Item(const char* port, const char* name, const std::string& children = std::string()) {
-    std::string s = std::string("<Item portName=\"") + port + "\" itemName=\"" + name + "\"";
-    return children.empty() ? s + "/>" : s + "><Items>" + children + "</Items></Item>";
-}
-
 static std::string OutfitXml(const Outfit& o) {
     const char* body = FindPiece(o, "Body_ItemPort");
     if (!body) body = "m_body_01";
@@ -151,91 +114,59 @@ static std::string OutfitXml(const Outfit& o) {
     const char* eyes = FindPiece(o, "Eyes_ItemPort");
 
     std::string onTorso;
-    if (clothTorso0) onTorso += Item("Clothing_Torso_0", clothTorso0);
-    if (clothTorso1) onTorso += Item("Clothing_Torso_1", clothTorso1);
-    if (clothTorso2) onTorso += Item("Clothing_Torso2", clothTorso2);
+    if (clothTorso0) onTorso += LoadoutItem("Clothing_Torso_0", clothTorso0);
+    if (clothTorso1) onTorso += LoadoutItem("Clothing_Torso_1", clothTorso1);
+    if (clothTorso2) onTorso += LoadoutItem("Clothing_Torso2", clothTorso2);
 
     std::string onArms;
-    if (clothHands) onArms += Item("Clothing_Hands", clothHands);
+    if (clothHands) onArms += LoadoutItem("Clothing_Hands", clothHands);
 
     std::string onLegs;
-    if (clothLegs) onLegs += Item("Clothing_Legs", clothLegs);
-    if (clothFeet) onLegs += Item("Clothing_Feet", clothFeet);
+    if (clothLegs) onLegs += LoadoutItem("Clothing_Legs", clothLegs);
+    if (clothFeet) onLegs += LoadoutItem("Clothing_Feet", clothFeet);
 
     std::string onSuit;
-    if (helmet) onSuit += Item("Armor_Helmet", helmet);
-    if (torso) onSuit += Item("Armor_Torso", torso, onTorso);
+    if (helmet) onSuit += LoadoutItem("Armor_Helmet", helmet);
+    if (torso) onSuit += LoadoutItem("Armor_Torso", torso, onTorso);
     else if (!onTorso.empty()) onSuit += onTorso;
-    if (arms) onSuit += Item("Armor_Arms", arms, onArms);
-    if (legs) onSuit += Item("Armor_Legs", legs, onLegs);
+    if (arms) onSuit += LoadoutItem("Armor_Arms", arms, onArms);
+    if (legs) onSuit += LoadoutItem("Armor_Legs", legs, onLegs);
     else if (!onLegs.empty()) onSuit += onLegs;
 
     std::string suitItem;
-    if (undersuit) suitItem = Item("Armor_Undersuit", undersuit, onSuit);
+    if (undersuit) suitItem = LoadoutItem("Armor_Undersuit", undersuit, onSuit);
     else if (!onSuit.empty()) suitItem = onSuit;
 
     std::string headChildren;
     if (hair) {
         std::string hairChildren;
-        if (hairColor) hairChildren = Item("Material_Variant", hairColor);
-        headChildren += Item("Hair_ItemPort", hair, hairChildren);
+        if (hairColor) hairChildren = LoadoutItem("Material_Variant", hairColor);
+        headChildren += LoadoutItem("Hair_ItemPort", hair, hairChildren);
     }
-    if (hat) headChildren += Item("Hat_ItemPort", hat);
-    if (eyebrow) headChildren += Item("Eyebrow_ItemPort", eyebrow);
-    if (teeth) headChildren += Item("Teeth_ItemPort", teeth);
+    if (hat) headChildren += LoadoutItem("Hat_ItemPort", hat);
+    if (eyebrow) headChildren += LoadoutItem("Eyebrow_ItemPort", eyebrow);
+    if (teeth) headChildren += LoadoutItem("Teeth_ItemPort", teeth);
     // The lens display sits under the eyes. PU is the plain one, the bare
     // Default_LensDisplay is the SQ42 visor HUD the Settings checkbox picks.
     const char* lens = InterlockedCompareExchange(&g_s42VisorHud, 0, 0) != 0
                      ? "Default_LensDisplay" : "Default_LensDisplay_PU";
-    if (eyes) headChildren += Item("Eyes_ItemPort", eyes, Item("Lens_ItemPort", lens));
-    else      headChildren += Item("Lens_ItemPort", lens);
+    if (eyes) headChildren += LoadoutItem("Eyes_ItemPort", eyes, LoadoutItem("Lens_ItemPort", lens));
+    else      headChildren += LoadoutItem("Lens_ItemPort", lens);
 
     std::string headItem;
-    if (head) headItem = Item("Head_ItemPort", head, headChildren);
+    if (head) headItem = LoadoutItem("Head_ItemPort", head, headChildren);
     else if (!headChildren.empty()) headItem = headChildren;
 
-    return "<Loadout><Items>" + Item("Body_ItemPort", body, suitItem + headItem)
-        + Item("mobiglas_attach", "MobiGlas",
+    return "<Loadout><Items>" + LoadoutItem("Body_ItemPort", body, suitItem + headItem)
+        + LoadoutItem("mobiglas_attach", "MobiGlas",
                "<Item portName=\"mobiglas_screen_attach\" itemName=\"PersonalMobiGlas_PU\" tag=\"MobiGlas\"/>"
                "<Item portName=\"legacy_mobiglas_screen_attach\" itemName=\"LegacyMobiGlas\" tag=\"MobiGlas\"/>")
         + "</Items></Loadout>\n";
 }
 
-static const char* LoadLoadout(const char* gamePath) {
-    __try {
-        const uintptr_t framework = VCall<uintptr_t>(*g_of.game, g_of.frameworkSlot);
-        const uintptr_t actor = framework ? VCall<uintptr_t>(framework, g_of.actorSlot) : 0;
-        if (!actor) return "you're not spawned yet";
-        VCall<void>(actor, g_of.loadSlot, gamePath, 8u, true);
-        return nullptr;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return "fault while loading the loadout";
-    }
-}
-
-static void Equip(const std::string& xml) {
-    static int  counter = 0;
-    static char lastFile[MAX_PATH] = "";
-    char dir[MAX_PATH];
-    const DWORD n = GetEnvironmentVariableA("SC_USER", dir, sizeof(dir));
-    if (n == 0 || n >= sizeof(dir)) { Log("[outfit] SC_USER isn't set (start the game with launch_offline.bat)"); return; }
-    char name[64], file[MAX_PATH], gamePath[96];
-    snprintf(name, sizeof(name), "offline_loadout_%lu_%d.xml", GetCurrentProcessId(), ++counter);
-    snprintf(file, sizeof(file), "%s\\%s", dir, name);
-    snprintf(gamePath, sizeof(gamePath), "%%USER%%/%s", name);
-    FILE* f = _fsopen(file, "w", _SH_DENYNO);
-    if (!f) { Log("[outfit] can't write %s", file); return; }
-    fwrite(xml.data(), 1, xml.size(), f);
-    fclose(f);
-    if (const char* err = LoadLoadout(gamePath)) { Log("[outfit] equip failed: %s", err); return; }
-    Log("[outfit] equipped (%s)", name);
-    if (lastFile[0]) DeleteFileA(lastFile);
-    strcpy_s(lastFile, file);
-}
-
 static void EquipOutfit(int index) {
     if (index < 0 || index >= g_outfitCount) return;
-    Equip(OutfitXml(g_outfits[index]));
+    EquipLoadoutXml(OutfitXml(g_outfits[index]), "outfit");
 }
 
 int Menu_OutfitCount() {
@@ -254,7 +185,7 @@ void Menu_RequestWearOutfit(int index) {
     ReleaseSRWLockExclusive(&g_outfitLock);
 }
 
-// Menu-thread side only: Equip() writes the loadout file and calls into the game's
+// Menu-thread side only: EquipLoadoutXml() writes the loadout file and calls into the game's
 // actor, so the request is queued and honoured by ProcessOutfits on the game thread.
 void Menu_RequestWearSq42() {
     AcquireSRWLockExclusive(&g_outfitLock);
@@ -265,12 +196,12 @@ void Menu_RequestWearSq42() {
 // Deliberately not inlined into ProcessOutfits: OutfitXml returns a std::string, and
 // a function that owns an object needing unwinding may not contain __try (C2712).
 static void WearRequested(bool sq42, int index) {
-    if (sq42) Equip(OutfitXml(kSq42Outfit));
+    if (sq42) EquipLoadoutXml(OutfitXml(kSq42Outfit), "outfit");
     else      EquipOutfit(index);
 }
 
 void ProcessOutfits() {
-    if (!g_of.ok || !g_tp.ok) return;
+    if (!LoadoutApiReady() || !g_tp.ok) return;
     if (g_outfitState == 1) {
         uintptr_t actor, entity;
         bool live = false;

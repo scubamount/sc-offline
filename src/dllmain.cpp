@@ -96,7 +96,7 @@ static void StartOffline() {
     ResolveQuantumApi(g_text, g_rdata);
     if (ResolveTeleportApi(g_text, g_rdata)) {
         ResolveSpawnApi(g_text, g_rdata);
-        ResolveLoadoutApi(g_text, g_rdata);
+        g_outfitsOk = ResolveLoadoutApi(g_text, g_rdata);  // outfits ride the gear menu's loader
         ResolveNpcApi(g_text);
         ResolveBuildApi(g_text, g_rdata);
         ResolveCVarsApi(g_text, g_rdata);
@@ -104,7 +104,6 @@ static void StartOffline() {
         ResolveContractsApi(g_text, g_rdata);
         ResolveAmmoApi(g_text);
         ResolveHangarsApi(g_text, g_rdata);
-        g_outfitsOk = ResolveOutfitApi(g_text, g_rdata);
     }
 }
 
