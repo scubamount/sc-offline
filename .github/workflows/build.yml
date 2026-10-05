@@ -51,11 +51,13 @@ jobs:
         run: msbuild ChrisWareOffline.slnx /p:Configuration=Release /p:Platform=x64 /m
 
       # Release|x64 links with GenerateDebugInformation=false, so there is no PDB to upload.
-      - name: Upload DLL artifact
+      - name: Upload DLL + launcher artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dinput8-release
-          path: x64/Release/dinput8.dll
+          path: |
+            x64/Release/dinput8.dll
+            x64/Release/sc-offline.exe
           if-no-files-found: error
           retention-days: 30
 
@@ -66,16 +68,39 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download DLL artifact
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download DLL + launcher artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dinput8-release
-          path: release
+          path: built
+
+      # The player download: everything to play, in one folder. The repo-root prebuilt
+      # dinput8.dll is NOT in it; the zip carries the DLL CI just built.
+      - name: Package sc-offline-<tag>.zip
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          pkg="sc-offline-$TAG"
+          mkdir -p "stage/$pkg"
+          cp built/dinput8.dll built/sc-offline.exe "stage/$pkg/"
+          cp launcher/sc-offline.ini launcher/sc-offline.sh README.md CHANGELOG.md LICENSE "stage/$pkg/"
+          git ls-files -z data | xargs -0 cp --parents -t "stage/$pkg/"
+          chmod +x "stage/$pkg/sc-offline.sh"
+          (cd stage && zip -qr "../$pkg.zip" "$pkg")
+          unzip -l "$pkg.zip" | tail -1
+          echo "ZIP=$pkg.zip" >> "$GITHUB_ENV"
 
       - name: Create Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          files: release/dinput8.dll
+          files: |
+            ${{ env.ZIP }}
+            built/dinput8.dll
           generate_release_notes: true
           # v1.x and later are real releases; every other tag ships as a
           # pre-release, so an unfinished build can never look like the
@@ -88,8 +113,9 @@ jobs:
             repo root, which came from the mod's original author; the two binaries
             differ. See the README's **Which DLL do I run?** section.
 
-            Install it exactly as the README's Setup section says, then play with
-            **M** → **Squadron 42**.
+            **Playing:** download `sc-offline-${{ github.ref_name }}.zip`, extract it, and run
+            `sc-offline.exe` (Linux, experimental: `sc-offline.sh`). Do the README's one-time
+            Setup first. `dinput8.dll` is attached on its own for anyone swapping DLLs.
 
             Every runtime path in a release is unproven until someone has run it.
             If something breaks, send back the matching lines from `mod.log` and

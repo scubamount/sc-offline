@@ -3,7 +3,7 @@
 #
 #   tools/check.sh            # from the repo root
 #
-# 1. Parses every src/*.cpp with clang against mingw-w64's Windows headers (-fsyntax-only).
+# 1. Parses every src/*.cpp and launcher/*.cpp with clang against mingw-w64's Windows headers (-fsyntax-only).
 #    MSVC accepts a few things clang rejects; those are listed in tools/check-baseline.txt and
 #    only NEW diagnostics fail the check.
 # 2. MSVC error C2712 screen: a function containing __try may not own an object that needs
@@ -31,7 +31,7 @@ command -v python3 >/dev/null || { echo "check: python3 not found"; exit 2; }
 n=0; broken=0
 TMP=$(mktemp)
 shopt -s nullglob
-for f in "$ROOT"/src/*.cpp; do
+for f in "$ROOT"/src/*.cpp "$ROOT"/launcher/*.cpp; do
   n=$((n+1))
   out=$("$CLANG" -fsyntax-only -std=c++20 --target=x86_64-w64-windows-gnu \
      -fms-extensions \
@@ -45,9 +45,9 @@ for f in "$ROOT"/src/*.cpp; do
   if [ $rc -gt 1 ] || { [ $rc -ne 0 ] && [ -z "$errs" ]; }; then
     echo "check: clang failed on $(basename "$f") (exit $rc):"; printf '%s\n' "$out" | head -5; broken=1
   fi
-  [ -n "$errs" ] && printf '%s\n' "$errs" | sed -E "s#^.*/src/##; s#:[0-9]+:[0-9]+:#:#" >> "$TMP"
+  [ -n "$errs" ] && printf '%s\n' "$errs" | sed -E "s#^.*/(src|launcher)/##; s#:[0-9]+:[0-9]+:#:#" >> "$TMP"
 done
-[ $n -gt 0 ] || { echo "check: no src/*.cpp under $ROOT"; rm -f "$TMP"; exit 2; }
+[ $n -gt 0 ] || { echo "check: no src/*.cpp or launcher/*.cpp under $ROOT"; rm -f "$TMP"; exit 2; }
 [ $broken -eq 0 ] || { rm -f "$TMP"; exit 2; }
 
 # MSVC C2712 screen (clang does not enforce it): a function containing __try may not own

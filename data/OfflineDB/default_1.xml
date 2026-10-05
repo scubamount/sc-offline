@@ -2,7 +2,7 @@
   Offline player data for the local player "default_1".
 
   The mod points the game's Libs/OfflineDB lookup at %USER%
-  (LIVE\user\client\0\), and launch_offline.bat copies this file there.
+  (LIVE\user\client\0\), and sc-offline.exe copies this file there.
   Same shape as the game's own Libs/OfflineDB/default.xml, plus ships.
   <Item class="..."/> takes an entity class name (e.g. AEGS_Gladius).
 -->
