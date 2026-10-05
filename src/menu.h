@@ -6,7 +6,6 @@ struct MenuShip { char name[64]; int size; float length; };
 int             Menu_ShipCount();
 const MenuShip* Menu_Ships();
 void            Menu_RequestSpawn(int index, float heightAboveMe, bool sitInPilotSeat, bool flightReady);
-void            Menu_RequestDaymar(int index);
 void            Menu_GetStatus(char* out, size_t n);
 void            Menu_SetNoclip(bool on, float speed);
 void            Menu_SetNoclipSpeed(float speed);

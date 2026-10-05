@@ -561,15 +561,6 @@ static const Flow kFlows[] = {
         { Act::Search, "SearchArea", "@SP_InvisibleTimer_Obj", "@SP_InvisibleTimer_Long" } } },
 };
 
-static const Flow kAwayFlows[] = {
-    { "mine and deliver", "Mine|Mining|Rockcracker|ScanRocks|ResourceGathering|Salvage",
-      { { Act::Away, "MineResources", "@mg_battaglia_mining_objective_short_001", "@mg_battaglia_mining_objective_short_001" },
-        { Act::Deliver, "DeliverShipment", "@delivery_obj_short_03", "@HaulCargo_obj_short_02" } } },
-    { "out and back", "",
-      { { Act::Away, "CollectShipment", "@HaulCargo_obj_short_01", "@delivery_obj_long_02" },
-        { Act::Deliver, "DeliverShipment", "@delivery_obj_short_03", "@HaulCargo_obj_short_02" } } },
-};
-
 static int LogFault(const EXCEPTION_POINTERS* ep, const char* what);
 
 static bool MatchesAny(const char* contract, const char* kinds) {
@@ -1081,62 +1072,6 @@ static int64_t __fastcall HelperSpawnedHook(const uint8_t* capture, uintptr_t a2
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {}
     return r;
-}
-
-static int HelpersOf(const uint8_t mission[16], uint64_t* out, int max) {
-    int n = 0;
-    AcquireSRWLockShared(&g_helperLock);
-    for (const Helper& h : g_helpers)
-        if (h.entity && n < max && !memcmp(h.mission, mission, 16)) out[n++] = h.entity;
-    ReleaseSRWLockShared(&g_helperLock);
-    return n;
-}
-
-static void StartDetached(Plan& plan) {
-    plan.done = true;
-    if (g_runningCount >= kMaxOurs) { Log("[contracts] too many running contracts; this one gets no objectives"); return; }
-    uintptr_t actor = 0, player = 0;
-    if (!GetLocalPlayer(actor, player)) return;
-    uint64_t own = 0;
-    const double here[3] = {};
-    g_objectiveStep = "spawning our mission entity";
-    const char* err = SpawnEntityNearPlayer("MissionEntityStreamable", here, own);
-    if (err || !own) { Log("[contracts] '%s': couldn't spawn a mission entity for its objectives (%s)", plan.contract, err ? err : "no entity"); return; }
-    Running& r = g_running[g_runningCount++];
-    r = Running{};
-    memcpy(r.mission, plan.mission, 16);
-    r.contract = plan.contract ? plan.contract : "?";
-    r.hostiles = &kStandIns[sizeof(kStandIns) / sizeof(kStandIns[0]) - 1];
-    for (const StandIn& s : kStandIns)
-        if (*s.kind && ContainsNoCase(r.contract, s.kind)) { r.hostiles = &s; break; }
-    r.meId = own;
-    r.ground = -1;
-    r.step = kPending;
-    r.since = GetTickCount();
-    const uintptr_t zone = VCall<uintptr_t>(player, 0x6B8);
-    r.homeZone = zone ? ZoneId(zone) : 0;
-    Vec3Out(player, 0x2B8, r.home);
-    uint64_t helpers[8];
-    const int n = HelpersOf(r.mission, helpers, 8);
-    if (n) {
-        r.flow = &FlowFor(r.contract);
-        r.target = helpers[0];
-        double a[3] = {};
-        if (const uintptr_t t = EntityById(r.target)) Vec3Out(t, 0x318, a);
-        double farthest = kMinDropoffM;
-        for (int i = 1; i < n && r.flow->steps[1].act == Act::Deliver; ++i)
-            if (const uintptr_t e = EntityById(helpers[i])) {
-                double p[3];
-                Vec3Out(e, 0x318, p);
-                if (Distance(p, a) > farthest) { farthest = Distance(p, a); r.dropoff = helpers[i]; }
-            }
-    } else {
-        r.flow = &kAwayFlows[sizeof(kAwayFlows) / sizeof(kAwayFlows[0]) - 1];
-        for (const Flow& f : kAwayFlows)
-            if (*f.kinds && MatchesAny(r.contract, f.kinds)) { r.flow = &f; break; }
-    }
-    Log("[contracts] '%s': no mission module; %s contract with %d site(s) (%s), objectives on our own mission entity %llu", r.contract,
-        r.flow->name, n, n ? (r.dropoff ? "pickup + drop-off" : "one site") : "out and back", static_cast<unsigned long long>(own));
 }
 
 static void StartPending(Running& r, DWORD now) {

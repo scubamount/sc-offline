@@ -3,7 +3,6 @@
 
 void ResolveCVarsApi(const Section& text, const Section& rdata);
 void ProcessCVars();
-bool RunConsoleNow(const char* cmd);
 bool SetCVarNow(const char* name, float value);
 bool GetCVarNow(const char* name, float& value);
 

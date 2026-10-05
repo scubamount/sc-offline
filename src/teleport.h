@@ -20,7 +20,5 @@ void        Vec3Out(uintptr_t obj, size_t off, double out[3]);
 void        LocalToWorld(uintptr_t zone, const double local[3], double world[3]);
 bool        WorldToLocal(uintptr_t zone, const double world[3], double local[3]);
 
-const char* TeleportToEntity(uint64_t entityId, double up);
-
 void LoadSavedSpot(bool startingOverDaymar);
 void TeleportTick(DWORD now);

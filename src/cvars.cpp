@@ -76,8 +76,6 @@ static bool Execute(const char* cmd) {
     }
 }
 
-bool RunConsoleNow(const char* cmd) { return Execute(cmd); }
-
 bool SetCVarNow(const char* name, float value) {
     if (!g_console || !*g_console) return false;
     __try {
