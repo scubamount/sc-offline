@@ -115,6 +115,21 @@ void Menu_ToggleBuildMode() { InterlockedExchange(&g_ui.toggle, 1); }
 void Menu_BuildUndo() { InterlockedExchange(&g_ui.undo, 1); }
 void Menu_BuildClear() { InterlockedExchange(&g_ui.clear, 1); }
 
+static struct {
+    volatile LONG pending  = 0;
+    volatile LONG index    = -1;
+    volatile LONG inFront  = 1;
+    volatile LONG aheadCm  = 800;
+} g_placeReq;
+
+void Menu_RequestPlace(int index, bool inFront, float aheadMetres) {
+    if (index < 0 || index >= kMaxBuild) return;
+    InterlockedExchange(&g_placeReq.index, index);
+    InterlockedExchange(&g_placeReq.inFront, inFront ? 1 : 0);
+    InterlockedExchange(&g_placeReq.aheadCm, static_cast<LONG>(aheadMetres * 100.0f));
+    InterlockedExchange(&g_placeReq.pending, 1);
+}
+
 static bool BuildablesFilePath(char* path, DWORD n) {
     if (!ShipsFilePath(path, n)) return false;
     char* slash = strrchr(path, '\\');
@@ -437,6 +452,32 @@ void ProcessBuild() {
     const bool undoKey = Pressed(VK_BACK, back, keys && g_active);
     if (InterlockedExchange(&g_ui.undo, 0) != 0 || undoKey) Undo();
     if (InterlockedExchange(&g_ui.clear, 0)) Clear();
+    if (InterlockedExchange(&g_placeReq.pending, 0)) {
+        const int   idx     = static_cast<int>(InterlockedCompareExchange(&g_placeReq.index, 0, 0));
+        const bool  inFront = InterlockedCompareExchange(&g_placeReq.inFront, 0, 0) != 0;
+        const double ahead  = InterlockedCompareExchange(&g_placeReq.aheadCm, 0, 0) / 100.0;
+        const char* where   = inFront ? "in front of you" : "at your feet";
+        if (idx < 0 || idx >= g_buildCount)
+            Log("[build] can't spawn anything (%s)", g_buildCount < 0 ? "build list not loaded yet" : "bad selection");
+        else if (g_placedCount >= kMaxPlaced)
+            Log("[build] the base is full (%d objects)", kMaxPlaced);
+        else {
+            double pos[3], rot[4];
+            bool ok = false;
+            __try { ok = PlaceNearPlayer(inFront ? ahead : 0.0, 0.0, g_buildNpc[idx] ? 0.3 : 0.0, pos, rot); }
+            __except (EXCEPTION_EXECUTE_HANDLER) { Log("[build] fault while looking for a spot %s", where); }
+            if (!ok) Log("[build] no spot %s", where);
+            else {
+                uint64_t id = 0;
+                if (const char* err = SpawnBuildable(g_build[idx], pos, rot, id))
+                    Log("[build] spawning %s failed: %s", g_build[idx], err);
+                else {
+                    g_placed[g_placedCount++] = id;
+                    Log("[build] spawned %s %s (%d in the base)", g_build[idx], where, g_placedCount);
+                }
+            }
+        }
+    }
     if (!g_active) return;
     if (g_freeCamFlag && !*g_freeCamFlag) {
         RemovePreview();

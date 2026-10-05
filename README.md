@@ -25,7 +25,7 @@ Everything runs through one in-game menu. Press **M** to open it.
 | **Build mode (F6)** | Free build mode, 3746 buildable entries. |
 | **Item Picker** | Equip any item (1499 entries) from the gear menu. |
 | **Outfits** | Wear Squadron 42 outfits (178) and cast members' heads. Experimental — the SQ42 menus are flagged spoiler-bearing in-game. |
-| **Squadron 42 tab** | Spoiler-gated tab: the outfit picker, four SQ42 toggles (auto targeting, visor mini-map, visor greebles, SQ42 frontend), the SQ42 ship list (Idris-P, Gladius, Retaliator, Starfarer, Avenger Stalker, Hornet, the Vanduul AI wing, Bengal A / Bengal B with its enemy side) and a console runner. |
+| **Squadron 42 tab** | Spoiler-gated tab: the outfit picker, four SQ42 toggles (auto targeting, visor mini-map, visor greebles, SQ42 frontend), a one-shot buildable spawner (defaults to the `[sq42]` group, drops it in front of you and registers it in your base), the SQ42 ship list (Idris-P, Gladius, Retaliator, Starfarer, Avenger Stalker, Hornet, the Vanduul AI wing, Bengal A / Bengal B with its enemy side) and a console runner. |
 | **Missions** | Start 34 environmental missions that normally need the online backend — combat assist, pirate blockades, and more. |
 | **Contracts** | 2153 generated contracts with their mission scripts wired up locally. |
 | **Teleport** | Save a position (F7) and teleport back to it (F8). |

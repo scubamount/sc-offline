@@ -5,6 +5,7 @@
 #include <cstring>
 #include "spawner.h"
 #include "cvars.h"
+#include "build.h"
 #include "third_party/imgui/imgui.h"
 #include "third_party/imgui/imgui_impl_win32.h"
 #include "third_party/imgui/imgui_impl_dx11.h"
@@ -414,6 +415,51 @@ static void DrawSq42Tab(bool& keepOpen) {
         if (ImGui::Checkbox(Menu_S42SettingLabel(i), &on)) Menu_RequestS42Setting(i, on);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Menu_S42SettingTip(i));
         ImGui::PopID();
+    }
+
+    ImGui::SeparatorText("Spawn");
+    {
+        static int   thing = -1;
+        static char  thingFilter[64] = "sq42";
+        static bool  inFront = true;
+        static float ahead = 8.0f;
+        const int buildables = Menu_BuildCount();
+        if (buildables < 0) {
+            ImGui::TextWrapped("Loading... (you need to be spawned in the universe)");
+        } else if (buildables == 0) {
+            ImGui::TextWrapped("No buildables found - check buildables.txt.");
+        } else {
+            if (thing < 0) {
+                thing = 0;
+                for (int i = 0; i < buildables; ++i)
+                    if (_stricmp(Menu_BuildCategory(i), "sq42") == 0) { thing = i; break; }
+            }
+            if (thing >= buildables) thing = 0;
+            ImGui::Checkbox("Spawn in front of you", &inFront);
+            ImGui::SetNextItemWidth(-1);
+            ImGui::InputTextWithHint("##thingFilter", "search buildables...", thingFilter, sizeof(thingFilter));
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::BeginCombo("##sq42thing", Menu_BuildName(thing), ImGuiComboFlags_HeightLargest)) {
+                for (int i = 0; i < buildables; ++i) {
+                    const char* name = Menu_BuildName(i);
+                    if (!MatchesFilter(name, thingFilter)) continue;
+                    ImGui::PushID(i);
+                    if (ImGui::Selectable(name, i == thing)) thing = i;
+                    if (i == thing) ImGui::SetItemDefaultFocus();
+                    ImGui::PopID();
+                }
+                ImGui::EndCombo();
+            }
+            if (inFront) {
+                ImGui::SetNextItemWidth(200);
+                ImGui::SliderFloat("ahead (m)", &ahead, 1.0f, 50.0f, "%.0f");
+            }
+            if (ImGui::Button("Spawn it", ImVec2(-1, 0))) {
+                Menu_RequestPlace(thing, inFront, ahead);
+                keepOpen = false;
+            }
+            ImGui::SetItemTooltip("Undo and Clear base in the build section remove these too.");
+        }
     }
 
     ImGui::SeparatorText("Ships");
