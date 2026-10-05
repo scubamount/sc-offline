@@ -375,33 +375,36 @@ static void DrawSq42Tab(bool& keepOpen) {
     const int outfits = Menu_OutfitCount();
     if (outfits < 0) {
         ImGui::TextWrapped("Loading outfits... (you need to be spawned in the universe)");
-    } else if (outfits == 0) {
-        ImGui::TextWrapped("No outfits found - check outfits.txt.");
     } else {
         static int  outfit = 0;
         static char filter[64] = "";
         static bool visor = false;
-        if (outfit >= outfits) outfit = 0;
-        ImGui::SetNextItemWidth(-1);
-        ImGui::InputTextWithHint("##outfitFilter", "search outfits...", filter, sizeof(filter));
-        ImGui::SetNextItemWidth(-1);
-        if (ImGui::BeginCombo("##outfit", Menu_OutfitName(outfit), ImGuiComboFlags_HeightLargest)) {
-            for (int i = 0; i < outfits; ++i) {
-                const char* name = Menu_OutfitName(i);
-                if (!MatchesFilter(name, filter)) continue;
-                ImGui::PushID(i);
-                if (ImGui::Selectable(name, i == outfit)) {
-                    outfit = i;
-                    Menu_RequestWearOutfit(i);
-                    keepOpen = false;
+        if (outfits == 0) {
+            ImGui::TextWrapped("No outfits found - check outfits.txt.");
+        } else {
+            if (outfit >= outfits) outfit = 0;
+            ImGui::SetNextItemWidth(-1);
+            ImGui::InputTextWithHint("##outfitFilter", "search outfits...", filter, sizeof(filter));
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::BeginCombo("##outfit", Menu_OutfitName(outfit), ImGuiComboFlags_HeightLargest)) {
+                for (int i = 0; i < outfits; ++i) {
+                    const char* name = Menu_OutfitName(i);
+                    if (!MatchesFilter(name, filter)) continue;
+                    ImGui::PushID(i);
+                    if (ImGui::Selectable(name, i == outfit)) {
+                        outfit = i;
+                        Menu_RequestWearOutfit(i);
+                        keepOpen = false;
+                    }
+                    if (i == outfit) ImGui::SetItemDefaultFocus();
+                    ImGui::PopID();
                 }
-                if (i == outfit) ImGui::SetItemDefaultFocus();
-                ImGui::PopID();
+                ImGui::EndCombo();
             }
-            ImGui::EndCombo();
         }
         if (ImGui::Checkbox("SQ42 visor HUD (applies on the next Equip or outfit)", &visor))
             Menu_SetS42VisorHud(visor);
+        // The preset is built in code, so it works even when outfits.txt is missing.
         if (ImGui::Button("Wear SQ42 outfit", ImVec2(-1, 0))) {
             Menu_RequestWearSq42();
             keepOpen = false;
@@ -477,6 +480,8 @@ static void DrawSq42Tab(bool& keepOpen) {
         { "Vanduul Stinger (AI)",          "VNCL_Stinger_PU_AI_VAN" },
     };
     Entry list[16];
+    static_assert(sizeof(kSq42Ships) / sizeof(kSq42Ships[0]) + 2 <= sizeof(list) / sizeof(list[0]),
+                  "SQ42 ship table outgrew Entry list[]");
     int   n = 0;
     for (size_t i = 0; i < sizeof(kSq42Ships) / sizeof(kSq42Ships[0]); ++i)
         list[n++] = { kSq42Ships[i].label, kSq42Ships[i].cls, false, 0.0f, true };

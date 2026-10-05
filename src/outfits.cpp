@@ -14,7 +14,9 @@ static struct {
 
 bool ResolveOutfitApi(const Section& text, const Section& rdata) {
     const uint8_t* folder = FindCString(rdata, "Scripts/Loadouts/Player");
-    uint8_t* const end = text.base + text.size - 7;
+    // The scan below reads as far as h + 0x9A, i.e. p + 0x56 past the LEA it
+    // started from, so the loop bound has to leave that much room inside .text.
+    const uint8_t* const end = text.base + text.size - 0x5F;
     for (uint8_t* p = text.base + 0x44; folder && p < end; ++p) {
         p = static_cast<uint8_t*>(memchr(p, 0x48, static_cast<size_t>(end - p)));
         if (!p) break;
@@ -52,7 +54,23 @@ static int          g_outfitCount = 0;
 static volatile LONG g_outfitState = 0;
 static volatile LONG g_s42VisorHud = 0;
 static SRWLOCK       g_outfitLock = SRWLOCK_INIT;
-static struct { bool pending; int index; } g_wearRequest;
+static struct { bool pending; bool sq42; int index; } g_wearRequest;
+
+static const Outfit kSq42Outfit = {
+    "SQ42 outfit",
+    {
+        {"Body_ItemPort", "m_body_01"},
+        {"Head_ItemPort", "sq42_pilot_head_01"},
+        {"Hair_ItemPort", "hair_37"},
+        {"Hair_Color", "Hair_Var_Brown"},
+        {"Clothing_Torso_0", "sq42_pilot_shirt_01_01_01"},
+        {"Clothing_Torso_1", "sq42_pilot_jacket_01_01_01"},
+        {"Clothing_Legs", "sq42_pilot_pants_01_01_01"},
+        {"Clothing_Feet", "sq42_pilot_boots_01_01_01"},
+        {"Armor_Helmet", "sq42_pilot_helmet_01_01_01"},
+    },
+    9
+};
 
 void Menu_SetS42VisorHud(bool on) { InterlockedExchange(&g_s42VisorHud, on ? 1 : 0); }
 
@@ -241,28 +259,16 @@ const char* Menu_OutfitName(int index) {
 
 void Menu_RequestWearOutfit(int index) {
     AcquireSRWLockExclusive(&g_outfitLock);
-    g_wearRequest.pending = true;
-    g_wearRequest.index = index;
+    g_wearRequest = { true, false, index };
     ReleaseSRWLockExclusive(&g_outfitLock);
 }
 
+// Menu-thread side only: Equip() writes the loadout file and calls into the game's
+// actor, so the request is queued and honoured by ProcessOutfits on the game thread.
 void Menu_RequestWearSq42() {
-    static const Outfit sq42 = {
-        "SQ42 outfit",
-        {
-            {"Body_ItemPort", "m_body_01"},
-            {"Head_ItemPort", "sq42_pilot_head_01"},
-            {"Hair_ItemPort", "hair_37"},
-            {"Hair_Color", "Hair_Var_Brown"},
-            {"Clothing_Torso_0", "sq42_pilot_shirt_01_01_01"},
-            {"Clothing_Torso_1", "sq42_pilot_jacket_01_01_01"},
-            {"Clothing_Legs", "sq42_pilot_pants_01_01_01"},
-            {"Clothing_Feet", "sq42_pilot_boots_01_01_01"},
-            {"Armor_Helmet", "sq42_pilot_helmet_01_01_01"},
-        },
-        9
-    };
-    Equip(OutfitXml(sq42));
+    AcquireSRWLockExclusive(&g_outfitLock);
+    g_wearRequest = { true, true, -1 };
+    ReleaseSRWLockExclusive(&g_outfitLock);
 }
 
 void ProcessOutfits() {
@@ -280,5 +286,8 @@ void ProcessOutfits() {
     const auto req = g_wearRequest;
     g_wearRequest.pending = false;
     ReleaseSRWLockExclusive(&g_outfitLock);
-    if (req.pending && g_outfitState == 2) EquipOutfit(req.index);
+    if (req.pending && g_outfitState == 2) {
+        if (req.sq42) Equip(OutfitXml(kSq42Outfit));
+        else          EquipOutfit(req.index);
+    }
 }

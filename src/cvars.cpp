@@ -123,21 +123,22 @@ static const struct { const char* label; const char* tip; const char* cvar; } kS
 constexpr int kS42SettingCount = sizeof(kS42Settings) / sizeof(kS42Settings[0]);
 
 static volatile LONG g_s42On[kS42SettingCount] = { -1, -1, -1, -1 };
-static SRWLOCK       g_s42Lock = SRWLOCK_INIT;
-static int           g_s42Pending = -1;
-static bool          g_s42PendingOn = false;
+static volatile LONG g_s42PendingMask = 0;   // bit i = a toggle is waiting
+static volatile LONG g_s42PendingVal  = 0;   // bit i = the value it wants
 
 int         Menu_S42SettingCount() { return kS42SettingCount; }
 const char* Menu_S42SettingLabel(int i) { return i >= 0 && i < kS42SettingCount ? kS42Settings[i].label : ""; }
 const char* Menu_S42SettingTip(int i)   { return i >= 0 && i < kS42SettingCount ? kS42Settings[i].tip   : ""; }
 bool        Menu_S42SettingOn(int i)    { return i >= 0 && i < kS42SettingCount && g_s42On[i] == 1; }
 
+// One pending slot per toggle rather than one overall, so two toggles inside the
+// same game tick both land. Value first, mask second: a reader that sees the bit
+// must already see the value.
 void Menu_RequestS42Setting(int i, bool on) {
     if (i < 0 || i >= kS42SettingCount) return;
-    AcquireSRWLockExclusive(&g_s42Lock);
-    g_s42Pending = i;
-    g_s42PendingOn = on;
-    ReleaseSRWLockExclusive(&g_s42Lock);
+    if (on) InterlockedOr(&g_s42PendingVal, 1L << i);
+    else    InterlockedAnd(&g_s42PendingVal, ~(1L << i));
+    InterlockedOr(&g_s42PendingMask, 1L << i);
 }
 
 static void ApplyS42Setting(int i, bool on) {
@@ -150,8 +151,13 @@ static void ApplyS42Setting(int i, bool on) {
     Log("[sq42] %s = %d", kS42Settings[i].cvar, want);
 }
 
-// Game thread only: reads the four cvars back so the menu can show them.
+// Game thread only: reads the four cvars back so the menu can show them. Capped at
+// 5 Hz — four name lookups every tick buys nothing the menu can see.
 static void RefreshS42Settings() {
+    static DWORD last = 0;
+    const DWORD now = GetTickCount();
+    if (now - last < 200) return;
+    last = now;
     for (int i = 0; i < kS42SettingCount; ++i) {
         float v = 0.0f;
         const bool ok = GetCVarNow(kS42Settings[i].cvar, v);
@@ -200,14 +206,10 @@ static void KeepSettingsOn() {
 void ProcessCVars() {
     KeepSettingsOn();
     {
-        int idx = -1;
-        bool on = false;
-        AcquireSRWLockExclusive(&g_s42Lock);
-        idx = g_s42Pending;
-        on = g_s42PendingOn;
-        g_s42Pending = -1;
-        ReleaseSRWLockExclusive(&g_s42Lock);
-        if (idx >= 0) ApplyS42Setting(idx, on);
+        const LONG mask = InterlockedExchange(&g_s42PendingMask, 0);
+        const LONG vals = g_s42PendingVal;
+        for (int i = 0; i < kS42SettingCount; ++i)
+            if (mask & (1L << i)) ApplyS42Setting(i, (vals >> i) & 1);
         RefreshS42Settings();
     }
     if (InterlockedExchange(&g_commandPending, 0)) {

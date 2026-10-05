@@ -335,10 +335,16 @@ static bool EnemySideInRegistry() {
 }
 
 void RefreshEnemySide() {
-    if (InterlockedCompareExchange(&g_enemySide, 0, 0) >= 0) return;
+    if (InterlockedCompareExchange(&g_enemySide, 0, 0) == 1) return;  // found once is enough
+    // Not found (yet): the registry can fill after the first tick, so keep
+    // retrying on a slow cadence instead of latching the first answer.
+    static volatile LONG lastTry = 0;
+    const DWORD now = GetTickCount();
+    if (now - static_cast<DWORD>(InterlockedCompareExchange(&lastTry, 0, 0)) < 2000) return;
+    InterlockedExchange(&lastTry, static_cast<LONG>(now));
     bool enemy = false;
     __try { enemy = EnemySideInRegistry(); } __except (EXCEPTION_EXECUTE_HANDLER) { enemy = false; }
-    InterlockedExchange(&g_enemySide, enemy ? 1 : 0);
+    if (enemy) InterlockedExchange(&g_enemySide, 1);
 }
 
 bool Menu_EnemySideAvailable() { return InterlockedCompareExchange(&g_enemySide, 0, 0) == 1; }
@@ -878,12 +884,17 @@ void ProcessShipMenu(DWORD now) {
         if (const char* err = SpawnShipAbovePlayer(classReq.cls, classReq.height, id))
             SetMenuStatus("Spawning %s failed: %s", classReq.cls, err);
         else if (classReq.enemyWing) {
-            for (const char* wing : kEnemySideClasses)
-                if (ClassInRegistry(wing)) {
-                    uint64_t wingId = 0;
-                    SpawnShipAbovePlayer(wing, classReq.height, wingId);
-                }
-            SetMenuStatus("%s spawned %.0f m above you with its enemy side in the wing.", classReq.cls, classReq.height);
+            // The wing goes 300 m up — the height the menu's own hint promises for
+            // the Vanduul hulls — rather than on top of the 980 m Bengal.
+            int wing = 0;
+            for (const char* c : kEnemySideClasses) {
+                if (!ClassInRegistry(c)) continue;
+                uint64_t wingId = 0;
+                if (SpawnShipAbovePlayer(c, 300.0, wingId)) continue;
+                ++wing;
+            }
+            SetMenuStatus("%s spawned %.0f m above you; %d of 3 enemy wing ships came in at 300 m.",
+                          classReq.cls, classReq.height, wing);
         } else if (!classReq.sit)
             SetMenuStatus("Spawning %s %.0f m above you (big ships take up to a minute).", classReq.cls, classReq.height);
         else {
