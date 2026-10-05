@@ -246,14 +246,16 @@ happens on tags:
   attached and a changelog generated from the commits since the previous tag.
 - `v1.x.y` and later publish as a **full** release; anything else publishes as a
   **pre-release**, so an unfinished build can never look like the recommended
-  download.
+  download. Once someone has actually played a build, promote it with
+  `gh release edit <tag> --prerelease=false` — which is how `v0.1.1` became the
+  current release.
 
 Every action in the workflow is pinned to a commit SHA, and the workflow runs with
 `contents: read` — only the release job is granted `contents: write`.
 
-Current state: [`v0.1.0`](https://github.com/scubamount/sc-offline/releases/tag/v0.1.0)
-is a pre-release. It has been compiled and string-checked, **not played** — see
-[Notes](#notes).
+Current state: [`v0.1.1`](https://github.com/scubamount/sc-offline/releases/tag/v0.1.1)
+is the current release, built by CI from `b315105`. It has been compiled and
+string-checked, **not played** — see [Notes](#notes).
 
 ---
 

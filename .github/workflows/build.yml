@@ -67,7 +67,8 @@ jobs:
           generate_release_notes: true
           # v1.x and later are real releases; every other tag ships as a
           # pre-release, so an unfinished build can never look like the
-          # recommended download. Flip by tagging v1.0.0.
+          # recommended download. Promote a played build with
+          # `gh release edit <tag> --prerelease=false` instead of retagging.
           prerelease: ${{ !startsWith(github.ref_name, 'v1.') }}
           body: |
             **Built from this repository's source** — commit `${{ github.sha }}` on
