@@ -262,6 +262,8 @@ bool GroundRay(uintptr_t zone, const double from[3], const double to[3], double 
 static double g_fromYou = 0;
 static bool   g_grounded = false;
 
+static double g_camPos[3], g_camFwd[3];   // camera, as of the last Target() call
+
 static bool Target(double reach, double yaw, double lift, uint64_t previewId, double pos[3], double rot[4]) {
     uintptr_t actor, entity;
     if (!GetLocalPlayer(actor, entity)) return false;
@@ -273,6 +275,8 @@ static bool Target(double reach, double yaw, double lift, uint64_t previewId, do
     const double fwd[3] = { 2.0 * (q[0] * q[1] - q[3] * q[2]),
                             1.0 - 2.0 * (q[0] * q[0] + q[2] * q[2]),
                             2.0 * (q[1] * q[2] + q[3] * q[0]) };
+    memcpy(g_camPos, p, sizeof(g_camPos));
+    memcpy(g_camFwd, fwd, sizeof(g_camFwd));
     double you[3], stand[4] = { 0, 0, 0, 1 };
     Vec3Out(entity, 0x2B8, you);
     if (EntitySlotsOk(entity)) {
@@ -371,10 +375,61 @@ static const char* SpawnBuildable(const char* name, const double pos[3], const d
     return SpawnEntityInPlayerZone(name, pos, rot, id);
 }
 
+static bool IsPrefab(const char* name) {
+    const size_t len = strlen(name);
+    return len > 7 && _stricmp(name + len - 7, ".socpak") == 0;
+}
+
+// A prefab (.socpak) lays its buildings out once, where it's first spawned, so a live prefab can't
+// follow the camera. Prefabs are previewed with a small marker instead, and built where it stands.
+static const char* PrefabMarker() {
+    static const char* marker = nullptr;
+    static bool tried = false;
+    if (tried) return marker;
+    tried = true;
+    static const char* const kCandidates[] = {
+        "PlayerDeco_Flair_Hanger_Flag_UEE_1", "PlayerDeco_Flair_Hanger_Flag_IAE_2955_BIS_1", "PlayerDeco_Flair_Heart_Table_1_a",
+    };
+    for (const char* c : kCandidates) {
+        bool exists = false;
+        __try { exists = EntityClassExists(c); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        if (exists) { marker = c; break; }
+    }
+    if (!marker) Log("[build] no prefab marker class found; prefabs preview as themselves (they won't follow the camera)");
+    return marker;
+}
+
+// The real prefab, built at the marker once the camera has held still for a moment, so you can see
+// the actual building: where it lines up and whether it clips. Moving the camera, rotating or
+// changing reach takes it away again; clicking while it's up keeps it as the placed building.
+static struct {
+    uint64_t id; double pos[3], rot[4], camPos[3], camFwd[3]; double yaw, reach;
+    DWORD stillSince; bool suppressed;
+} g_ghost;
+
+static void RemoveGhost() {
+    if (g_ghost.id) RemoveEntityById(g_ghost.id);
+    g_ghost.id = 0;
+}
+
 static void RemovePreview() {
     if (g_previewId) RemoveEntityById(g_previewId);
     g_previewId = 0;
     g_previewIndex = -1;
+    RemoveGhost();
+}
+
+// True when the camera hasn't moved (or turned) since the last call that returned false.
+static bool CameraStill() {
+    double d = 0, dot = 0;
+    for (int i = 0; i < 3; ++i) {
+        d += (g_camPos[i] - g_ghost.camPos[i]) * (g_camPos[i] - g_ghost.camPos[i]);
+        dot += g_camFwd[i] * g_ghost.camFwd[i];
+    }
+    if (d < 0.05 * 0.05 && dot > 0.9998) return true;
+    memcpy(g_ghost.camPos, g_camPos, sizeof(g_camPos));
+    memcpy(g_ghost.camFwd, g_camFwd, sizeof(g_camFwd));
+    return false;
 }
 
 static void Enter() {
@@ -399,6 +454,18 @@ static void Undo() {
 static void Clear() {
     while (g_placedCount) RemoveEntityById(g_placed[--g_placedCount]);
     Log("[build] base cleared");
+}
+
+// Moves any entity within its zone (local coordinates). Used to send NPCs that can't be removed far away.
+bool MoveEntityLocal(uint64_t id, const double pos[3]) {
+    __try {
+        const uintptr_t e = EntityById(id);
+        if (!e || !EntitySlotsOk(e)) return false;
+        VCall<void>(e, 0x2B0, pos, 0, false);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
 }
 
 static void MovePreview(const double pos[3], const double rot[4]) {
@@ -497,17 +564,47 @@ void ProcessBuild() {
     if (index != g_previewIndex) {
         RemovePreview();
         uint64_t id = 0;
-        if (const char* err = SpawnBuildable(g_build[index], pos, rot, id)) { Log("[build] preview of %s failed: %s", g_build[index], err); g_previewIndex = index; return; }
+        const char* marker = IsPrefab(g_build[index]) ? PrefabMarker() : nullptr;
+        if (const char* err = SpawnBuildable(marker ? marker : g_build[index], pos, rot, id)) { Log("[build] preview of %s failed: %s", g_build[index], err); g_previewIndex = index; return; }
         g_previewId = id;
         g_previewIndex = index;
-        Log("[build] previewing %s %s %.1f m from you", g_build[index], where, g_fromYou);
-    } else {
+        Log("[build] previewing %s %s %.1f m from you%s", g_build[index], where, g_fromYou, marker ? " (marker: the prefab is built where the flag stands)" : "");
+    } else if (!g_ghost.id) {
         MovePreview(pos, rot);
+    }
+
+    const bool prefab = IsPrefab(g_build[index]) && PrefabMarker();
+    if (prefab) {
+        const DWORD now = GetTickCount();
+        const bool still = CameraStill() && g_ghost.yaw == g_yaw && g_ghost.reach == reach;
+        if (!still) {
+            g_ghost.stillSince = now;
+            g_ghost.yaw = g_yaw;
+            g_ghost.reach = reach;
+            g_ghost.suppressed = false;
+            RemoveGhost();
+        } else if (!g_ghost.id && !g_ghost.suppressed && now - g_ghost.stillSince > 500) {
+            uint64_t id = 0;
+            if (!SpawnBuildable(g_build[index], pos, rot, id)) {
+                g_ghost.id = id;
+                memcpy(g_ghost.pos, pos, sizeof(g_ghost.pos));
+                memcpy(g_ghost.rot, rot, sizeof(g_ghost.rot));
+            }
+        }
     }
 
     if (Pressed(VK_LBUTTON, lmb, keys) && g_placedCount < kMaxPlaced) {
         uint64_t id = 0;
-        if (const char* err = SpawnBuildable(g_build[index], pos, rot, id)) Log("[build] placing %s failed: %s", g_build[index], err);
-        else { g_placed[g_placedCount++] = id; Log("[build] placed %s %s %.1f m from you (%d)", g_build[index], where, g_fromYou, g_placedCount); }
+        if (prefab && g_ghost.id) {                      // keep the preview as the real thing
+            g_placed[g_placedCount++] = g_ghost.id;
+            g_ghost.id = 0;
+            g_ghost.suppressed = true;                   // no second preview on top until the camera moves
+            Log("[build] placed %s %s %.1f m from you (%d)", g_build[index], where, g_fromYou, g_placedCount);
+        } else if (const char* err = SpawnBuildable(g_build[index], prefab && g_ghost.id ? g_ghost.pos : pos, rot, id)) {
+            Log("[build] placing %s failed: %s", g_build[index], err);
+        } else {
+            g_placed[g_placedCount++] = id;
+            Log("[build] placed %s %s %.1f m from you (%d)", g_build[index], where, g_fromYou, g_placedCount);
+        }
     }
 }

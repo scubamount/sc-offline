@@ -36,9 +36,116 @@ void ResolveNpcApi(const Section& text) {
 
 void Menu_RequestClearNpcs() { InterlockedExchange(&g_clearRequested, 1); }
 
+// The entity system's RemoveEntity takes an entity HANDLE (pointer + tag bits), not an id: its first
+// step is a handle validity check, so the ids this mod used to pass were refused every time (that's
+// why Clear NPCs, Kick and build mode's undo never removed anything). Ids are converted first now.
+//
+// RemoveEntity can also hand the removal to a manager that never finishes it offline, leaving the
+// entity flagged "being removed" but still there. So each removal is checked 1.5 s later and, if the
+// entity is still around, removed with the internal function RemoveEntity itself ends in.
+struct PendingRemoval { uint64_t id; DWORD at; bool direct; };
+constexpr int         kMaxPendingRemovals = 512;
+static PendingRemoval g_pendingRemovals[kMaxPendingRemovals];
+static int            g_pendingRemovalCount = 0;
+
+using DirectRemoveFn = bool(__fastcall*)(uintptr_t entitySystem, uint64_t handle);
+static DirectRemoveFn g_directRemove = nullptr;
+static int            g_directState = 0;     // 0 not tried, 1 found, -1 not found
+
+static void ResolveDirectRemove() {
+    if (g_directState) return;
+    g_directState = -1;
+    __try {
+        const uint8_t* fn = *reinterpret_cast<const uint8_t* const*>(*reinterpret_cast<const uintptr_t*>(*g_tp.entitySystem) + g_removeSlot);
+        if (!BytesMatch(fn, "48 89 5C 24 08 48 89 54 24 10 55 56 57 41 54 41 55 41 56 41 57")) {
+            Log("[npc] RemoveEntity's code changed; direct removal fallback disabled");
+            return;
+        }
+        for (const uint8_t* p = fn; p < fn + 0x700; ++p)
+            if (BytesMatch(p, "48 8B D3 49 8B CD E8 ?? ?? ?? ?? 84 C0 74 0A 49 23 DC 81 4B 08 00 10 00 00")) {
+                g_directRemove = reinterpret_cast<DirectRemoveFn>(const_cast<uint8_t*>(p + 11 + Rel32(p + 7)));
+                g_directState = 1;
+                return;
+            }
+        Log("[npc] internal remove call not found; direct removal fallback disabled");
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log("[npc] fault while locating the direct removal fallback");
+    }
+}
+
+// Entity system method 0x128 fills in an entity's handle from its id (the infinite ammo code uses it).
+// It works for spawned NPCs, which the teleport code's player-handle helper doesn't (v0.8.2's log
+// showed every NPC handle coming back empty). That helper stays as a second try.
+static uint64_t HandleOf(uint64_t id) {
+    uint64_t handle = 0;
+    __try {
+        uint64_t out = 0;
+        if (const uint64_t* h = VCall<const uint64_t*>(*g_tp.entitySystem, 0x128, &out, id)) handle = *h;
+        if (!(handle & kPtrMask)) reinterpret_cast<void(__fastcall*)(uint64_t*, uint64_t)>(g_tp.handleFromId)(&handle, id);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+    return (handle & kPtrMask) ? handle : 0;
+}
+
+static bool CallRemove(uint64_t id) {
+    const uint64_t handle = HandleOf(id);
+    if (!handle) return false;
+    __try { return VCall<bool>(*g_tp.entitySystem, g_removeSlot, handle); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+static bool CallDirectRemove(uint64_t id) {
+    ResolveDirectRemove();
+    const uint64_t handle = g_directRemove ? HandleOf(id) : 0;
+    if (!handle) return false;
+    __try { return g_directRemove(*g_tp.entitySystem, handle); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+static bool EntityStillExists(uint64_t id) {
+    __try { return VCall<uintptr_t>(*g_tp.entitySystem, 0x120, id) != 0; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
 void RemoveEntityById(uint64_t id) {
     if (!g_removeSlot || !id) return;
-    __try { VCall<void>(*g_tp.entitySystem, g_removeSlot, id); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    CallRemove(id);
+    if (g_pendingRemovalCount < kMaxPendingRemovals) g_pendingRemovals[g_pendingRemovalCount++] = { id, GetTickCount(), false };
+}
+
+// Last resort for entities whose removal is handed to an owner that never carries it out offline
+// (spawned NPCs): out of any seat, then ~17,000 km away, far outside streaming range.
+static void Banish(uint64_t id) {
+    UnseatEntityById(id);
+    const double away[3] = { 1.0e7, 1.0e7, 1.0e7 };
+    if (!MoveEntityLocal(id, away)) Log("[npc] couldn't remove or move entity %llu", static_cast<unsigned long long>(id));
+}
+
+static void VerifyRemovals() {
+    const DWORD now = GetTickCount();
+    for (int i = 0; i < g_pendingRemovalCount;) {
+        PendingRemoval& r = g_pendingRemovals[i];
+        if (now - r.at < 1500) { ++i; continue; }
+        bool done = true;
+        if (EntityStillExists(r.id)) {
+            if (!r.direct) {
+                const bool ok = CallDirectRemove(r.id);
+                r.direct = true;
+                r.at = now;
+                if (ok) done = false;           // check once more after it's had a frame
+                else Banish(r.id);
+            } else {
+                Banish(r.id);
+            }
+        }
+        if (done) g_pendingRemovals[i] = g_pendingRemovals[--g_pendingRemovalCount];
+        else ++i;
+    }
+}
+
+bool CanRemoveEntities() { return g_removeSlot != 0; }
+int32_t RemoveEntitySlot() { return g_removeSlot; }
+
+void TrackSpawnedNpc(uint64_t id) {
+    if (id && g_spawnedCount < kMaxSpawned) g_spawned[g_spawnedCount++] = id;
 }
 
 static void ClearNpcs() {
@@ -123,4 +230,5 @@ void ProcessNpcs() {
     if (req.pending && req.index >= 0 && req.index < g_npcCount)
         SpawnNpcs(g_npcs[req.index], req.count < 1 ? 1 : req.count > 10 ? 10 : req.count);
     if (InterlockedExchange(&g_clearRequested, 0)) ClearNpcs();
+    VerifyRemovals();
 }

@@ -2,7 +2,9 @@
 #include "patches.h"
 #include "teleport.h"
 #include "menu.h"
+#include "npc.h"
 #include <algorithm>
+#include <cctype>
 #include <cstdarg>
 #include <share.h>
 
@@ -56,6 +58,38 @@ struct SpawnApi {
     uintptr_t*        components = nullptr;
 };
 static SpawnApi g_sp;
+
+static bool Contains(const uint8_t* from, const uint8_t* to, const char* pattern) {
+    for (const uint8_t* q = from; q < to; ++q)
+        if (BytesMatch(q, pattern)) return true;
+    return false;
+}
+
+// Every event declared in Events/ISC/Dashboards.h gets a small sender function that loads that file
+// name's address and passes the event's source line in r8d. Flight Ready is the one on line 0x49.
+// The senders are found through their references to the file name string rather than by a fixed byte
+// pattern, because game updates keep adding events with identical code.
+static ToggleFlightReadyFn FindFlightReady(const Section& text, const uint8_t* header) {
+    if (!header) return nullptr;
+    const uint8_t* const end = text.base + text.size - 8;
+    for (const uint8_t* p = text.base + 0x200; p < end; ++p) {
+        p = static_cast<const uint8_t*>(memchr(p, 0x8D, static_cast<size_t>(end - p)));
+        if (!p) break;
+        if ((p[-1] != 0x48 && p[-1] != 0x4C) || (p[1] & 0xC7) != 0x05 || p + 6 + Rel32(p + 2) != header) continue;
+        const uint8_t* lea = p - 1;
+        const uint8_t* start = nullptr;
+        for (const uint8_t* q = lea; q > lea - 0x60 && q > text.base + 2; --q)
+            if (q[-1] == 0xCC && q[-2] == 0xCC) { start = q; break; }
+        if (!start || !BytesMatch(lea, "48 8D 15")) continue;
+        uint32_t line = 0;
+        for (const uint8_t* q = start; q + 6 <= lea; ++q)
+            if (q[0] == 0x41 && q[1] == 0xB8) line = *reinterpret_cast<const uint32_t*>(q + 2);
+        if (line == 0x49 && BytesMatch(start, "48 89 5C 24") && Contains(start, lea, "48 8B FA") && Contains(start, lea, "4C 89 44 24"))
+            return reinterpret_cast<ToggleFlightReadyFn>(const_cast<uint8_t*>(start));
+    }
+    return nullptr;
+}
+
 
 bool ResolveSpawnApi(const Section& text, const Section& rdata) {
     const uint8_t* msg = FindCString(rdata, "Landing Area could not be found.");
@@ -120,14 +154,8 @@ bool ResolveSpawnApi(const Section& text, const Section& rdata) {
     }
     if (!g_sp.findEntityByName) Log("[ship] entity lookup by name not found; Daymar disabled");
 
-    uint8_t* senders[4] = {};
-    const int nSenders = FindPattern(text,
-        "48 89 5C 24 08 57 48 83 EC 50 8B 05 ?? ?? ?? ?? 48 8B FA 4C 89 44 24 20 48 8B D9 85 C0 75 19 41 B8 49 00 00 00 48 8D 15",
-        senders, 4);
-    const uint8_t* header = FindCString(rdata, "C:\\workspace\\CryEngine\\Code\\CryEngine\\CryCommon\\Events/ISC/Dashboards.h");
-    for (int i = 0; header && i < nSenders && i < 4; ++i)
-        if (senders[i] + 0x2C + Rel32(senders[i] + 0x28) == header)
-            g_sp.toggleFlightReady = reinterpret_cast<ToggleFlightReadyFn>(senders[i]);
+    g_sp.toggleFlightReady = FindFlightReady(text,
+        FindCString(rdata, "C:\\workspace\\CryEngine\\Code\\CryEngine\\CryCommon\\Events/ISC/Dashboards.h"));
     if (!g_sp.toggleFlightReady) Log("[ship] Flight Ready event not found; will press R instead");
 
     const uint8_t* flyLabel = FindCString(rdata,
@@ -222,7 +250,7 @@ static volatile LONG g_menuShipCount = -1;
 static volatile LONG g_menuWantShips = 0;
 static SRWLOCK       g_menuLock = SRWLOCK_INIT;
 static char          g_menuStatus[256] = "Pick a ship and press Spawn.";
-static struct { bool pending; int index; float height; bool sit; bool flightReady; } g_spawnRequest;
+static struct { bool pending; int index; MenuSpawnOptions opt; } g_spawnRequest;
 static struct { bool pending; bool enemyWing; char cls[64]; float height; bool sit; bool flightReady; } g_classRequest;
 
 static bool g_startDaymarPending = false;
@@ -243,7 +271,7 @@ void ReadStartOptions() {
 bool SpawnerReady() { return g_sp.ok; }
 bool StartingOverDaymar() { return g_startDaymarPending; }
 
-static void SetMenuStatus(const char* fmt, ...) {
+void SetMenuStatus(const char* fmt, ...) {
     char buf[256];
     va_list ap;
     va_start(ap, fmt);
@@ -263,9 +291,12 @@ int Menu_ShipCount() {
 
 const MenuShip* Menu_Ships() { return g_menuShips; }
 
-void Menu_RequestSpawn(int index, float heightAboveMe, bool sitInPilotSeat, bool flightReady) {
+void Menu_RequestSpawn(int index, const MenuSpawnOptions& options) {
     AcquireSRWLockExclusive(&g_menuLock);
-    g_spawnRequest = { true, index, heightAboveMe, sitInPilotSeat, flightReady };
+    g_spawnRequest.pending = true;
+    g_spawnRequest.index = index;
+    g_spawnRequest.opt = options;
+    g_spawnRequest.opt.seatName[sizeof(g_spawnRequest.opt.seatName) - 1] = 0;
     ReleaseSRWLockExclusive(&g_menuLock);
 }
 
@@ -295,6 +326,11 @@ void Menu_GetStatus(char* out, size_t n) {
 }
 
 static uintptr_t ClassRegistry() { return VCall<uintptr_t>(*g_tp.entitySystem, 0xC0); }
+
+bool EntityClassExists(const char* name) {
+    const uintptr_t registry = ClassRegistry();
+    return registry && VCall<uintptr_t>(registry, 0x20, name) != 0;
+}
 
 static int VehicleSize(uintptr_t entityClass) {
     const uintptr_t rec = VCall<uintptr_t>(*g_sp.game, 0x298, entityClass);
@@ -553,6 +589,21 @@ static const char* SpawnShipAbovePlayer(const char* shipClass, double height, ui
     return SpawnEntityNearPlayer(shipClass, up, shipId);
 }
 
+bool FindEntityByNameEx(const char* name, uintptr_t& entity, uint64_t& id) {
+    entity = 0;
+    id = 0;
+    if (!g_sp.ok || !g_sp.findEntityByName || !name || !*name) return false;
+    __try {
+        uint64_t handle = 0;
+        g_sp.findEntityByName(*g_tp.entitySystem, &handle, name);
+        entity = handle & kPtrMask;
+        if (entity && g_sp.handleToId) g_sp.handleToId(&handle, &id);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        entity = 0;
+    }
+    return entity != 0;
+}
+
 constexpr const char* kDaymarEntity = "OOC_Stanton_2b_Daymar";
 constexpr double      kDaymarRadius = 295000.0;
 constexpr double      kArrivalAltitude = 3000.0;
@@ -576,15 +627,48 @@ static const char* SpawnShipAboveDaymar(const char* shipClass, uint64_t& shipId)
     return SpawnShipInZone(shipClass, zoneId, pos, shipId);
 }
 
-enum class SeatStep { NotReady, Sent, NoSeat, Fault };
+// ---------------------------------------------------------------------------------------------
+// Seats, crew and power
+//
+// Seats are enumerated with the game's own seat visitor (forEachSeat, resolved from the game's
+// seat picker). For every seat we also work out WHO is in it, so the spawner can pick a specific
+// seat, kick an NPC out of the seat you want, and put NPCs into seats.
+// ---------------------------------------------------------------------------------------------
 
-struct SeatInfo { uintptr_t seat; uint32_t priority; bool occupied; char name[64]; };
-static SeatInfo g_seatList[128];
+enum class SeatStep { NotReady, Sent, Evicting, NoSeat, Blocked, Fault };
+
+constexpr uint64_t kUnknownOccupant = ~0ull;
+constexpr uint32_t kPilotPriority   = 1000;
+constexpr int      kMaxSeats        = 128;
+
+struct SeatInfo {
+    uintptr_t seat; uint32_t priority; bool occupied; uint64_t seatId; uint64_t occupant; int state; char name[64];
+};
+static SeatInfo g_seatList[kMaxSeats];
 static int      g_seatListCount;
 
+static uintptr_t EntityById(uint64_t id) { return id ? VCall<uintptr_t>(*g_tp.entitySystem, 0x120, id) : 0; }
+
+static uintptr_t EntityByIdSafe(uint64_t id) {
+    __try { return EntityById(id); } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+static uintptr_t LocalPlayerEntity() {
+    __try {
+        uintptr_t actor = 0, entity = 0;
+        return GetLocalPlayer(actor, entity) ? entity : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+static bool SeatControl() { return g_sp.forEachSeat != nullptr; }
+bool Menu_SeatControlAvailable() { return g_sp.ok && SeatControl(); }
+
 static char __fastcall CollectSeat(uintptr_t seat) {
-    if (!seat || g_seatListCount >= 128) return 1;
+    if (!seat || g_seatListCount >= kMaxSeats) return 1;
     SeatInfo& s = g_seatList[g_seatListCount++];
+    s = {};
     s.seat = seat;
     s.occupied = Rd<uint64_t>(seat + 0x158) != 0;
     s.priority = g_sp.seatPriority(seat);
@@ -594,77 +678,509 @@ static char __fastcall CollectSeat(uintptr_t seat) {
     return 1;
 }
 
-static const SeatInfo* g_lastSeat = nullptr;
+// seat+0x158 is the field the game's own seat picker tests to skip taken seats. In the current
+// build it holds the occupant's entity id directly (the first log showed 0x2e914d0fec =
+// 200006242284 next to a seat with id 200006242283). The older guesses - an entity handle or a
+// pointer to a component - are kept as fallbacks for other builds. Each attempt is fenced on its
+// own so one faulting read can't hide the others.
+static int  g_occupantLayout    = 0;   // 0 = not learned, 1 = handle, 2 = component pointer, 3 = raw entity id
 
-static SeatStep LinkIntoBestSeat(uintptr_t ship, uintptr_t user, bool logSeats) {
+static bool IsActorEntity(uint64_t id, uint64_t shipId, uint64_t seatId) {
+    if (!id || id == shipId || id == seatId) return false;
+    const uintptr_t e = EntityById(id);
+    return e && (EntityComponent(e, "ISCItemUser") != 0 || EntityComponent(e, "Actor") != 0);
+}
+
+static uint64_t OccupantAsRawId(uint64_t raw, uint64_t shipId, uint64_t seatId) {
+    __try { return IsActorEntity(raw, shipId, seatId) ? raw : 0; } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+static uint64_t OccupantAsHandle(uintptr_t seat, uint64_t shipId, uint64_t seatId) {
+    __try {
+        uint64_t id = 0;
+        g_sp.handleToId(reinterpret_cast<const void*>(seat + 0x158), &id);
+        return IsActorEntity(id, shipId, seatId) ? id : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+static uint64_t OccupantAsComponent(uint64_t raw, uint64_t shipId, uint64_t seatId) {
+    __try {
+        const uintptr_t p = raw & kPtrMask;
+        if (!p || (p & 7)) return 0;
+        uint64_t id = 0;
+        g_sp.handleToId(reinterpret_cast<const void*>(p + 8), &id);
+        return IsActorEntity(id, shipId, seatId) ? id : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+// NPCs this mod put in seats, so they can be identified even if decoding fails.
+struct PlacedCrew { uint64_t seatId, npcId; };
+static PlacedCrew g_placedCrew[128];
+static int        g_placedCrewCount = 0;
+
+static void RememberPlacedCrew(uint64_t seatId, uint64_t npcId) {
+    for (int i = 0; i < g_placedCrewCount; ++i)
+        if (g_placedCrew[i].seatId == seatId) { g_placedCrew[i].npcId = npcId; return; }
+    if (g_placedCrewCount < 128) g_placedCrew[g_placedCrewCount++] = { seatId, npcId };
+}
+
+static void ForgetPlacedCrew(uint64_t npcId) {
+    for (int i = 0; i < g_placedCrewCount; ++i)
+        if (g_placedCrew[i].npcId == npcId) { g_placedCrew[i] = g_placedCrew[--g_placedCrewCount]; return; }
+}
+
+static uint64_t PlacedCrewIn(uint64_t seatId) {
+    for (int i = 0; i < g_placedCrewCount; ++i)
+        if (g_placedCrew[i].seatId == seatId) return g_placedCrew[i].npcId;
+    return 0;
+}
+
+static uint64_t DecodeOccupant(const SeatInfo& s, uint64_t shipId) {
+    uint64_t raw = 0;
+    __try { raw = Rd<uint64_t>(s.seat + 0x158); } __except (EXCEPTION_EXECUTE_HANDLER) { return kUnknownOccupant; }
+    if (!raw) return 0;
+
+    static const char* const kLayoutName[] = { "", "an entity handle", "a component pointer", "a raw entity id" };
+    uint64_t id = 0;
+    int layout = 0;
+    if (!id && (!g_occupantLayout || g_occupantLayout == 3) && (id = OccupantAsRawId(raw, shipId, s.seatId)))   layout = 3;
+    if (!id && (!g_occupantLayout || g_occupantLayout == 1) && (id = OccupantAsHandle(s.seat, shipId, s.seatId))) layout = 1;
+    if (!id && (!g_occupantLayout || g_occupantLayout == 2) && (id = OccupantAsComponent(raw, shipId, s.seatId))) layout = 2;
+    if (id) {
+        if (!g_occupantLayout) { g_occupantLayout = layout; Log("[crew] seat occupant field read as %s", kLayoutName[layout]); }
+        return id;
+    }
+    if (const uint64_t placed = PlacedCrewIn(s.seatId)) return placed;
+    return kUnknownOccupant;
+}
+
+static int EnumerateSeats(uintptr_t ship, uint64_t shipId) {
     g_seatListCount = 0;
     const uintptr_t ports = EntityComponent(ship, "IItemPortContainer");
-    if (!ports) return SeatStep::NoSeat;
+    if (!ports) return 0;
     const struct { void* invoke; uintptr_t manager; void* storage; } visitor = { reinterpret_cast<void*>(&CollectSeat), 1, nullptr };
     g_sp.forEachSeat(VCall<uintptr_t>(ports, 0x778), &visitor, 193);
-    if (!g_seatListCount) return SeatStep::NoSeat;
+    const uint64_t me = LocalPlayerEntityId();
+    for (int i = 0; i < g_seatListCount; ++i) {
+        SeatInfo& s = g_seatList[i];
+        g_sp.handleToId(reinterpret_cast<const void*>(s.seat + 8), &s.seatId);
+        s.occupant = s.occupied ? DecodeOccupant(s, shipId) : 0;
+        s.state = !s.occupant ? SeatState_Empty
+                : s.occupant == kUnknownOccupant ? SeatState_Taken
+                : (me && s.occupant == me) ? SeatState_You : SeatState_Npc;
+    }
+    return g_seatListCount;
+}
 
-    const SeatInfo* best = nullptr;
+// -1 = the ship entity isn't there (not streamed in yet, or gone); 0 = no seats / fault.
+static int EnumerateShipSeats(uint64_t shipId) {
+    if (!SeatControl() || !shipId) return 0;
+    __try {
+        const uintptr_t ship = EntityById(shipId);
+        return ship ? EnumerateSeats(ship, shipId) : -1;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        static bool reported = false;
+        if (!reported) { reported = true; Log("[ship] seat enumeration faulted"); }
+        g_seatListCount = 0;
+        return 0;
+    }
+}
+
+static const SeatInfo* SeatById(uint64_t seatId) {
+    for (int i = 0; i < g_seatListCount; ++i)
+        if (g_seatList[i].seatId == seatId) return &g_seatList[i];
+    return nullptr;
+}
+
+static const SeatInfo* PilotSeat() {
+    const SeatInfo* top = nullptr;
+    for (int i = 0; i < g_seatListCount; ++i)
+        if (!top || g_seatList[i].priority > top->priority) top = &g_seatList[i];
+    return top;
+}
+
+static const char* SeatStateName(int state) {
+    switch (state) {
+    case SeatState_You: return "you";
+    case SeatState_Npc: return "npc";
+    case SeatState_Taken: return "taken";
+    default: return "empty";
+    }
+}
+
+static bool ContainsNoCase(const char* s, const char* needle, size_t n) {
+    for (; *s; ++s) {
+        size_t i = 0;
+        while (i < n && s[i] && tolower(static_cast<unsigned char>(s[i])) == tolower(static_cast<unsigned char>(needle[i]))) ++i;
+        if (i == n) return true;
+    }
+    return false;
+}
+
+// Every word in `words` (split on spaces / underscores) must appear somewhere in `name`.
+static bool SeatNameMatches(const char* name, const char* words) {
+    bool any = false;
+    for (const char* p = words; *p; ) {
+        p += strspn(p, " _");
+        const size_t n = strcspn(p, " _");
+        if (n) { any = true; if (!ContainsNoCase(name, p, n)) return false; }
+        p += n;
+    }
+    return any;
+}
+
+static uintptr_t ActorOfEntity(uintptr_t entity) {
+    const uintptr_t user = EntityComponent(entity, "ISCItemUser");
+    if (!user) return 0;
+    uint64_t handle = 0;
+    g_sp.actorOfUser(user, &handle);
+    return handle & kPtrMask;
+}
+
+// Works for any actor - you or an NPC.
+static bool LinkEntityToSeat(uintptr_t entity, uint64_t seatId) {
+    if (!entity || !seatId) return false;
+    __try {
+        const uintptr_t actor = ActorOfEntity(entity);
+        if (!actor) return false;
+        if (g_sp.isLinked(actor)) g_sp.forceDelink(g_sp.actorLink(actor));
+        g_sp.forceLink(g_sp.actorLink(actor), seatId);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static bool UnlinkEntity(uintptr_t entity) {
+    if (!entity) return false;
+    __try {
+        const uintptr_t actor = ActorOfEntity(entity);
+        if (!actor || !g_sp.isLinked(actor)) return false;
+        g_sp.forceDelink(g_sp.actorLink(actor));
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool UnseatEntityById(uint64_t id) { return UnlinkEntity(EntityByIdSafe(id)); }
+
+// --- crew jobs: an NPC we spawned that still has to be put into its seat ---------------------
+
+struct CrewJob { uint64_t npcId, shipId, seatId; DWORD since, nextTry; int links; };
+constexpr int  kMaxCrewJobs = 32;
+static CrewJob g_crewJobs[kMaxCrewJobs];
+static int     g_crewJobCount = 0;
+
+static void ForgetCrewJob(uint64_t npcId) {
+    for (int i = 0; i < g_crewJobCount; ++i)
+        if (g_crewJobs[i].npcId == npcId) { g_crewJobs[i] = g_crewJobs[--g_crewJobCount]; return; }
+}
+
+static bool CrewJobForSeat(uint64_t seatId) {
+    for (int i = 0; i < g_crewJobCount; ++i)
+        if (g_crewJobs[i].seatId == seatId) return true;
+    return false;
+}
+
+// Unseats an NPC and deletes it. Never touches you.
+static bool EvictSeat(const SeatInfo& s) {
+    if (s.state != SeatState_Npc) return false;
+    const uint64_t npc = s.occupant;
+    UnlinkEntity(EntityByIdSafe(npc));
+    const bool removed = CanRemoveEntities();
+    if (removed) RemoveEntityById(npc);
+    ForgetCrewJob(npc);
+    ForgetPlacedCrew(npc);
+    Log("[crew] %s NPC %llu from '%s'", removed ? "removed" : "unseated (RemoveEntity not found)",
+        static_cast<unsigned long long>(npc), s.name);
+    return true;
+}
+
+static const char* AddCrew(uint64_t shipId, uint64_t seatId, int npcIndex, DWORD now) {
+    if (g_crewJobCount >= kMaxCrewJobs) return "too many crew spawns in progress";
+    const char* npc = Menu_NpcName(npcIndex);
+    if (!npc || !*npc) return "pick an NPC in the NPC list first";
+    const double offset[3] = { 1.5, 1.5, 0.2 };
+    uint64_t id = 0;
+    if (const char* err = SpawnEntityNearPlayer(npc, offset, id)) return err;
+    TrackSpawnedNpc(id);   // so "Clear NPCs" removes crew too
+    g_crewJobs[g_crewJobCount++] = { id, shipId, seatId, now, now + 750, 0 };
+    Log("[crew] spawned %s (%llu) for seat %llu", npc, static_cast<unsigned long long>(id), static_cast<unsigned long long>(seatId));
+    return nullptr;
+}
+
+static bool CrewSeated(const CrewJob& j) {
+    if (EnumerateShipSeats(j.shipId) <= 0) return false;
+    const SeatInfo* s = SeatById(j.seatId);
+    if (!s) return false;
+    if (s->state == SeatState_Npc && s->occupant == j.npcId) return true;
+    return s->state == SeatState_Taken && !g_occupantLayout;   // can't decode at all: trust that the link took
+}
+
+static void UpdateCrewJobs(DWORD now) {
+    for (int i = 0; i < g_crewJobCount; ) {
+        CrewJob& j = g_crewJobs[i];
+        bool drop = false;
+        if (static_cast<LONG>(now - j.nextTry) >= 0) {
+            j.nextTry = now + 1500;
+            if (j.links && CrewSeated(j)) {
+                RememberPlacedCrew(j.seatId, j.npcId);
+                Log("[crew] NPC %llu is seated", static_cast<unsigned long long>(j.npcId));
+                drop = true;
+            } else if (j.links >= 5 || now - j.since > 30000) {
+                Log("[crew] couldn't seat NPC %llu (links tried: %d)", static_cast<unsigned long long>(j.npcId), j.links);
+                drop = true;
+            } else if (LinkEntityToSeat(EntityByIdSafe(j.npcId), j.seatId)) {
+                ++j.links;
+            }
+        }
+        if (drop) { g_crewJobs[i] = g_crewJobs[--g_crewJobCount]; continue; }
+        ++i;
+    }
+}
+
+// --- the target ship the Crew & seats panel works on ----------------------------------------
+
+static struct { uint64_t shipId; char name[64]; } g_target;
+static MenuSeat      g_menuSeats[kMaxSeats];
+static int           g_menuSeatCount = -1;
+static char          g_menuTargetName[64];
+static volatile LONG g_seatPanelSeen = 0;
+
+static void PublishSeats(int n) {
+    AcquireSRWLockExclusive(&g_menuLock);
+    if (!g_target.shipId) {
+        g_menuSeatCount = -1;
+    } else {
+        g_menuSeatCount = n < 0 ? 0 : n;
+        for (int i = 0; i < g_menuSeatCount; ++i) {
+            strcpy_s(g_menuSeats[i].name, g_seatList[i].name);
+            g_menuSeats[i].priority = g_seatList[i].priority;
+            g_menuSeats[i].state = g_seatList[i].state;
+            g_menuSeats[i].id = g_seatList[i].seatId;
+        }
+        snprintf(g_menuTargetName, sizeof(g_menuTargetName), "%s%s", g_target.name, n < 0 ? " (not loaded)" : "");
+    }
+    ReleaseSRWLockExclusive(&g_menuLock);
+}
+
+static void RefreshTargetSeats() {
+    PublishSeats(g_target.shipId ? EnumerateShipSeats(g_target.shipId) : -1);
+}
+
+static void SetTarget(uint64_t shipId, const char* name) {
+    g_target.shipId = shipId;
+    strncpy_s(g_target.name, name ? name : "ship", _TRUNCATE);
+    RefreshTargetSeats();
+}
+
+static const char* TargetShipImIn() {
+    __try {
+        uintptr_t actor, entity;
+        if (!GetLocalPlayer(actor, entity)) return "you're not spawned yet";
+        const uintptr_t zone = VCall<uintptr_t>(entity, 0x6B8);
+        if (!zone) return "you're not in a zone";
+        const uint64_t id = ZoneId(zone);
+        const uintptr_t ship = EntityById(id);
+        if (!ship || !EntityComponent(ship, "IItemPortContainer")) return "you're not inside a ship - stand or sit in it first";
+        const char* name = ZoneName(zone);
+        g_target.shipId = id;
+        strncpy_s(g_target.name, name ? name : "ship", _TRUNCATE);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return "fault while reading your ship";
+    }
+    RefreshTargetSeats();
+    return nullptr;
+}
+
+uint64_t TargetShipId() { return g_target.shipId; }
+
+uint64_t PlayerShipId() {
+    __try {
+        uintptr_t actor, entity;
+        if (!GetLocalPlayer(actor, entity)) return 0;
+        const uintptr_t zone = VCall<uintptr_t>(entity, 0x6B8);
+        if (!zone) return 0;
+        const uint64_t id = ZoneId(zone);
+        const uintptr_t ship = EntityById(id);
+        return ship && EntityComponent(ship, "IItemPortContainer") ? id : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+int Menu_GetSeats(MenuSeat* out, int max, char* shipName, size_t shipNameLen) {
+    InterlockedExchange(&g_seatPanelSeen, static_cast<LONG>(GetTickCount()));
+    AcquireSRWLockShared(&g_menuLock);
+    const int n = g_menuSeatCount;
+    for (int i = 0; i < n && i < max; ++i) out[i] = g_menuSeats[i];
+    if (shipName && shipNameLen) strncpy_s(shipName, shipNameLen, n >= 0 ? g_menuTargetName : "", _TRUNCATE);
+    ReleaseSRWLockShared(&g_menuLock);
+    return n;
+}
+
+
+enum SeatActionKind { SA_None, SA_Sit, SA_Kick, SA_AddCrew, SA_FillCrew, SA_ClearCrew, SA_FlightReady, SA_TargetMine,
+                      SA_StandUp, SA_StandAll };
+static struct { int kind; uint64_t seatId; int npc; bool replace; int dash; } g_seatAction;
+
+static void QueueSeatAction(int kind, uint64_t seatId = 0, int npc = -1, bool replace = false, int dash = -1) {
+    AcquireSRWLockExclusive(&g_menuLock);
+    g_seatAction = { kind, seatId, npc, replace, dash };
+    ReleaseSRWLockExclusive(&g_menuLock);
+}
+
+void Menu_TargetShipImIn()                                   { QueueSeatAction(SA_TargetMine); }
+void Menu_RequestSit(unsigned long long seatId, bool replace) { QueueSeatAction(SA_Sit, seatId, -1, replace); }
+void Menu_RequestKick(unsigned long long seatId)             { QueueSeatAction(SA_Kick, seatId); }
+void Menu_RequestAddCrew(unsigned long long seatId, int npc) { QueueSeatAction(SA_AddCrew, seatId, npc); }
+void Menu_RequestFillCrew(int npc)                           { QueueSeatAction(SA_FillCrew, 0, npc); }
+void Menu_RequestClearCrew()                                 { QueueSeatAction(SA_ClearCrew); }
+void Menu_RequestFlightReady()                               { QueueSeatAction(SA_FlightReady); }
+void Menu_RequestStandUp(unsigned long long seatId)          { QueueSeatAction(SA_StandUp, seatId); }
+void Menu_RequestStandAll()                                  { QueueSeatAction(SA_StandAll); }
+
+// --- getting you into a seat ---------------------------------------------------------------
+
+static struct {
+    uint64_t id; DWORD since; DWORD lastSend; int sends; int evictions;
+    bool flightReady, replaceNpc, startedAboard, lastWasEvict, namedFallback;
+    int mode; uint64_t wantSeat; uint64_t sentSeat; char name[64]; char seatName[48];
+} g_seatJob;
+static SeatInfo g_lastSeat;
+static bool     g_haveLastSeat = false;
+
+static bool PlayerAboard(uint64_t shipId, const char* shipClass) {
+    __try {
+        uintptr_t actor, entity;
+        if (!GetLocalPlayer(actor, entity)) return false;
+        const uintptr_t zone = VCall<uintptr_t>(entity, 0x6B8);
+        if (!zone) return false;
+        if (ZoneId(zone) == shipId) return true;
+        const char* name = ZoneName(zone);
+        return name && _strnicmp(name, shipClass, strlen(shipClass)) == 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static void StartSeatJob(uint64_t shipId, const char* shipName, int mode, const char* seatName, bool replaceNpc,
+                         bool flightReady, uint64_t wantSeat, DWORD now) {
+    g_seatJob = {};
+    g_seatJob.id = shipId;
+    g_seatJob.since = now;
+    g_seatJob.mode = mode;
+    g_seatJob.replaceNpc = replaceNpc;
+    g_seatJob.flightReady = flightReady;
+    g_seatJob.wantSeat = wantSeat;
+    strncpy_s(g_seatJob.name, shipName, _TRUNCATE);
+    strncpy_s(g_seatJob.seatName, seatName ? seatName : "", _TRUNCATE);
+    g_seatJob.startedAboard = PlayerAboard(shipId, g_seatJob.name);
+    g_haveLastSeat = false;
+}
+
+static const SeatInfo* ChooseSeat() {
+    if (g_seatJob.wantSeat) return SeatById(g_seatJob.wantSeat);
+
+    if (g_seatJob.mode == SeatMode_Named && g_seatJob.seatName[0]) {
+        const SeatInfo *free = nullptr, *npc = nullptr;
+        for (int i = 0; i < g_seatListCount; ++i) {
+            const SeatInfo& s = g_seatList[i];
+            if (!SeatNameMatches(s.name, g_seatJob.seatName)) continue;
+            if (s.state == SeatState_You) return &s;
+            if (s.state == SeatState_Empty && (!free || s.priority > free->priority)) free = &s;
+            if (s.state == SeatState_Npc && (!npc || s.priority > npc->priority)) npc = &s;
+        }
+        if (free) return free;
+        if (npc && g_seatJob.replaceNpc) return npc;
+        if (!g_seatJob.namedFallback) {
+            g_seatJob.namedFallback = true;
+            Log("[ship] no %sseat matches '%s'; using the pilot seat rules instead", npc ? "free " : "", g_seatJob.seatName);
+        }
+    }
+
+    const SeatInfo *top = PilotSeat(), *free = nullptr, *mine = nullptr;
     for (int i = 0; i < g_seatListCount; ++i) {
         const SeatInfo& s = g_seatList[i];
-        if (!s.occupied && (!best || s.priority > best->priority)) best = &s;
+        if (s.state == SeatState_Empty && (!free || s.priority > free->priority)) free = &s;
+        if (s.state == SeatState_You) mine = &s;
     }
-    if (logSeats) {
-        char line[1024] = "";
-        for (int i = 0; i < g_seatListCount && strlen(line) < 900; ++i) {
-            char one[96];
-            snprintf(one, sizeof(one), "%s%s(%u%s)", i ? ", " : "", g_seatList[i].name, g_seatList[i].priority,
-                     g_seatList[i].occupied ? ", taken" : "");
-            strcat_s(line, one);
-        }
-        Log("[ship] %d seats: %s", g_seatListCount, line);
-    }
-    if (!best) return SeatStep::NoSeat;
+    if (top && (top->state == SeatState_Empty || top->state == SeatState_You)) return top;
+    if (top && top->state == SeatState_Npc && g_seatJob.replaceNpc) return top;
+    return free ? free : mine;
+}
 
-    uint64_t actorHandle = 0, seatId = 0;
-    g_sp.actorOfUser(user, &actorHandle);
-    const uintptr_t actor = actorHandle & kPtrMask;
-    g_sp.handleToId(reinterpret_cast<const void*>(best->seat + 8), &seatId);
-    if (!actor || !seatId) return SeatStep::NoSeat;
-    if (g_sp.isLinked(actor)) g_sp.forceDelink(g_sp.actorLink(actor));
-    g_sp.forceLink(g_sp.actorLink(actor), seatId);
-    g_lastSeat = best;
-    Log("[ship] linking you into '%s' (priority %u%s)", best->name, best->priority, best->priority >= 1000 ? ", pilot" : "");
+static SeatStep SeatPlayer(uintptr_t playerEntity) {
+    const int n = EnumerateShipSeats(g_seatJob.id);
+    if (n < 0) return SeatStep::NotReady;
+    if (n == 0) return SeatStep::NoSeat;
+
+    const SeatInfo* s = ChooseSeat();
+    if (!s) { g_haveLastSeat = false; return g_seatJob.wantSeat ? SeatStep::Blocked : SeatStep::NoSeat; }
+    g_lastSeat = *s;
+    g_haveLastSeat = true;
+
+    switch (s->state) {
+    case SeatState_You:
+        g_seatJob.sentSeat = s->seatId;
+        return SeatStep::Sent;
+    case SeatState_Taken:
+        return SeatStep::Blocked;   // somebody we can't identify - don't double-seat
+    case SeatState_Npc:
+        if (!g_seatJob.replaceNpc) return SeatStep::Blocked;   // only reachable for a seat picked in the menu
+        if (++g_seatJob.evictions > 3) {
+            Log("[ship] the NPC in '%s' keeps coming back; taking another seat", s->name);
+            g_seatJob.replaceNpc = false;
+            if (g_seatJob.wantSeat) return SeatStep::Blocked;
+            return SeatStep::NotReady;
+        }
+        EvictSeat(*s);
+        return SeatStep::Evicting;
+    default:
+        break;
+    }
+    if (!LinkEntityToSeat(playerEntity, s->seatId)) return SeatStep::NotReady;
+    g_seatJob.sentSeat = s->seatId;
+    Log("[ship] linking you into '%s' (priority %u%s)", s->name, s->priority, s->priority >= kPilotPriority ? ", pilot" : "");
     return SeatStep::Sent;
 }
 
-static SeatStep TryOwnSeatPicker(uintptr_t ship, uintptr_t user, bool logSeats) {
+static SeatStep GameDefaultSeat(uintptr_t entity, uint64_t shipId) {
     __try {
-        return LinkIntoBestSeat(ship, user, logSeats);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        static bool reported = false;
-        if (!reported) { reported = true; Log("[ship] own seat picker faulted; using the game's seat choice"); }
-        return SeatStep::NoSeat;
-    }
-}
-
-static SeatStep SeatEntityInShip(uintptr_t entity, uint64_t shipId, bool logSeats) {
-    const uintptr_t ship = VCall<uintptr_t>(*g_tp.entitySystem, 0x120, shipId);
-    if (!ship) return SeatStep::NotReady;
-    const uintptr_t seats = EntityComponent(ship, "ISCItemControllableManager");
-    const uintptr_t user = EntityComponent(entity, "ISCItemUser");
-    if (!seats || !user) return SeatStep::NotReady;
-    if (g_sp.forEachSeat) {
-        const SeatStep step = TryOwnSeatPicker(ship, user, logSeats);
-        if (step != SeatStep::NoSeat) return step;
-    }
-    g_lastSeat = nullptr;
-    return g_sp.findSeat(seats, user, nullptr) ? SeatStep::Sent : SeatStep::NoSeat;
-}
-
-static SeatStep SendSeatRequest(uint64_t shipId, bool logSeats) {
-    __try {
-        uintptr_t actor, entity;
-        if (!GetLocalPlayer(actor, entity)) return SeatStep::NotReady;
-        return SeatEntityInShip(entity, shipId, logSeats);
+        const uintptr_t ship = EntityById(shipId);
+        if (!ship) return SeatStep::NotReady;
+        const uintptr_t seats = EntityComponent(ship, "ISCItemControllableManager");
+        const uintptr_t user = EntityComponent(entity, "ISCItemUser");
+        if (!seats || !user) return SeatStep::NotReady;
+        return g_sp.findSeat(seats, user, nullptr) ? SeatStep::Sent : SeatStep::NoSeat;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return SeatStep::Fault;
     }
+}
+
+static SeatStep SendSeatRequest() {
+    uintptr_t actor = 0, entity = 0;
+    bool live = false;
+    __try { live = GetLocalPlayer(actor, entity); } __except (EXCEPTION_EXECUTE_HANDLER) { return SeatStep::Fault; }
+    if (!live) return SeatStep::NotReady;
+    if (SeatControl()) {
+        const SeatStep step = SeatPlayer(entity);
+        if (step != SeatStep::NoSeat || g_seatJob.wantSeat) return step;
+    }
+    g_haveLastSeat = false;
+    g_seatJob.sentSeat = 0;
+    return GameDefaultSeat(entity, g_seatJob.id);
+}
+
+static bool SeatJobDone() {
+    if (g_seatJob.sentSeat && g_occupantLayout) {
+        if (EnumerateShipSeats(g_seatJob.id) <= 0) return false;
+        const SeatInfo* s = SeatById(g_seatJob.sentSeat);
+        return s && s->state == SeatState_You;
+    }
+    if (g_seatJob.startedAboard) return true;   // can't verify the exact seat; assume the link took
+    return PlayerAboard(g_seatJob.id, g_seatJob.name);
 }
 
 static void PressFlightReadyKey() {
@@ -682,83 +1198,178 @@ static void PressFlightReadyKey() {
         CloseHandle(t);
 }
 
-static bool PlayerAboard(uint64_t shipId, const char* shipClass) {
+// --- everything mounted on a ship ------------------------------------------------------------
+//
+// A spawned ship's parts get consecutive entity ids right after the ship's own (in the logs, a
+// Perseus at ...069 has seats at ...071 to ...200). Walking that range and keeping the entities
+// whose chain of parents leads back to the ship lists every part: weapons, turrets, dashboards,
+// power plants, coolers, shields and so on.
+
+struct ShipItem { uint64_t id; uint64_t parent; int depth; uintptr_t entity; char name[96]; };
+constexpr int kMaxShipItems = 1500;
+static ShipItem g_shipItems[kMaxShipItems];
+static int      g_shipItemCount = 0;
+static uint64_t g_shipItemsOf = 0;
+static DWORD    g_shipItemsAt = 0;
+
+static uint64_t ItemParentId(uintptr_t entity) {
     __try {
-        uintptr_t actor, entity;
-        if (!GetLocalPlayer(actor, entity)) return false;
-        const uintptr_t zone = VCall<uintptr_t>(entity, 0x6B8);
-        if (!zone) return false;
-        if (ZoneId(zone) == shipId) return true;
-        const char* name = ZoneName(zone);
-        return name && _strnicmp(name, shipClass, strlen(shipClass)) == 0;
+        uint64_t port = 0;
+        VCall<void>(entity, 0x150, &port, 0ull);
+        if (!(port & kPtrMask)) return 0;
+        uint64_t id = 0;
+        const uint64_t* owner = VCall<const uint64_t*>(port & kPtrMask, 0x8, &id);
+        return owner ? *owner : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+static void EntityNameOf(uintptr_t entity, char* out, size_t n) {
+    strncpy_s(out, n, "?", _TRUNCATE);
+    __try {
+        if (const char* name = VCall<const char*>(entity, 0x78)) strncpy_s(out, n, name, _TRUNCATE);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+
+static int CollectShipItems(uint64_t shipId, DWORD now) {
+    if (g_shipItemsOf == shipId && now - g_shipItemsAt < 3000) return g_shipItemCount;
+    g_shipItemCount = 0;
+    g_shipItemsOf = shipId;
+    g_shipItemsAt = now;
+    int misses = 0;
+    for (uint64_t id = shipId + 1; id < shipId + 8000 && misses < 400 && g_shipItemCount < kMaxShipItems; ++id) {
+        const uintptr_t e = EntityByIdSafe(id);
+        if (!e) { ++misses; continue; }
+        misses = 0;
+        const uint64_t parent = ItemParentId(e);
+        uint64_t up = parent;
+        int depth = 1;
+        while (up && up != shipId && depth < 12) {
+            const uintptr_t next = EntityByIdSafe(up);
+            if (!next) { up = 0; break; }
+            up = ItemParentId(next);
+            ++depth;
+        }
+        if (up != shipId) continue;     // not part of this ship (crew, other ships, loose items)
+        ShipItem& it = g_shipItems[g_shipItemCount++];
+        it.id = id;
+        it.parent = parent;
+        it.depth = depth;
+        it.entity = e;
+        EntityNameOf(e, it.name, sizeof(it.name));
+    }
+    return g_shipItemCount;
+}
+
+int ShipPartComponents(uint64_t shipId, const char* type, uintptr_t* components, char (*names)[96], int max) {
+    if (!shipId) return 0;
+    const int n = CollectShipItems(shipId, GetTickCount());   // cached for 3 s
+    int found = 0;
+    for (int i = 0; i < n && found < max; ++i) {
+        uintptr_t c = 0;
+        __try { c = EntityComponent(g_shipItems[i].entity, type); } __except (EXCEPTION_EXECUTE_HANDLER) { c = 0; }
+        if (!c) continue;
+        components[found] = c;
+        strcpy_s(names[found], 96, g_shipItems[i].name);
+        ++found;
+    }
+    return found;
+}
+
+// --- power ----------------------------------------------------------------------------------
+//
+// Powering on uses the game's own Flight Ready dashboard event (the same thing the R key ends up
+// sending), fired straight at the pilot seat's dashboard. Big ships stream their interior in over
+// several seconds, so the dashboard is polled for up to 20 s before giving up and pressing R.
+
+static struct { uint64_t shipId, seatId; DWORD at, deadline; bool waitingLogged; char name[64]; } g_powerJob;
+
+static uintptr_t DashboardOn(uintptr_t entity) {
+    __try { return entity ? EntityComponent(entity, "SCItemSeatDashboard") : 0; } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+// The seat itself (Perseus-style "SeatDashboard"), then the ship, then any part of the ship that has
+// a dashboard - preferring one mounted on the pilot seat (F8C, Moth and most smaller ships).
+static uintptr_t FindDashboard(uint64_t shipId, uint64_t seatId) {
+    if (const uintptr_t d = DashboardOn(EntityByIdSafe(seatId))) return d;
+    if (const uintptr_t d = DashboardOn(EntityByIdSafe(shipId))) return d;
+    const int n = CollectShipItems(shipId, GetTickCount());
+    uintptr_t any = 0;
+    for (int i = 0; i < n; ++i) {
+        const uintptr_t d = DashboardOn(g_shipItems[i].entity);
+        if (!d) continue;
+        if (g_shipItems[i].parent == seatId) {
+            Log("[ship] using dashboard '%s' on the pilot seat", g_shipItems[i].name);
+            return d;
+        }
+        if (!any) any = d;
+    }
+    if (any) Log("[ship] using the first dashboard found on the ship");
+    return any;
+}
+
+static bool SendDashEvent(ToggleFlightReadyFn send, uintptr_t dashboard) {
+    if (!send || !dashboard) return false;
+    __try {
+        const struct { void* invoke; uintptr_t manager; void* storage; } noCallback = {};
+        send(*g_tp.entitySystem, dashboard, &noCallback);
+        return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
 }
 
-static void LogPlayerZone(uint64_t shipId) {
-    __try {
-        uintptr_t actor, entity;
-        if (!GetLocalPlayer(actor, entity)) return;
-        const uintptr_t zone = VCall<uintptr_t>(entity, 0x6B8);
-        const char* name = zone ? ZoneName(zone) : nullptr;
-        char buf[96] = "?";
-        if (name) strncpy_s(buf, name, _TRUNCATE);
-        Log("[ship] after seat request: you're in zone '%s' (%llu), ship is %llu", buf,
-            static_cast<unsigned long long>(zone ? ZoneId(zone) : 0), static_cast<unsigned long long>(shipId));
-    } __except (EXCEPTION_EXECUTE_HANDLER) {}
-}
-
-static struct {
-    uint64_t id; DWORD since; DWORD lastSend; int sends; bool zoneLogged; bool flightReady; char name[64];
-} g_seatJob;
-
-static struct { uintptr_t seat; DWORD at; char name[64]; } g_powerJob;
-
-static uintptr_t SeatDashboard(uintptr_t seat) {
-    const uintptr_t seatEntity = Rd<uint64_t>(seat + 8) & kPtrMask;
-    return seatEntity ? EntityComponent(seatEntity, "SCItemSeatDashboard") : 0;
+static void StartPowerJob(uint64_t shipId, uint64_t seatId, const char* name, DWORD at, DWORD wait) {
+    g_powerJob = {};
+    g_powerJob.shipId = shipId;
+    g_powerJob.seatId = seatId;
+    g_powerJob.at = at;
+    g_powerJob.deadline = at + wait;
+    strncpy_s(g_powerJob.name, name, _TRUNCATE);
 }
 
 static void RunPowerJob(DWORD now) {
-    if (!g_powerJob.seat || static_cast<LONG>(now - g_powerJob.at) < 0) return;
-    const uintptr_t seat = g_powerJob.seat;
-    g_powerJob.seat = 0;
-    uintptr_t dashboard = 0;
-    __try {
-        if (g_sp.toggleFlightReady && (dashboard = SeatDashboard(seat)) != 0) {
-            const struct { void* invoke; uintptr_t manager; void* storage; } noCallback = {};
-            g_sp.toggleFlightReady(*g_tp.entitySystem, dashboard, &noCallback);
-        }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        dashboard = 0;
+    if (!g_powerJob.shipId || static_cast<LONG>(now - g_powerJob.at) < 0) return;
+    const uintptr_t dashboard = g_sp.toggleFlightReady ? FindDashboard(g_powerJob.shipId, g_powerJob.seatId) : 0;
+    if (dashboard && SendDashEvent(g_sp.toggleFlightReady, dashboard)) {
+        SetMenuStatus("%s powered on - sent the game's Flight Ready event to the pilot dashboard.", g_powerJob.name);
+        g_powerJob.shipId = 0;
+        return;
     }
-    if (dashboard) {
-        SetMenuStatus("You're in the %s's pilot seat - powered on (Flight Ready). Have fun!", g_powerJob.name);
-    } else if (GameHasFocus()) {
+    if (g_sp.toggleFlightReady && static_cast<LONG>(now - g_powerJob.deadline) < 0) {
+        if (!g_powerJob.waitingLogged) { g_powerJob.waitingLogged = true; Log("[ship] waiting for the %s's pilot dashboard to load...", g_powerJob.name); }
+        g_powerJob.at = now + 500;
+        return;
+    }
+    if (g_sp.toggleFlightReady) Log("[ship] no seat dashboard on the %s; falling back to the R key", g_powerJob.name);
+    if (GameHasFocus()) {
         PressFlightReadyKey();
-        SetMenuStatus("You're in the %s's pilot seat - pressed Flight Ready (R) for you.", g_powerJob.name);
+        SetMenuStatus("Couldn't reach the %s's dashboard directly - pressed Flight Ready (R) for you.", g_powerJob.name);
     } else {
-        SetMenuStatus("You're in the %s's pilot seat. Press R (Flight Ready) to power up.", g_powerJob.name);
+        SetMenuStatus("Couldn't reach the %s's dashboard. Press R (Flight Ready) to power up.", g_powerJob.name);
     }
+    g_powerJob.shipId = 0;
 }
 
 static void FinishSeatJob(DWORD now) {
-    const SeatInfo* seat = g_lastSeat;
-    const bool pilot = seat && seat->priority >= 1000;
+    const bool have = g_haveLastSeat;
+    const bool pilot = have && g_lastSeat.priority >= kPilotPriority;
     if (pilot && g_seatJob.flightReady) {
-        g_powerJob.seat = seat->seat;
-        g_powerJob.at = now + 2500;
-        strncpy_s(g_powerJob.name, g_seatJob.name, _TRUNCATE);
+        StartPowerJob(g_seatJob.id, g_lastSeat.seatId, g_seatJob.name, now + 1500, 20000);
         SetMenuStatus("You're in the %s's pilot seat - powering up...", g_seatJob.name);
     } else if (pilot) {
-        SetMenuStatus("You're in the %s's pilot seat. Press R (Flight Ready) to power up.", g_seatJob.name);
-    } else if (seat) {
-        SetMenuStatus("You're in the %s, but its pilot seat wasn't free - you got '%s'.", g_seatJob.name, seat->name);
+        SetMenuStatus("You're in the %s's pilot seat ('%s').", g_seatJob.name, g_lastSeat.name);
+    } else if (have && g_seatJob.mode == SeatMode_Pilot && !g_seatJob.wantSeat) {
+        SetMenuStatus("You're in the %s, but its pilot seat wasn't free%s - you got '%s'.", g_seatJob.name,
+                      g_seatJob.replaceNpc ? "" : " (tick 'replace NPC' to take it)", g_lastSeat.name);
+    } else if (have) {
+        SetMenuStatus("You're in '%s' on the %s.", g_lastSeat.name, g_seatJob.name);
     } else {
         SetMenuStatus("You're in the %s. Have fun!", g_seatJob.name);
     }
     g_seatJob.id = 0;
+    RefreshTargetSeats();
 }
 
 static void UpdateSeatJob(DWORD now) {
@@ -766,29 +1377,137 @@ static void UpdateSeatJob(DWORD now) {
     if (!g_seatJob.id || now - lastCheck < 500) return;
     lastCheck = now;
     if (g_seatJob.sends && now - g_seatJob.lastSend >= 1500) {
-        if (PlayerAboard(g_seatJob.id, g_seatJob.name)) {
-            FinishSeatJob(now);
-            return;
-        }
-        if (!g_seatJob.zoneLogged) { g_seatJob.zoneLogged = true; LogPlayerZone(g_seatJob.id); }
+        if (SeatJobDone()) { FinishSeatJob(now); return; }
     }
     if (now - g_seatJob.since > 180000) {
         SetMenuStatus("%s spawned, but I couldn't get you aboard within 3 minutes.", g_seatJob.name);
         g_seatJob.id = 0;
         return;
     }
-    if (g_seatJob.lastSend && now - g_seatJob.lastSend < 4000) return;
-    switch (SendSeatRequest(g_seatJob.id, g_seatJob.sends == 0)) {
+    if (g_seatJob.lastSend && now - g_seatJob.lastSend < (g_seatJob.lastWasEvict ? 1200u : 4000u)) return;
+    switch (SendSeatRequest()) {
     case SeatStep::NotReady: break;
-    case SeatStep::NoSeat:   g_seatJob.lastSend = now; break;
+    case SeatStep::NoSeat:   g_seatJob.lastSend = now; g_seatJob.lastWasEvict = false; break;
+    case SeatStep::Blocked:
+        if (!g_haveLastSeat)
+            SetMenuStatus("That seat isn't on the %s any more - refresh the list.", g_seatJob.name);
+        else if (g_lastSeat.state == SeatState_Npc && g_seatJob.evictions > 3)
+            SetMenuStatus("The NPC in '%s' keeps coming back - try another seat.", g_lastSeat.name);
+        else if (g_lastSeat.state == SeatState_Npc)
+            SetMenuStatus("'%s' has an NPC in it - tick 'replace NPC' or kick it first.", g_lastSeat.name);
+        else
+            SetMenuStatus("'%s' is taken by someone I can't identify, so I left it.", g_lastSeat.name);
+        g_seatJob.id = 0;
+        RefreshTargetSeats();
+        break;
+    case SeatStep::Evicting:
+        g_seatJob.lastSend = now;
+        g_seatJob.lastWasEvict = true;
+        SetMenuStatus("Removing the NPC from '%s' on the %s...", g_lastSeat.name, g_seatJob.name);
+        break;
     case SeatStep::Fault:    SetMenuStatus("Seating failed (fault)."); g_seatJob.id = 0; break;
     case SeatStep::Sent:
         g_seatJob.lastSend = now;
-        g_seatJob.zoneLogged = false;
+        g_seatJob.lastWasEvict = false;
         if (++g_seatJob.sends > 8) { SetMenuStatus("Asked %s to seat you 8 times; it didn't take.", g_seatJob.name); g_seatJob.id = 0; }
         else Log("[ship] seat request %d sent to %s", g_seatJob.sends, g_seatJob.name);
         break;
     }
+}
+
+// --- menu actions on the target ship --------------------------------------------------------
+
+static void ProcessSeatAction(DWORD now) {
+    AcquireSRWLockExclusive(&g_menuLock);
+    const auto act = g_seatAction;
+    g_seatAction.kind = SA_None;
+    ReleaseSRWLockExclusive(&g_menuLock);
+    if (act.kind == SA_None) return;
+
+    if (act.kind == SA_TargetMine) {
+        if (const char* err = TargetShipImIn()) SetMenuStatus("Can't pick your ship: %s", err);
+        else SetMenuStatus("Crew & seats now shows the %s.", g_target.name);
+        return;
+    }
+    if (!SeatControl()) { SetMenuStatus("Seat control isn't available in this game version."); return; }
+    if (!g_target.shipId) { SetMenuStatus("Spawn a ship first (or press 'Use the ship I'm in')."); return; }
+    const int n = EnumerateShipSeats(g_target.shipId);
+    if (n <= 0) { SetMenuStatus("The %s isn't loaded (or has no seats).", g_target.name); PublishSeats(n); return; }
+    const SeatInfo* seat = act.seatId ? SeatById(act.seatId) : nullptr;
+
+    switch (act.kind) {
+    case SA_Sit:
+        if (!seat) { SetMenuStatus("That seat is gone - refresh the list."); break; }
+        StartSeatJob(g_target.shipId, g_target.name, SeatMode_Pilot, "", act.replace, false, seat->seatId, now);
+        SetMenuStatus("Moving you to '%s'...", seat->name);
+        break;
+    case SA_Kick:
+        if (!seat) { SetMenuStatus("That seat is gone - refresh the list."); break; }
+        if (seat->state == SeatState_Npc) { const SeatInfo copy = *seat; EvictSeat(copy); SetMenuStatus("Removed the NPC from '%s'.", copy.name); }
+        else if (seat->state == SeatState_Taken) SetMenuStatus("Can't tell who is in '%s', so I left them.", seat->name);
+        else SetMenuStatus("There's no NPC in '%s'.", seat->name);
+        break;
+    case SA_StandUp:
+        if (!seat) { SetMenuStatus("That seat is gone - refresh the list."); break; }
+        if (seat->state == SeatState_You)
+            SetMenuStatus(UnlinkEntity(LocalPlayerEntity()) ? "You got out of '%s'." : "Couldn't get you out of '%s'.", seat->name);
+        else if (seat->state == SeatState_Npc) {
+            const SeatInfo copy = *seat;
+            const bool ok = UnlinkEntity(EntityByIdSafe(copy.occupant));
+            if (ok) ForgetPlacedCrew(copy.occupant);
+            SetMenuStatus(ok ? "The NPC in '%s' stood up." : "Couldn't get the NPC out of '%s'.", copy.name);
+        }
+        else if (seat->state == SeatState_Taken) SetMenuStatus("Can't tell who is in '%s', so I left them.", seat->name);
+        else SetMenuStatus("'%s' is already empty.", seat->name);
+        break;
+    case SA_StandAll: {
+        uint64_t npcs[kMaxSeats];
+        int count = 0, stood = 0;
+        for (int i = 0; i < g_seatListCount; ++i)
+            if (g_seatList[i].state == SeatState_Npc) npcs[count++] = g_seatList[i].occupant;
+        for (int i = 0; i < count; ++i)
+            if (UnlinkEntity(EntityByIdSafe(npcs[i]))) { ForgetPlacedCrew(npcs[i]); ++stood; }
+        SetMenuStatus("%d of %d NPCs on the %s stood up.", stood, count, g_target.name);
+        break;
+    }
+    case SA_AddCrew: {
+        if (!seat) { SetMenuStatus("That seat is gone - refresh the list."); break; }
+        if (seat->state != SeatState_Empty) { SetMenuStatus("'%s' isn't empty - kick its occupant first.", seat->name); break; }
+        const SeatInfo copy = *seat;
+        if (const char* err = AddCrew(g_target.shipId, copy.seatId, act.npc, now)) SetMenuStatus("Adding crew failed: %s", err);
+        else SetMenuStatus("Seating %s in '%s'...", Menu_NpcName(act.npc), copy.name);
+        break;
+    }
+    case SA_FillCrew: {
+        uint64_t empty[kMaxSeats];
+        int count = 0, added = 0;
+        for (int i = 0; i < g_seatListCount; ++i)
+            if (g_seatList[i].state == SeatState_Empty && !CrewJobForSeat(g_seatList[i].seatId)) empty[count++] = g_seatList[i].seatId;
+        const char* err = nullptr;
+        for (int i = 0; i < count && !err; ++i)
+            if (!(err = AddCrew(g_target.shipId, empty[i], act.npc, now))) ++added;
+        if (err && !added) SetMenuStatus("Filling seats failed: %s", err);
+        else SetMenuStatus("Seating %d x %s on the %s...", added, Menu_NpcName(act.npc), g_target.name);
+        break;
+    }
+    case SA_ClearCrew: {
+        SeatInfo npcs[kMaxSeats];
+        int count = 0;
+        for (int i = 0; i < g_seatListCount; ++i)
+            if (g_seatList[i].state == SeatState_Npc) npcs[count++] = g_seatList[i];
+        for (int i = 0; i < count; ++i) EvictSeat(npcs[i]);
+        SetMenuStatus("Removed %d NPC crew from the %s.", count, g_target.name);
+        break;
+    }
+    case SA_FlightReady: {
+        const SeatInfo* pilot = PilotSeat();
+        if (!pilot || !g_sp.toggleFlightReady) { SetMenuStatus("Flight Ready event not available - press R in the pilot seat."); break; }
+        StartPowerJob(g_target.shipId, pilot->seatId, g_target.name, now, 3000);
+        break;
+    }
+    default: break;
+    }
+    RefreshTargetSeats();
 }
 
 static void StartDaymarArrival(const char* shipClass, DWORD now) {
@@ -797,9 +1516,8 @@ static void StartDaymarArrival(const char* shipClass, DWORD now) {
         SetMenuStatus("Going to Daymar failed: %s", err);
         return;
     }
-    g_seatJob = { id, now };
-    g_seatJob.flightReady = true;
-    strncpy_s(g_seatJob.name, shipClass, _TRUNCATE);
+    SetTarget(id, shipClass);
+    StartSeatJob(id, shipClass, SeatMode_Pilot, "", true, true, 0, now);
     SetMenuStatus("Spawning %s %.0f km over Daymar - you'll be put in its pilot seat, then fly down and land.",
                   shipClass, kArrivalAltitude / 1000);
 }
@@ -878,35 +1596,49 @@ void ProcessShipMenu(DWORD now) {
         if (const char* err = SpawnShipAbovePlayer(classReq.cls, classReq.height, id))
             SetMenuStatus("Spawning %s failed: %s", classReq.cls, err);
         else if (classReq.enemyWing) {
+            SetTarget(id, classReq.cls);   // the Bengal itself, like Bengal A; the wing ships are not targeted
             // The wing goes 300 m up — the height the menu's own hint promises for
             // the Vanduul hulls — rather than on top of the 980 m Bengal.
             int wing = 0;
             for (const char* c : kEnemySideClasses) {
                 if (!ClassInRegistry(c)) continue;
                 uint64_t wingId = 0;
-                if (SpawnShipAbovePlayer(c, 300.0, wingId)) continue;
+                if (const char* err = SpawnShipAbovePlayer(c, 300.0, wingId)) { Log("[ship] enemy wing: %s failed: %s", c, err); continue; }
                 ++wing;
             }
             SetMenuStatus("%s spawned %.0f m above you; %d of 3 enemy wing ships came in at 300 m.",
                           classReq.cls, classReq.height, wing);
-        } else if (!classReq.sit)
+        } else if (!classReq.sit) {
+            SetTarget(id, classReq.cls);
             SetMenuStatus("Spawning %s %.0f m above you (big ships take up to a minute).", classReq.cls, classReq.height);
-        else {
-            g_seatJob = { id, now };
-            g_seatJob.flightReady = classReq.flightReady;
-            strncpy_s(g_seatJob.name, classReq.cls, _TRUNCATE);
+        } else {
+            SetTarget(id, classReq.cls);
+            StartSeatJob(id, classReq.cls, SeatMode_Pilot, nullptr, true, classReq.flightReady, 0, now);
             SetMenuStatus("Spawning %s - you'll be put in the pilot seat as soon as it's there (big ships take up to a minute).", classReq.cls);
         }
     } else if (req.pending && req.index >= 0 && req.index < g_menuShipCount) {
         const char* name = g_menuShips[req.index].name;
+        const MenuSpawnOptions& o = req.opt;
         uint64_t id = 0;
-        if (const char* err = SpawnShipAbovePlayer(name, req.height, id)) SetMenuStatus("Spawning %s failed: %s", name, err);
-        else if (!req.sit) SetMenuStatus("Spawning %s %.0f m above you (big ships take up to a minute).", name, req.height);
-        else {
-            g_seatJob = { id, now };
-            g_seatJob.flightReady = req.flightReady;
-            strncpy_s(g_seatJob.name, name, _TRUNCATE);
-            SetMenuStatus("Spawning %s - you'll be put in the pilot seat as soon as it's there (big ships take up to a minute).", name);
+        if (const char* err = SpawnShipAbovePlayer(name, o.height, id)) {
+            SetMenuStatus("Spawning %s failed: %s", name, err);
+        } else {
+            SetTarget(id, name);
+            switch (o.seatMode) {
+            case SeatMode_None:
+                SetMenuStatus("Spawning %s %.0f m above you (big ships take up to a minute).", name, o.height);
+                break;
+            case SeatMode_PickLater:
+                SetMenuStatus("Spawning %s - pick a seat under Crew & seats once it has loaded.", name);
+                break;
+            default: {
+                const bool named = o.seatMode == SeatMode_Named && o.seatName[0];
+                StartSeatJob(id, name, named ? SeatMode_Named : SeatMode_Pilot, o.seatName, o.replaceNpc, o.flightReady, 0, now);
+                if (named) SetMenuStatus("Spawning %s - you'll be put in a '%s' seat as soon as it's there.", name, o.seatName);
+                else SetMenuStatus("Spawning %s - you'll be put in the pilot seat as soon as it's there (big ships take up to a minute).", name);
+                break;
+            }
+            }
         }
     }
 
@@ -929,9 +1661,8 @@ void ProcessShipMenu(DWORD now) {
             uint64_t id = 0;
             if (const char* err = SpawnShipAbovePlayer(line, height, id)) Log("[ship] test spawn of %s failed: %s", line, err);
             else {
-                g_seatJob = { id, now };
-                g_seatJob.flightReady = true;
-                strncpy_s(g_seatJob.name, line, _TRUNCATE);
+                SetTarget(id, line);
+                StartSeatJob(id, line, SeatMode_Pilot, "", true, true, 0, now);
                 Log("[ship] test spawn: %s %.0f m above you", line, height);
             }
         }
@@ -950,6 +1681,15 @@ void ProcessShipMenu(DWORD now) {
         }
     }
 
+    ProcessSeatAction(now);
     UpdateSeatJob(now);
+    UpdateCrewJobs(now);
     RunPowerJob(now);
+
+    // Keep the Crew & seats list live while the menu is showing it.
+    static DWORD lastSeatRefresh = 0;
+    if (g_target.shipId && now - static_cast<DWORD>(g_seatPanelSeen) < 3000 && now - lastSeatRefresh >= 1000) {
+        lastSeatRefresh = now;
+        RefreshTargetSeats();
+    }
 }

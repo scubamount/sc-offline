@@ -1,0 +1,42 @@
+# Places for the Travel tab.
+#   system | name shown | entity name | radius in metres (0 = unknown)
+#
+# The entity names must match the game's exactly; all Stanton planets and moons below were confirmed
+# by the Travel tab's scan. The scan adds everything else (Lagrange points, comm arrays, jump points,
+# other systems) to locations_found.txt. Radii are mean surface radii, so you arrive above the ground.
+
+Stanton | Hurston   | OOC_Stanton_1_Hurston    | 1000000
+Stanton | Ariel     | OOC_Stanton_1a_Ariel     | 344500
+Stanton | Aberdeen  | OOC_Stanton_1b_Aberdeen  | 274000
+Stanton | Magda     | OOC_Stanton_1c_Magda     | 340800
+Stanton | Ita       | OOC_Stanton_1d_Ita       | 325000
+Stanton | Crusader  | OOC_Stanton_2_Crusader   | 7450000
+Stanton | Cellin    | OOC_Stanton_2a_Cellin    | 260000
+Stanton | Daymar    | OOC_Stanton_2b_Daymar    | 295000
+Stanton | Yela      | OOC_Stanton_2c_Yela      | 313000
+Stanton | ArcCorp   | OOC_Stanton_3_ArcCorp    | 800000
+Stanton | Lyria     | OOC_Stanton_3a_Lyria     | 223000
+Stanton | Wala      | OOC_Stanton_3b_Wala      | 283000
+Stanton | microTech | OOC_Stanton_4_Microtech  | 1000000
+Stanton | Calliope  | OOC_Stanton_4a_Calliope  | 240000
+Stanton | Clio      | OOC_Stanton_4b_Clio      | 337000
+Stanton | Euterpe   | OOC_Stanton_4c_Euterpe   | 213000
+
+# Pyro: entity names confirmed by the scan; planet and moon names are the in-game ones (edit if
+# any are off). Radii unknown, so these arrive in orbit; add a radius in metres to land above them.
+Pyro | Pyro I     | pyro1  | 0
+Pyro | Monox      | pyro2  | 0
+Pyro | Bloom      | pyro3  | 0
+Pyro | Pyro IV    | pyro4  | 0
+Pyro | Pyro V     | pyro5  | 0
+Pyro | Ignis      | pyro5a | 0
+Pyro | Vatra      | pyro5b | 0
+Pyro | Adir       | pyro5c | 0
+Pyro | Fairo      | pyro5d | 0
+Pyro | Fuego      | pyro5e | 0
+Pyro | Vuur       | pyro5f | 0
+Pyro | Terminus   | pyro6  | 0
+
+# Landing zones found by the scan
+Nyx     | Levski  | levski_all-001     | 0
+Stanton | Area18  | Area18_central-001 | 0
