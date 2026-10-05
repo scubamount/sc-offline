@@ -188,7 +188,7 @@ void EquipLoadoutXml(const std::string& xml, const char* tag) {
     static char lastFile[MAX_PATH] = "";
     char dir[MAX_PATH];
     const DWORD n = GetEnvironmentVariableA("SC_USER", dir, sizeof(dir));
-    if (n == 0 || n >= sizeof(dir)) { Log("[%s] SC_USER isn't set (start the game with launch_offline.bat)", tag); return; }
+    if (n == 0 || n >= sizeof(dir)) { Log("[%s] SC_USER isn't set (start the game with sc-offline.exe)", tag); return; }
     char name[64], file[MAX_PATH], gamePath[96];
     snprintf(name, sizeof(name), "offline_loadout_%lu_%d.xml", GetCurrentProcessId(), ++counter);
     snprintf(file, sizeof(file), "%s\\%s", dir, name);

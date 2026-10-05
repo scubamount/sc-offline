@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Launcher
+- `sc-offline.exe` replaces `launch_offline.bat`. Same steps (copy the mod in, start the game,
+  remove the mod when every `StarCitizen.exe` has exited), plus:
+  - finds the game itself: `Roberts Space Industries\StarCitizen\<channel>\Bin64` on every
+    fixed drive, or `game =` in `sc-offline.ini`, or `--game <folder>`;
+  - asks for administrator rights only when the game folder refuses the copy;
+  - reads the start ship, start location, boot map and channel from `sc-offline.ini`.
+- The default boot map is now `PU_All` (every star system, so Travel reaches Pyro and Nyx).
+  Set `boot_map = PU` when playing the repo-root prebuilt DLL.
+- Releases ship `sc-offline-<tag>.zip`: launcher, DLL, `sc-offline.ini`, `sc-offline.sh`, `data/`
+  and the docs, ready to extract and play.
+
+### Linux (experimental, untested)
+- `sc-offline.sh` runs the launcher inside a Star Citizen Wine prefix (LUG Helper layout),
+  with `WINEDLLOVERRIDES=dinput8=n,b` so Wine loads the mod instead of its own `dinput8`.
+
 ## sc-offline 0.2.0-rc1
 
 This repository's build of upstream 0.9.0-rc1 (below) with the Squadron 42 tab on top.

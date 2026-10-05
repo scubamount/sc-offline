@@ -4,4 +4,5 @@
     <Platform Name="x86" />
   </Configurations>
   <Project Path="src/ChrisWareOffline.vcxproj" />
+  <Project Path="launcher/sc-offline.vcxproj" />
 </Solution>

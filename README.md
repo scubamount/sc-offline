@@ -7,34 +7,33 @@ Offline single-player mod menu for **Star Citizen**.
 > [!WARNING]
 > This mod may result in a ban. Use it at your own risk. It is for **offline single player only**.
 
-**Jump to:** [Which DLL do I run?](#which-dll-do-i-run) · [Features](#features) · [Requirements](#requirements) · [Setup](#setup) · [Play](#play) · [Squadron 42](#squadron-42-tab) · [Controls](#controls) · [Data files](#data-files-and-environment-variables) · [Build](#build) · [Releases](#releases) · [Update](#update) · [Go back online](#go-back-online) · [Notes](#notes) · [Credits](#credits)
+**Jump to:** [Which DLL do I run?](#which-dll-do-i-run) · [Features](#features) · [Requirements](#requirements) · [Setup](#setup) · [Play](#play) · [Linux](#linux-experimental) · [Squadron 42](#squadron-42-tab) · [Controls](#controls) · [Data files](#data-files-and-environment-variables) · [Build](#build) · [Releases](#releases) · [Update](#update) · [Go back online](#go-back-online) · [Notes](#notes) · [Credits](#credits)
 
 ---
 
 ## Which DLL do I run?
 
-`launch_offline.bat` copies **the `dinput8.dll` sitting in this folder** into your
-game — nothing else. So the DLL you put here is the mod you play.
+`sc-offline.exe` copies **the `dinput8.dll` sitting next to it** into your game — nothing
+else. So the DLL in that folder is the mod you play.
 
 Two builds of that file exist, and they are not interchangeable:
 
-| | Prebuilt — `dinput8.dll` at the repo root | Built from source — a [Release](https://github.com/scubamount/sc-offline/releases) or your own build |
+| | Release zip — `sc-offline-<version>.zip` | Prebuilt — `dinput8.dll` at the repo root |
 | --- | --- | --- |
-| Where it comes from | The mod's original author's tree, committed here as-is | Compiled from the C++ in `src/`, by CI or by you |
-| When it changes | Only when someone replaces it | On every push to `main` (CI artifact) and every `v*` tag (Release) |
-| Best for | Playing, with zero setup | Testing a change, or building your own |
+| Where it comes from | Compiled from the C++ in `src/` by CI, together with the launcher | The mod's original author's tree, committed here as-is |
+| When it changes | Every `v*` tag | Only when someone replaces it |
+| Best for | Playing this repository's version | Going back to the original author's build |
 
-- **Just playing?** Use the prebuilt DLL as it is. Nothing to decide.
-- **Testing this repository's work?** Download `dinput8.dll` from a
-  [Release](https://github.com/scubamount/sc-offline/releases) and drop it over the
-  file in this folder. Keep a copy of the original — you will want it back.
-- **Building it yourself?** See [Build](#build). The output lands in `x64/Release/`;
-  copy `dinput8.dll` from there into this folder.
+- **Just playing?** Download the zip from [Releases](https://github.com/scubamount/sc-offline/releases).
+  It has the launcher, the DLL and `data/` together. Nothing to decide.
+- **Want the original author's build?** Copy the repo-root `dinput8.dll` over the one in
+  your extracted zip, and set `boot_map = PU` in `sc-offline.ini` — that DLL doesn't know
+  `PU_All`.
+- **Building it yourself?** See [Build](#build). The output lands in `x64/Release/`.
 
 They really are different binaries, not copies: the prebuilt one came from a private
 tree that was never published, while the source build is what this repository
 develops.
-
 ---
 
 ## Features
@@ -70,10 +69,11 @@ tab comes from upstream ChrisWareOffline 0.9.0-rc1; see [Credits](#credits).
 
 - **You must own Star Citizen.** This is a mod for the game, not a standalone app.
 - Windows. The mod is a `dinput8.dll` that the game loads.
+  **Linux** (through Wine) is **experimental and untested** — see [Linux](#linux-experimental).
 - About 1 GB of disk for the download.
-- Administrator rights, to copy the mod into your game folder.
+- Administrator rights, to copy the mod into your game folder. The launcher asks for them
+  only when your game folder needs them.
 - **Easy Anti-Cheat must be off.** See [Setup](#setup).
-
 ---
 
 ## Setup
@@ -113,37 +113,64 @@ This stops the launcher from downloading fresh EAC files.
 
 ### 2. Install the mod
 
-1. Click the green **Code** button at the top of this page and choose **Download ZIP**.
+1. Open [Releases](https://github.com/scubamount/sc-offline/releases) and download
+   `sc-offline-<version>.zip` from the newest release.
 2. Right-click the ZIP and choose **Extract All**.
-3. Place the `sc-offline-main` folder anywhere you like, such as your Desktop.
+3. Place the extracted folder anywhere you like, such as your Desktop.
 4. Keep all files together in that folder.
 
-The mod does **not** go in your game folder. `launch_offline.bat` copies it in when you play and removes it when you close the game.
+The mod does **not** go in your game folder. `sc-offline.exe` copies it in when you play and
+removes it when you close the game.
 
-To play a source build instead of the prebuilt one, overwrite this folder's
-`dinput8.dll` with the one from a
-[Release](https://github.com/scubamount/sc-offline/releases) — see
-[Which DLL do I run?](#which-dll-do-i-run).
+**Finding the game:** the launcher looks for `Roberts Space Industries\StarCitizen\LIVE` on
+every drive by itself. If yours lives somewhere else, open `sc-offline.ini` in Notepad and set
+the `game` line to your StarCitizen folder:
 
-**Custom install path:** if your game is not installed at the path below, right-click `launch_offline.bat`, choose **Edit**, and change the `SC_BIN` line at the top to your own `LIVE\Bin64` folder.
-
-```text
-C:\Program Files\Roberts Space Industries\StarCitizen\LIVE
+```ini
+game = D:\Games\Roberts Space Industries\StarCitizen
 ```
 
+`sc-offline.ini` also sets the start ship, the boot map, and the channel (`LIVE`, `PTU`, ...).
 ---
 
 ## Play
 
 1. Close the RSI Launcher and the game.
-2. Double-click `launch_offline.bat`.
-   - If it reports that it cannot copy the mod, right-click the file and choose **Run as administrator**.
+2. Double-click `sc-offline.exe`.
+   - It prints which game folder it found. If Windows asks for administrator rights, say yes:
+     your game folder needs them for the copy.
 3. Wait for the game to load you in.
 4. Press **M** to open the menu.
 
 > [!IMPORTANT]
-> Leave the black script window open while you play. When you close the game, the script removes the mod from your game folder.
+> Leave the launcher window open while you play. When you close the game, it removes the mod
+> from your game folder.
 
+### Linux (experimental)
+
+> [!WARNING]
+> **Untested.** Nobody has run the mod under Wine yet. It's here so a Linux player can try it
+> and report back; if it works, this warning goes away.
+
+The game has to be installed the usual Linux way, in a Wine prefix — the
+[LUG Helper](https://github.com/starcitizen-lug/lug-helper) is what `sc-offline.sh` expects.
+
+1. Do the [Setup](#setup) steps inside Linux terms:
+   - the hosts line goes in `/etc/hosts` (`sudo nano /etc/hosts`);
+   - rename `EasyAntiCheat_EOS.exe` under your prefix's `drive_c/Program Files (x86)/EasyAntiCheat_EOS/`
+     if it exists there.
+2. Extract the release zip anywhere, then run:
+
+   ```bash
+   ./sc-offline.sh
+   ```
+
+`sc-offline.sh` finds your prefix (`$WINEPREFIX`, then the LUG Helper's saved prefix, then
+`~/Games/star-citizen`) and its Wine runner, sets `WINEDLLOVERRIDES=dinput8=n,b` so Wine loads
+the mod instead of its own `dinput8`, and starts `sc-offline.exe` inside the prefix. From there
+everything is the same as on Windows. Override either guess with `WINEPREFIX=...` or `WINE=...`.
+
+When you report back, include the launcher's output, `data/mod.log`, and the game's `Game.log`.
 ---
 
 ## Squadron 42 tab
@@ -206,13 +233,13 @@ format in a header comment. Trim a list and the menu gets shorter.
 | `locations_found.txt` | Everything the Travel tab's scan found, created by the scan |
 | `mod.log` | What the mod did this session |
 
-`launch_offline.bat` sets these before starting the game:
+`sc-offline.exe` sets these before starting the game (`sc-offline.ini` chooses the values):
 
 | Variable | Effect |
 | --- | --- |
-| `SC_OFFLINE_BOOT_MAP` | Boot map. The script sets `PU`. Source builds also accept `PU_All`, which boots every star system so the Travel tab can reach Pyro and Nyx; the prebuilt DLL doesn't recognise `PU_All` and would skip its boot patch |
-| `SC_OFFLINE_START_SHIP` | Ship you spawn in (`DRAK_Cutlass_Black` by default) |
-| `SC_OFFLINE_START` | Set to `Daymar` to start over Daymar in that ship |
+| `SC_OFFLINE_BOOT_MAP` | Boot map, from `boot_map`. Default `PU_All`, which boots every star system so the Travel tab can reach Pyro and Nyx. The prebuilt DLL doesn't recognise `PU_All` and would skip its boot patch — use `PU` with it |
+| `SC_OFFLINE_START_SHIP` | Ship you spawn in, from `start_ship` (`DRAK_Cutlass_Black` by default) |
+| `SC_OFFLINE_START` | From `start`. Set to `Daymar` to start over Daymar in that ship |
 | `SC_OFFLINE_SHIPS_FILE` | Where the ship list is read from |
 | `SC_OFFLINE_SPAWN_FILE` | Where the F7 teleport spot is stored |
 | `SC_OFFLINE_MOD_LOG` | Where `mod.log` is written |
@@ -228,8 +255,9 @@ The full C++ source is in `src/`. To compile the mod yourself:
    uses the `v145` toolset; on VS 2022, retarget it to `v143` (Project → Retarget) first.
 2. Open `ChrisWareOffline.slnx` in Visual Studio.
 3. Select **Release | x64** and build (Ctrl+Shift+B).
-4. The output is `x64/Release/dinput8.dll`, next to `ChrisWareOffline.slnx`. Copy it
-   over the DLL in this folder to play with it.
+4. The output is `x64/Release/dinput8.dll` and `x64/Release/sc-offline.exe` (the launcher,
+   from `launcher/`), next to `ChrisWareOffline.slnx`. Put both in a folder with `data/` and
+   `launcher/sc-offline.ini` to play with them.
 
 Or from the command line:
 
@@ -237,7 +265,7 @@ Or from the command line:
 msbuild ChrisWareOffline.slnx /p:Configuration=Release /p:Platform=x64 /m
 ```
 
-No Visual Studio? Every push to `main` compiles one anyway — grab the
+No Visual Studio? Every push to `main` compiles both anyway — grab the
 `dinput8-release` artifact from
 [Actions](https://github.com/scubamount/sc-offline/actions).
 
@@ -255,8 +283,9 @@ non-Windows machine otherwise can't see before CI does.
 `main`, on every pull request, and on every tag starting with `v`. Publishing only
 happens on tags:
 
-- Push a `v*` tag → CI builds it, then publishes a Release with `dinput8.dll`
-  attached and a changelog generated from the commits since the previous tag.
+- Push a `v*` tag → CI builds it, then publishes a Release with
+  `sc-offline-<tag>.zip` (launcher, DLL, `sc-offline.ini`, `sc-offline.sh`, `data/`, docs) and
+  `dinput8.dll` on its own, plus a changelog generated from the commits since the previous tag.
 - `v1.x.y` and later publish as a **full** release; anything else publishes as a
   **pre-release**, so an unfinished build can never look like the recommended
   download. Once someone has actually played a build, promote it with
@@ -277,12 +306,11 @@ until someone has run 0.2.0-rc1.
 ## Update
 
 1. Close the game.
-2. **Optional:** to keep your money and saved spots, copy `wallet.txt`, `spawn.txt`, `bookmarks.txt` and `locations_found.txt` out of the old `data` folder first.
-3. Delete the old version of the mod.
-4. Download the new version (green **Code** button, then **Download ZIP**) and extract it.
-5. Paste those files into the new `data` folder.
+2. **Optional:** to keep your money and saved spots, copy `wallet.txt`, `spawn.txt`, `bookmarks.txt` and `locations_found.txt` out of the old `data` folder first, and `sc-offline.ini` if you changed it.
+3. Delete the old folder.
+4. Download the new zip from [Releases](https://github.com/scubamount/sc-offline/releases) and extract it.
+5. Paste those files back into the new folder.
 6. Play as usual.
-
 ---
 
 ## Go back online
@@ -308,7 +336,7 @@ Everything is back to normal.
 ## Notes
 
 > [!CAUTION]
-> If the script window is closed early, delete `dinput8.dll` from your `LIVE\Bin64` folder yourself **before** playing online.
+> If the launcher window is closed early, delete `dinput8.dll` from your `LIVE\Bin64` folder yourself **before** playing online.
 
 - A game update can break the mod until the mod is updated.
 - Builds from this repository are compiled and checked, but have **not** been run
