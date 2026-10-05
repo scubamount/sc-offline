@@ -39,21 +39,24 @@ develops.
 
 ## Features
 
-Everything runs through one in-game menu. Press **M** to open it.
+Everything runs through one in-game menu. Press **M** to open it. Its tabs: **Player**, **Travel**,
+**Vehicles**, **Crew**, **NPCs**, **Build**, **Squadron 42**, **Menu**. Everything except the Squadron 42
+tab comes from upstream ChrisWareOffline 0.9.0-rc1; see [Credits](#credits).
 
 | Feature | What it does |
 | --- | --- |
-| **Ships** | Spawn any vehicle in the game — 1102 entries, from the Bengal to the Idris-P. The menu sorts biggest first and skips anything your game version can't find. |
-| **Spawn NPC** | Spawn any NPC archetype (2239 entries), in front of you or overhead with you in the pilot seat. |
-| **Clear NPCs** | Remove every NPC the mod spawned. |
+| **Vehicles** | Spawn any vehicle in the game — 1102 entries, from the Bengal to the Idris-P. Pick the seat you start in (pilot, a seat by name, or choose later), optionally remove the NPC sitting there, and power the ship on. Infinite ship ammo lives here too. |
+| **Crew** | Every seat on your ship and who is in it. Sit anywhere, make NPCs stand up, remove them, or add your own. |
+| **Travel** | Teleport to planets, moons, stations, Lagrange points and jump points, grouped by system; save your own named spots. Teleports stay inside the star system you're in. |
+| **NPCs** | Spawn any NPC archetype (2239 entries) in front of you, and remove them again. |
 | **Wallet** | Your aUEC balance is read from `data/wallet.txt` when you spawn and written back as you spend it. Edit the file to set the starting amount. |
-| **God mode** | Toggle invulnerability. |
-| **Build mode (F6)** | Free build mode, 3728 buildable entries in 18 groups. |
-| **Gear** | Equip any item (1489 entries, ten slots) from the gear menu on the Main tab. |
+| **Build (F6)** | Free build mode, 3728 buildable entries in 18 groups. Prefabs preview as a flag while you move and as the real building when you hold still. **Undo** and **Clear base** remove what you placed. |
+| **Player** | Noclip, god mode, infinite ammo, and the gear menu: equip any item (1489 entries, ten slots). |
 | **Outfits** | Wear one of the 35 Squadron 42 outfits (143 named pieces) and cast members' heads. |
 | **Squadron 42 tab** | Spoiler-gated tab — see [below](#squadron-42-tab). |
 | **Contracts** | 2153 generated contracts with their mission scripts wired up locally. |
 | **Teleport** | Save a position (F7) and teleport back to it (F8). |
+| **Menu** | Optional background image (`data/menu_background.png`) and its settings. |
 
 ---
 
@@ -157,10 +160,11 @@ sections:
 - **Spawn** — drop a buildable in front of you without entering build mode. The
   list opens filtered to the `[sq42]` group in `data/buildables.txt`; clear the
   filter to reach all 3728. What you spawn joins your base, so **Undo** and
-  **Clear base** in Build mode are meant to remove it — see [Notes](#notes).
+  **Clear base** in the Build tab remove it.
 - **Ships** — the SQ42 list (Idris-P, Gladius, Retaliator, Starfarer, Avenger
   Stalker, Hornet), the Vanduul AI wing, and Bengal A / Bengal B. Player ships put
-  you in the pilot seat; the Vanduul ones spawn 300 m up and come for you; Bengals
+  you in the pilot seat through the Vehicles tab's seat rules, and the ship becomes
+  the Crew tab's target; the Vanduul ones spawn 300 m up and come for you; Bengals
   spawn 1500 m up. Bengal B brings its enemy wing when this game build has those
   classes, and its label says which case you got.
 - **Console** — press Enter to run a command in the game's own console. Its output
@@ -197,6 +201,9 @@ format in a header comment. Trim a list and the menu gets shorter.
 | `contract_scripts.txt` | 2153 contract mission scripts |
 | `wallet.txt` | Your aUEC balance, created on first run |
 | `spawn.txt` | Your saved teleport spot (F7 / F8) |
+| `locations.txt` | Places for the Travel tab: system, name, entity, radius |
+| `bookmarks.txt` | Your named Travel spots, created when you save one |
+| `locations_found.txt` | Everything the Travel tab's scan found, created by the scan |
 | `mod.log` | What the mod did this session |
 
 `launch_offline.bat` sets these before starting the game:
@@ -259,19 +266,21 @@ happens on tags:
 Every action in the workflow is pinned to a commit SHA, and the workflow runs with
 `contents: read` — only the release job is granted `contents: write`.
 
-Current state: [`v0.1.1`](https://github.com/scubamount/sc-offline/releases/tag/v0.1.1)
-is the current release, built by CI from `b315105`. It has been compiled and
-string-checked, **not played** — see [Notes](#notes).
+Current state: [`v0.2.0-rc1`](https://github.com/scubamount/sc-offline/releases/tag/v0.2.0-rc1)
+is a **pre-release**: upstream ChrisWareOffline 0.9.0-rc1 with the Squadron 42 tab on top. It has
+been compiled and string-checked, **not played** — see [Notes](#notes).
+[`v0.1.1`](https://github.com/scubamount/sc-offline/releases/tag/v0.1.1) stays the full release
+until someone has run 0.2.0-rc1.
 
 ---
 
 ## Update
 
 1. Close the game.
-2. **Optional:** to keep your money and saved spot, copy `wallet.txt` and `spawn.txt` out of the old `data` folder first.
+2. **Optional:** to keep your money and saved spots, copy `wallet.txt`, `spawn.txt`, `bookmarks.txt` and `locations_found.txt` out of the old `data` folder first.
 3. Delete the old version of the mod.
 4. Download the new version (green **Code** button, then **Download ZIP**) and extract it.
-5. Paste `wallet.txt` and `spawn.txt` into the new `data` folder.
+5. Paste those files into the new `data` folder.
 6. Play as usual.
 
 ---
@@ -307,10 +316,11 @@ Everything is back to normal.
   `data/mod.log` and the game's `Game.log` — that is how these get fixed.
 - The lists the menu reads all live in `data/` as plain text; see
   [Data files](#data-files-and-environment-variables).
-- **Known issue — removing things:** **Clear NPCs**, and **Undo** / **Clear base** in build
-  mode, pass the game an entity *id* where it wants an entity *handle*. Upstream found this in
-  play and fixed it in ChrisWareOffline 0.9.0-rc1 (see its `CHANGELOG.md`); the fix is not in
-  this repository yet, so expect those buttons to leave things in place.
+- From `v0.2.0-rc1` the source build includes upstream's 0.9.0-rc1, which upstream itself lists
+  as needing testing in places (energy-weapon top-up, NPC deletion through the entity handle,
+  Stand up, the building preview, Pyro and Nyx names) — see `CHANGELOG.md`.
+- Source builds link the C runtime statically, so they no longer need the Visual C++
+  redistributable installed. The prebuilt DLL at the repo root still does.
 
 ---
 
@@ -323,8 +333,9 @@ to **Chris Ware**:
 - Upstream Discord: <https://discord.gg/979RRuMjDP>
 
 This repository began as the author's prebuilt `dinput8.dll` with expanded data
-files. It now also carries the full C++ source merged from upstream, the CI and
-release pipeline, and its own development on top — described under
+files. It now carries upstream's source (merged through 0.9.0-rc1 from the
+`contributions` branch), the CI and release pipeline, and its own development on
+top — chiefly the Squadron 42 tab — described under
 [Features](#features) and [Squadron 42](#squadron-42-tab). Licensed under GPL-3.0 —
 see [LICENSE](LICENSE). See [Build](#build) for compilation instructions.
 

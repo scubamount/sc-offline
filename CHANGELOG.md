@@ -1,5 +1,20 @@
 # Changelog
 
+## sc-offline 0.2.0-rc1
+
+This repository's build of upstream 0.9.0-rc1 (below) with the Squadron 42 tab on top.
+Release candidate: compiled and string-checked, not yet played.
+
+### Squadron 42 tab
+- An eighth tab, between Build and Menu: outfits, the SQ42 pilot preset, four SQ42 settings,
+  a one-shot buildable spawner, SQ42 ships, Bengal A / B with the Vanduul wing, and a console.
+- Ships from this tab use the Vehicles tab's seat rules and become the Crew tab's target ship.
+
+### From sc-offline 0.1.x, carried forward
+- The fleet manager offers all 1102 ships in `ships.txt` (it stopped at 1024).
+- The gear menu and the outfits share one loadout loader and one temp-file counter.
+- `tools/check.sh` checks the source on macOS / Linux before CI does.
+
 ## 0.9.0-rc1
 
 First release candidate of the seats, crew, travel and menu update. Debugging and analysis code
