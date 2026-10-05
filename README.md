@@ -7,7 +7,33 @@ Offline single-player mod menu for **Star Citizen**.
 > [!WARNING]
 > This mod may result in a ban. Use it at your own risk. It is for **offline single player only**.
 
-**Jump to:** [Features](#features) · [Requirements](#requirements) · [Setup](#setup) · [Play](#play) · [Controls](#controls) · [Update](#update) · [Go back online](#go-back-online) · [Notes](#notes) · [Credits](#credits)
+**Jump to:** [Which DLL do I run?](#which-dll-do-i-run) · [Features](#features) · [Requirements](#requirements) · [Setup](#setup) · [Play](#play) · [Squadron 42](#squadron-42-tab) · [Controls](#controls) · [Data files](#data-files-and-environment-variables) · [Build](#build) · [Releases](#releases) · [Update](#update) · [Go back online](#go-back-online) · [Notes](#notes) · [Credits](#credits)
+
+---
+
+## Which DLL do I run?
+
+`launch_offline.bat` copies **the `dinput8.dll` sitting in this folder** into your
+game — nothing else. So the DLL you put here is the mod you play.
+
+Two builds of that file exist, and they are not interchangeable:
+
+| | Prebuilt — `dinput8.dll` at the repo root | Built from source — a [Release](https://github.com/scubamount/sc-offline/releases) or your own build |
+| --- | --- | --- |
+| Where it comes from | The mod's original author's tree, committed here as-is | Compiled from the C++ in `src/`, by CI or by you |
+| When it changes | Only when someone replaces it | On every push to `main` (CI artifact) and every `v*` tag (Release) |
+| Best for | Playing, with zero setup | Testing a change, or building your own |
+
+- **Just playing?** Use the prebuilt DLL as it is. Nothing to decide.
+- **Testing this repository's work?** Download `dinput8.dll` from a
+  [Release](https://github.com/scubamount/sc-offline/releases) and drop it over the
+  file in this folder. Keep a copy of the original — you will want it back.
+- **Building it yourself?** See [Build](#build). The output lands in the same place,
+  so the script picks it up unchanged.
+
+They really are different binaries, not copies: the prebuilt one came from a private
+tree that was never published, while the source build is what this repository
+develops.
 
 ---
 
@@ -20,12 +46,12 @@ Everything runs through one in-game menu. Press **M** to open it.
 | **Ships** | Spawn any vehicle in the game — 1102 entries, from the Bengal to the Idris-P. The menu sorts biggest first and skips anything your game version can't find. |
 | **Spawn NPC** | Spawn any NPC archetype (2239 entries), in front of you or overhead with you in the pilot seat. |
 | **Clear NPCs** | Remove every NPC the mod spawned. |
-| **Wallet** | Set your aUEC balance. Persists in `data/wallet.txt`. |
+| **Wallet** | Your aUEC balance is read from `data/wallet.txt` when you spawn and written back as you spend it. Edit the file to set the starting amount. |
 | **God mode** | Toggle invulnerability. |
 | **Build mode (F6)** | Free build mode, 3746 buildable entries. |
 | **Item Picker** | Equip any item (1499 entries) from the gear menu. |
-| **Outfits** | Wear Squadron 42 outfits (178) and cast members' heads. Experimental — the SQ42 menus are flagged spoiler-bearing in-game. |
-| **Squadron 42 tab** | Spoiler-gated tab: the outfit picker, four SQ42 toggles (auto targeting, visor mini-map, visor greebles, SQ42 frontend), a one-shot buildable spawner (defaults to the `[sq42]` group, drops it in front of you and registers it in your base), the SQ42 ship list (Idris-P, Gladius, Retaliator, Starfarer, Avenger Stalker, Hornet, the Vanduul AI wing, Bengal A / Bengal B with its enemy side) and a console runner. |
+| **Outfits** | Wear one of the 35 Squadron 42 outfits (178 named pieces) and cast members' heads. |
+| **Squadron 42 tab** | Spoiler-gated tab — see [below](#squadron-42-tab). |
 | **Missions** | Start 34 environmental missions that normally need the online backend — combat assist, pirate blockades, and more. |
 | **Contracts** | 2153 generated contracts with their mission scripts wired up locally. |
 | **Teleport** | Save a position (F7) and teleport back to it (F8). |
@@ -45,9 +71,6 @@ Everything runs through one in-game menu. Press **M** to open it.
 - About 1 GB of disk for the download.
 - Administrator rights, to copy the mod into your game folder.
 - **Easy Anti-Cheat must be off.** See [Setup](#setup).
-
-> [!NOTE]
-> This repo ships the prebuilt `dinput8.dll` you run. To build from source instead, see [Build](#build) below.
 
 ---
 
@@ -95,6 +118,11 @@ This stops the launcher from downloading fresh EAC files.
 
 The mod does **not** go in your game folder. `launch_offline.bat` copies it in when you play and removes it when you close the game.
 
+To play a source build instead of the prebuilt one, overwrite this folder's
+`dinput8.dll` with the one from a
+[Release](https://github.com/scubamount/sc-offline/releases) — see
+[Which DLL do I run?](#which-dll-do-i-run).
+
 **Custom install path:** if your game is not installed at the path below, right-click `launch_offline.bat`, choose **Edit**, and change the `SC_BIN` line at the top to your own `LIVE\Bin64` folder.
 
 ```text
@@ -116,22 +144,30 @@ C:\Program Files\Roberts Space Industries\StarCitizen\LIVE
 
 ---
 
-## Build
+## Squadron 42 tab
 
-The full C++ source is in `src/`. To compile the mod yourself:
+Press **M**, open **Squadron 42**, and accept the spoiler warning once. Five
+sections:
 
-1. Install **Visual Studio 2022** (17.10+) or **VS 2026** with the **Desktop development with C++** workload.
-2. Open `ChrisWareOffline.slnx` in Visual Studio.
-3. Select **Release | x64** and build (Ctrl+Shift+B).
-4. The output is `src/x64/Release/dinput8.dll`.
+- **Outfits** — searchable list from `data/outfits.txt`; picking one wears it.
+  **Wear SQ42 outfit** applies a built-in pilot preset, so it still works if that
+  file is missing. **SQ42 visor HUD** swaps the lens display on the next equip.
+- **Settings** — four game toggles, each with a tooltip: SQ42 auto targeting,
+  visor mini-map, visor greebles, and the SQ42 frontend menu. They last for the
+  session only; nothing is written to `USER.cfg`.
+- **Spawn** — drop a buildable in front of you without entering build mode. The
+  list opens filtered to the `[sq42]` group in `data/buildables.txt`; clear the
+  filter to reach all 3746. What you spawn joins your base, so **Undo** and
+  **Clear base** in Build mode remove it.
+- **Ships** — the SQ42 list (Idris-P, Gladius, Retaliator, Starfarer, Avenger
+  Stalker, Hornet), the Vanduul AI wing, and Bengal A / Bengal B. Player ships put
+  you in the pilot seat; the Vanduul ones spawn 300 m up and come for you; Bengals
+  spawn 1500 m up. Bengal B brings its enemy wing when this game build has those
+  classes, and its label says which case you got.
+- **Console** — press Enter to run a command in the game's own console. Its output
+  goes to the game's log, not to the menu.
 
-Or from the command line:
-
-```powershell
-msbuild ChrisWareOffline.slnx /p:Configuration=Release /p:Platform=x64 /m
-```
-
-The DLL is also built automatically on every push via [GitHub Actions](.github/workflows/build.yml) — artifacts are attached to each run.
+Everything the menu does is written to `data/mod.log`.
 
 ---
 
@@ -143,6 +179,81 @@ The DLL is also built automatically on every push via [GitHub Actions](.github/w
 | `F7` | Save your current position |
 | `F8` | Teleport to your saved position |
 | `F6` | Turn build mode on / off |
+
+---
+
+## Data files and environment variables
+
+Everything the menu reads is plain text in `data/`. Each file documents its own
+format in a header comment. Trim a list and the menu gets shorter.
+
+| File | Used for |
+| --- | --- |
+| `ships.txt` | 1102 spawnable vehicles |
+| `npcs.txt` | 2239 NPC archetypes |
+| `items.txt` | 1499 gear items, in ten slot sections |
+| `buildables.txt` | 3746 objects for Build mode and the Spawn section |
+| `outfits.txt` | 35 outfits — one `[name]` block, then one line per piece |
+| `missions.txt` | 34 startable missions |
+| `contract_scripts.txt` | 2153 contract mission scripts |
+| `wallet.txt` | Your aUEC balance, created on first run |
+| `spawn.txt` | Your saved teleport spot (F7 / F8) |
+| `mod.log` | What the mod did this session |
+
+`launch_offline.bat` sets these before starting the game:
+
+| Variable | Effect |
+| --- | --- |
+| `SC_OFFLINE_BOOT_MAP` | Boot map; the script sets `PU` |
+| `SC_OFFLINE_START_SHIP` | Ship you spawn in (`DRAK_Cutlass_Black` by default) |
+| `SC_OFFLINE_START` | Set to `Daymar` to start over Daymar in that ship |
+| `SC_OFFLINE_SHIPS_FILE` | Where the ship list is read from |
+| `SC_OFFLINE_SPAWN_FILE` | Where the F7 teleport spot is stored |
+| `SC_OFFLINE_MOD_LOG` | Where `mod.log` is written |
+| `SC_USER` | Your game `user\client\0` folder — how loadouts reach the game |
+
+---
+
+## Build
+
+The full C++ source is in `src/`. To compile the mod yourself:
+
+1. Install **Visual Studio 2022** (17.10+) or **VS 2026** with the **Desktop development with C++** workload.
+2. Open `ChrisWareOffline.slnx` in Visual Studio.
+3. Select **Release | x64** and build (Ctrl+Shift+B).
+4. The output is `x64/Release/dinput8.dll`, next to `ChrisWareOffline.slnx`. Copy it
+   over the DLL in this folder to play with it.
+
+Or from the command line:
+
+```powershell
+msbuild ChrisWareOffline.slnx /p:Configuration=Release /p:Platform=x64 /m
+```
+
+No Visual Studio? Every push to `main` compiles one anyway — grab the
+`dinput8-release` artifact from
+[Actions](https://github.com/scubamount/sc-offline/actions).
+
+---
+
+## Releases
+
+[GitHub Actions](.github/workflows/build.yml) builds Release x64 on every push to
+`main`, on every pull request, and on every tag starting with `v`. Publishing only
+happens on tags:
+
+- Push a `v*` tag → CI builds it, then publishes a Release with `dinput8.dll`
+  attached and a changelog generated from the commits since the previous tag.
+- `v1.x.y` and later publish as a **full** release; anything else publishes as a
+  **pre-release**, so an unfinished build can never look like the recommended
+  download.
+
+Every action in the workflow is pinned to a commit SHA, and the workflow runs with
+`contents: read` — only the release job is granted `contents: write`.
+
+Current state: [`v0.1.0`](https://github.com/scubamount/sc-offline/releases/tag/v0.1.0)
+is a pre-release. It has been compiled and string-checked, **not played** — see
+[Notes](#notes).
 
 ---
 
@@ -183,19 +294,27 @@ Everything is back to normal.
 > If the script window is closed early, delete `dinput8.dll` from your `LIVE\Bin64` folder yourself **before** playing online.
 
 - A game update can break the mod until the mod is updated.
-- A log of what the mod does is saved to `mod.log` in the `data` folder.
-- The lists the menu reads all live in `data/` as plain text — `ships.txt`, `npcs.txt`, `items.txt`, `buildables.txt`, `missions.txt`, `contract_scripts.txt`, `outfits.txt`. Each file documents its own format in a header comment. Trim a list down and the menu gets shorter.
+- Builds from this repository are compiled and checked, but have **not** been run
+  in-game yet. If something breaks, send back the matching lines from
+  `data/mod.log` and the game's `Game.log` — that is how these get fixed.
+- The lists the menu reads all live in `data/` as plain text; see
+  [Data files](#data-files-and-environment-variables).
 
 ---
 
 ## Credits
 
-**ChrisWareOffline** is not my project. The mod and its source belong to **Chris Ware**:
+**ChrisWareOffline** is not this repository's project. The mod and its source belong
+to **Chris Ware**:
 
 - Source and issue tracker: <https://github.com/trionic1/chrisware-project> (GPL-3.0)
 - Upstream Discord: <https://discord.gg/979RRuMjDP>
 
-This repository includes the full C++ source (merged from upstream) alongside the prebuilt `dinput8.dll`. Licensed under GPL-3.0 — see [LICENSE](LICENSE). See [Build](#build) above for compilation instructions.
+This repository began as the author's prebuilt `dinput8.dll` with expanded data
+files. It now also carries the full C++ source merged from upstream, the CI and
+release pipeline, and its own development on top — described under
+[Features](#features) and [Squadron 42](#squadron-42-tab). Licensed under GPL-3.0 —
+see [LICENSE](LICENSE). See [Build](#build) for compilation instructions.
 
 ---
 
