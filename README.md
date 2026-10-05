@@ -28,8 +28,8 @@ Two builds of that file exist, and they are not interchangeable:
 - **Testing this repository's work?** Download `dinput8.dll` from a
   [Release](https://github.com/scubamount/sc-offline/releases) and drop it over the
   file in this folder. Keep a copy of the original — you will want it back.
-- **Building it yourself?** See [Build](#build). The output lands in the same place,
-  so the script picks it up unchanged.
+- **Building it yourself?** See [Build](#build). The output lands in `x64/Release/`;
+  copy `dinput8.dll` from there into this folder.
 
 They really are different binaries, not copies: the prebuilt one came from a private
 tree that was never published, while the source build is what this repository
@@ -163,8 +163,8 @@ sections:
   **Clear base** in the Build tab remove it.
 - **Ships** — the SQ42 list (Idris-P, Gladius, Retaliator, Starfarer, Avenger
   Stalker, Hornet), the Vanduul AI wing, and Bengal A / Bengal B. Player ships put
-  you in the pilot seat through the Vehicles tab's seat rules, and the ship becomes
-  the Crew tab's target; the Vanduul ones spawn 300 m up and come for you; Bengals
+  you in the pilot seat through the Vehicles tab's seat rules. Everything spawned
+  here except Bengal B's enemy wing becomes the Crew tab's target ship; the Vanduul ones spawn 300 m up and come for you; Bengals
   spawn 1500 m up. Bengal B brings its enemy wing when this game build has those
   classes, and its label says which case you got.
 - **Console** — press Enter to run a command in the game's own console. Its output
@@ -210,7 +210,7 @@ format in a header comment. Trim a list and the menu gets shorter.
 
 | Variable | Effect |
 | --- | --- |
-| `SC_OFFLINE_BOOT_MAP` | Boot map; the script sets `PU` |
+| `SC_OFFLINE_BOOT_MAP` | Boot map. The script sets `PU`. Source builds also accept `PU_All`, which boots every star system so the Travel tab can reach Pyro and Nyx; the prebuilt DLL doesn't recognise `PU_All` and would skip its boot patch |
 | `SC_OFFLINE_START_SHIP` | Ship you spawn in (`DRAK_Cutlass_Black` by default) |
 | `SC_OFFLINE_START` | Set to `Daymar` to start over Daymar in that ship |
 | `SC_OFFLINE_SHIPS_FILE` | Where the ship list is read from |

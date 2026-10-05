@@ -1596,13 +1596,14 @@ void ProcessShipMenu(DWORD now) {
         if (const char* err = SpawnShipAbovePlayer(classReq.cls, classReq.height, id))
             SetMenuStatus("Spawning %s failed: %s", classReq.cls, err);
         else if (classReq.enemyWing) {
+            SetTarget(id, classReq.cls);   // the Bengal itself, like Bengal A; the wing ships are not targeted
             // The wing goes 300 m up — the height the menu's own hint promises for
             // the Vanduul hulls — rather than on top of the 980 m Bengal.
             int wing = 0;
             for (const char* c : kEnemySideClasses) {
                 if (!ClassInRegistry(c)) continue;
                 uint64_t wingId = 0;
-                if (SpawnShipAbovePlayer(c, 300.0, wingId)) continue;
+                if (const char* err = SpawnShipAbovePlayer(c, 300.0, wingId)) { Log("[ship] enemy wing: %s failed: %s", c, err); continue; }
                 ++wing;
             }
             SetMenuStatus("%s spawned %.0f m above you; %d of 3 enemy wing ships came in at 300 m.",

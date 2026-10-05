@@ -14,7 +14,7 @@ static struct {
 
 bool ResolveLoadoutApi(const Section& text, const Section& rdata) {
     const uint8_t* folder = FindCString(rdata, "Scripts/Loadouts/Player");
-    // The scan below reads as far as h + 0x9A, i.e. p + 0x56 past the LEA it
+    // The scan reads as far as Rel32(h + 0x9B), i.e. p + 0x5A past the LEA it
     // started from, so the loop bound has to leave that much room inside .text.
     uint8_t* const end = text.base + text.size - 0x5F;
     for (uint8_t* p = text.base + 0x44; folder && p < end; ++p) {
