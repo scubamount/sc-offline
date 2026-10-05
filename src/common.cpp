@@ -153,8 +153,9 @@ bool ShipsFilePath(char* path, DWORD n) {
 bool SiblingPath(const char* envVar, const char* file, char* path, DWORD n) {
     const DWORD len = GetEnvironmentVariableA(envVar, path, n);
     if (len == 0 || len >= n) return false;
-    char* slash = strrchr(path, '\\');
-    if (!slash) slash = strrchr(path, '/');
+    char* back = strrchr(path, '\\');
+    char* fwd  = strrchr(path, '/');
+    char* slash = back > fwd ? back : fwd;   // the last separator of either kind: Windows accepts a mix
     if (!slash || static_cast<DWORD>(slash + 1 - path) + strlen(file) + 1 > n) return false;
     strcpy_s(slash + 1, n - static_cast<DWORD>(slash + 1 - path), file);
     return true;
