@@ -3,6 +3,7 @@ name: build
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -60,3 +61,26 @@ jobs:
         with:
           files: release/dinput8.dll
           generate_release_notes: true
+          prerelease: true
+          body: |
+            **Test build — compiled from this repository's source, not the prebuilt
+            `dinput8.dll` that ships at the repo root. The two are different builds.**
+
+            Built from `${{ github.sha }}` on `${{ github.ref_name }}`.
+
+            What it adds over the prebuilt binary's public source: the **Squadron 42 tab**
+            (spoiler-gated) with the outfit picker, the four SQ42 toggles, a one-shot
+            buildable spawner that drops things in front of you, the SQ42 ship list
+            including Bengal A / Bengal B, a console runner, and the status line under
+            the menu header.
+
+            **How to test:** copy `dinput8.dll` over the one in your Star Citizen folder
+            exactly as the README says, start with `launch_offline.bat`, press **M**,
+            open the **Squadron 42** tab. Anything that fails, send back the matching
+            lines from `mod.log` and `Game.log`.
+
+            **Known untested:** every runtime path — this build has only been compiled
+            and string-checked, never run. The four toggles assume
+            `i_target_selector.targeting2_enabled`, `pl_lensdisplay.minimap_enabled`,
+            `pl_lensdisplay.greebles_enabled` and `g_squadron_frontend` exist in the
+            current game build.
