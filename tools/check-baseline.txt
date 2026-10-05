@@ -1,0 +1,9 @@
+build.cpp: error: use of undeclared identifier 'max'; did you mean 'fmax'?
+build.cpp: error: use of undeclared identifier 'min'; did you mean 'fmin'?
+hooks.cpp: error: reinterpret_cast from 'const uint8_t *' (aka 'const unsigned char *') to 'RequestTakingOffFn' (aka 'void (*)(unsigned long long, unsigned long long, void *, unsigned long long, bool, void *, void *)') casts away qualifiers
+hooks.cpp: error: reinterpret_cast from 'const uint8_t *' (aka 'const unsigned char *') to 'StrCtorFn' (aka 'void *(*)(void *, const char *)') casts away qualifiers
+hooks.cpp: error: reinterpret_cast from 'const uint8_t *' (aka 'const unsigned char *') to 'StrDtorFn' (aka 'void (*)(void *)') casts away qualifiers
+spawner.cpp: error: reinterpret_cast from 'const uint8_t *' (aka 'const unsigned char *') to 'SpawnSetClassFn' (aka 'void (*)(void *, unsigned long long)') casts away qualifiers
+spawner.cpp: error: reinterpret_cast from 'const uint8_t *' (aka 'const unsigned char *') to 'SpawnSetFlagsFn' (aka 'void (*)(void *, unsigned int)') casts away qualifiers
+spawner.cpp: error: reinterpret_cast from 'const uint8_t *' (aka 'const unsigned char *') to 'SpawnSetLocFn' (aka 'void (*)(void *, const void *, unsigned long long)') casts away qualifiers
+spawner.cpp: error: reinterpret_cast from 'const uint8_t *' (aka 'const unsigned char *') to 'TeamCategoryFn' (aka 'unsigned char (*)(unsigned char)') casts away qualifiers
