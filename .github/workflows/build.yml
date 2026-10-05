@@ -8,20 +8,24 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Default to read; only the release job asks for write.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
+        uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
         with:
           msbuild-architecture: x64
 
       - name: Setup NuGet
-        uses: NuGet/setup-nuget@v2
+        uses: NuGet/setup-nuget@d105a947828025cd7a980103c35ba2bfae586d0f # v2
 
       - name: Restore NuGet packages
         run: nuget restore ChrisWareOffline.slnx
@@ -30,14 +34,14 @@ jobs:
         run: msbuild ChrisWareOffline.slnx /p:Configuration=Release /p:Platform=x64 /m
 
       - name: Upload DLL artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dinput8-release
           path: x64/Release/dinput8.dll
           retention-days: 30
 
       - name: Upload PDB artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dinput8-pdb
           path: x64/Release/dinput8.pdb
@@ -51,36 +55,29 @@ jobs:
       contents: write
     steps:
       - name: Download DLL artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: dinput8-release
           path: release
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: release/dinput8.dll
           generate_release_notes: true
-          prerelease: true
+          # v1.x and later are real releases; every other tag ships as a
+          # pre-release, so an unfinished build can never look like the
+          # recommended download. Flip by tagging v1.0.0.
+          prerelease: ${{ !startsWith(github.ref_name, 'v1.') }}
           body: |
-            **Test build — compiled from this repository's source, not the prebuilt
-            `dinput8.dll` that ships at the repo root. The two are different builds.**
+            **Built from this repository's source** — commit `${{ github.sha }}` on
+            `${{ github.ref_name }}`. This is *not* the prebuilt `dinput8.dll` at the
+            repo root, which came from the mod's original author; the two binaries
+            differ. See the README's **Which DLL do I run?** section.
 
-            Built from `${{ github.sha }}` on `${{ github.ref_name }}`.
+            Install it exactly as the README's Setup section says, then play with
+            **M** → **Squadron 42**.
 
-            What it adds over the prebuilt binary's public source: the **Squadron 42 tab**
-            (spoiler-gated) with the outfit picker, the four SQ42 toggles, a one-shot
-            buildable spawner that drops things in front of you, the SQ42 ship list
-            including Bengal A / Bengal B, a console runner, and the status line under
-            the menu header.
-
-            **How to test:** copy `dinput8.dll` over the one in your Star Citizen folder
-            exactly as the README says, start with `launch_offline.bat`, press **M**,
-            open the **Squadron 42** tab. Anything that fails, send back the matching
-            lines from `mod.log` and `Game.log`.
-
-            **Known untested:** every runtime path — this build has only been compiled
-            and string-checked, never run. The four toggles assume
-            `i_target_selector.targeting2_enabled`, `pl_lensdisplay.minimap_enabled`,
-            `pl_lensdisplay.greebles_enabled` and `g_squadron_frontend` exist in the
-            current game build.
+            Every runtime path in a release is unproven until someone has run it.
+            If something breaks, send back the matching lines from `mod.log` and
+            `Game.log`.
