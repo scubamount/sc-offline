@@ -149,3 +149,16 @@ bool ShipsFilePath(char* path, DWORD n) {
     const DWORD len = GetEnvironmentVariableA("SC_OFFLINE_SHIPS_FILE", path, n);
     return len > 0 && len < n;
 }
+
+bool SiblingPath(const char* envVar, const char* file, char* path, DWORD n) {
+    const DWORD len = GetEnvironmentVariableA(envVar, path, n);
+    if (len == 0 || len >= n) return false;
+    char* slash = strrchr(path, '\\');
+    if (!slash) slash = strrchr(path, '/');
+    if (!slash || static_cast<DWORD>(slash + 1 - path) + strlen(file) + 1 > n) return false;
+    strcpy_s(slash + 1, n - static_cast<DWORD>(slash + 1 - path), file);
+    return true;
+}
+
+bool DataFilePath(char* path, DWORD n, const char* file) { return SiblingPath("SC_OFFLINE_SHIPS_FILE", file, path, n); }
+bool ModLogSibling(char* path, DWORD n, const char* file) { return SiblingPath("SC_OFFLINE_MOD_LOG", file, path, n); }

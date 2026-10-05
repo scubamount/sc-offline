@@ -922,11 +922,8 @@ void ProcessShipMenu(DWORD now) {
     if (now - lastTestFile >= 2000) {
         lastTestFile = now;
         char path[MAX_PATH];
-        const DWORD pn = GetEnvironmentVariableA("SC_OFFLINE_MOD_LOG", path, MAX_PATH);
-        char* slash = pn && pn < MAX_PATH ? strrchr(path, '\\') : nullptr;
         char line[128] = "";
-        if (slash) {
-            strcpy_s(slash + 1, MAX_PATH - static_cast<size_t>(slash + 1 - path), "spawn_test.txt");
+        if (ModLogSibling(path, MAX_PATH, "spawn_test.txt")) {
             FILE* f = nullptr;
             if (fopen_s(&f, path, "r") == 0 && f) {
                 if (!fgets(line, sizeof(line), f)) line[0] = 0;

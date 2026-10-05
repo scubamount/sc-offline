@@ -74,18 +74,9 @@ static const Outfit kSq42Outfit = {
 
 void Menu_SetS42VisorHud(bool on) { InterlockedExchange(&g_s42VisorHud, on ? 1 : 0); }
 
-static bool OutfitsFilePath(char* path, DWORD n) {
-    if (!ShipsFilePath(path, n)) return false;
-    char* slash = strrchr(path, '\\');
-    if (!slash) slash = strrchr(path, '/');
-    if (!slash || static_cast<DWORD>(slash + 1 - path) + 12 + 1 > n) return false;
-    strcpy_s(slash + 1, n - static_cast<DWORD>(slash + 1 - path), "outfits.txt");
-    return true;
-}
-
 static int BuildOutfitList() {
     char path[MAX_PATH];
-    if (!OutfitsFilePath(path, sizeof(path))) return 0;
+    if (!DataFilePath(path, sizeof(path), "outfits.txt")) return 0;
     FILE* f = _fsopen(path, "r", _SH_DENYNO);
     if (!f) { Log("[outfit] can't open %s", path); return 0; }
     int count = 0;

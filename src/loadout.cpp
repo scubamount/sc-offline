@@ -63,19 +63,9 @@ void Menu_RequestEquip(const int picks[Gear_SlotCount]) {
     ReleaseSRWLockExclusive(&g_gearLock);
 }
 
-static bool DataFilePath(char* path, DWORD n, const char* file) {
-    if (!ShipsFilePath(path, n)) return false;
-    char* slash = strrchr(path, '\\');
-    if (!slash) slash = strrchr(path, '/');
-    if (!slash || static_cast<DWORD>(slash + 1 - path) + strlen(file) + 1 > n) return false;
-    strcpy_s(slash + 1, n - static_cast<DWORD>(slash + 1 - path), file);
-    return true;
-}
-static bool ItemsFilePath(char* path, DWORD n) { return DataFilePath(path, n, "items.txt"); }
-
 static int BuildGearLists() {
     char path[MAX_PATH];
-    if (!ItemsFilePath(path, sizeof(path))) return 0;
+    if (!DataFilePath(path, sizeof(path), "items.txt")) return 0;
     FILE* f = _fsopen(path, "r", _SH_DENYNO);
     if (!f) { Log("[gear] can't open %s", path); return 0; }
     const uintptr_t registry = VCall<uintptr_t>(*g_tp.entitySystem, 0xC0);
