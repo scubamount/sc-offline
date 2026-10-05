@@ -306,12 +306,11 @@ Every action in the workflow is pinned to a commit SHA, and the workflow runs wi
 `contents: read` — only the release job is granted `contents: write`.
 
 Current state: [`v0.2.0-rc2`](https://github.com/scubamount/sc-offline/releases/tag/v0.2.0-rc2)
-is a **pre-release**: the 0.2.0-rc1 mod (upstream ChrisWareOffline 0.9.0-rc1 plus the Squadron 42
-tab) with the `sc-offline.exe` launcher and the release zip. It has been compiled and checked,
-**not played**, and the launcher has not been run on Windows or Linux — see [Notes](#notes).
-[`v0.1.1`](https://github.com/scubamount/sc-offline/releases/tag/v0.1.1) stays the full release
-until someone has run 0.2.0-rc2. It predates the launcher: it ships the bare DLL, for the
-`launch_offline.bat` in its own source tree.
+is the **Latest** release: the 0.2.0-rc1 mod (upstream ChrisWareOffline 0.9.0-rc1 plus the Squadron 42
+tab) with the `sc-offline.exe` launcher and the release zip. It was promoted before anyone ran it:
+compiled and checked, **not yet played**, and the launcher not yet run on Windows or Linux — see
+[Notes](#notes). If it misbehaves, [`v0.1.1`](https://github.com/scubamount/sc-offline/releases/tag/v0.1.1)
+is the previous build (bare DLL, started with the `launch_offline.bat` in its own source tree).
 
 ---
 
