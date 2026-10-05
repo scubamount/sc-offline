@@ -7,7 +7,9 @@
   remove the mod when every `StarCitizen.exe` has exited), plus:
   - finds the game itself: `Roberts Space Industries\StarCitizen\<channel>\Bin64` on every
     fixed drive, or `game =` in `sc-offline.ini`, or `--game <folder>`;
-  - asks for administrator rights only when the game folder refuses the copy;
+  - copies and removes the mod through a separate helper process, so closing the launcher
+    window early still takes the mod out once the game exits; the helper alone is elevated
+    (one UAC prompt) when the game folder needs it, and the game never runs as administrator;
   - reads the start ship, start location, boot map and channel from `sc-offline.ini`.
 - The default boot map is now `PU_All` (every star system, so Travel reaches Pyro and Nyx).
   Set `boot_map = PU` when playing the repo-root prebuilt DLL.

@@ -26,14 +26,16 @@ Two builds of that file exist, and they are not interchangeable:
 
 - **Just playing?** Download the zip from [Releases](https://github.com/scubamount/sc-offline/releases).
   It has the launcher, the DLL and `data/` together. Nothing to decide.
-- **Want the original author's build?** Copy the repo-root `dinput8.dll` over the one in
-  your extracted zip, and set `boot_map = PU` in `sc-offline.ini` — that DLL doesn't know
+- **Want the original author's build?** Download
+  [the repo-root `dinput8.dll`](https://github.com/scubamount/sc-offline/raw/main/dinput8.dll),
+  copy it over the one in your extracted zip, and set `boot_map = PU` in `sc-offline.ini` — that DLL doesn't know
   `PU_All`.
 - **Building it yourself?** See [Build](#build). The output lands in `x64/Release/`.
 
 They really are different binaries, not copies: the prebuilt one came from a private
 tree that was never published, while the source build is what this repository
 develops.
+
 ---
 
 ## Features
@@ -71,9 +73,10 @@ tab comes from upstream ChrisWareOffline 0.9.0-rc1; see [Credits](#credits).
 - Windows. The mod is a `dinput8.dll` that the game loads.
   **Linux** (through Wine) is **experimental and untested** — see [Linux](#linux-experimental).
 - About 1 GB of disk for the download.
-- Administrator rights, to copy the mod into your game folder. The launcher asks for them
-  only when your game folder needs them.
+- Administrator rights, if your game folder needs them for the copy. The launcher then asks
+  once, for a small helper that copies and removes the mod; the game itself runs normally.
 - **Easy Anti-Cheat must be off.** See [Setup](#setup).
+
 ---
 
 ## Setup
@@ -131,6 +134,7 @@ game = D:\Games\Roberts Space Industries\StarCitizen
 ```
 
 `sc-offline.ini` also sets the start ship, the boot map, and the channel (`LIVE`, `PTU`, ...).
+
 ---
 
 ## Play
@@ -138,13 +142,13 @@ game = D:\Games\Roberts Space Industries\StarCitizen
 1. Close the RSI Launcher and the game.
 2. Double-click `sc-offline.exe`.
    - It prints which game folder it found. If Windows asks for administrator rights, say yes:
-     your game folder needs them for the copy.
+     that's the helper that copies the mod in and takes it back out.
 3. Wait for the game to load you in.
 4. Press **M** to open the menu.
 
 > [!IMPORTANT]
-> Leave the launcher window open while you play. When you close the game, it removes the mod
-> from your game folder.
+> When you close the game, the mod is removed from your game folder — even if the launcher
+> window was closed first. Check that `LIVE\Bin64\dinput8.dll` is gone before going online.
 
 ### Linux (experimental)
 
@@ -170,7 +174,13 @@ The game has to be installed the usual Linux way, in a Wine prefix — the
 the mod instead of its own `dinput8`, and starts `sc-offline.exe` inside the prefix. From there
 everything is the same as on Windows. Override either guess with `WINEPREFIX=...` or `WINE=...`.
 
+It starts Wine directly, **not** through the LUG Helper's `sc-launch.sh`, so any environment
+that script sets for you (DXVK, esync/fsync and similar) is not applied. If the game misbehaves
+here but runs fine from the LUG Helper, export those same variables before `./sc-offline.sh`
+and say so in your report.
+
 When you report back, include the launcher's output, `data/mod.log`, and the game's `Game.log`.
+
 ---
 
 ## Squadron 42 tab
@@ -311,6 +321,7 @@ until someone has run 0.2.0-rc1.
 4. Download the new zip from [Releases](https://github.com/scubamount/sc-offline/releases) and extract it.
 5. Paste those files back into the new folder.
 6. Play as usual.
+
 ---
 
 ## Go back online
@@ -336,7 +347,7 @@ Everything is back to normal.
 ## Notes
 
 > [!CAUTION]
-> If the launcher window is closed early, delete `dinput8.dll` from your `LIVE\Bin64` folder yourself **before** playing online.
+> If the PC crashes or is shut down mid-game, delete `dinput8.dll` from your `LIVE\Bin64` folder yourself **before** playing online.
 
 - A game update can break the mod until the mod is updated.
 - Builds from this repository are compiled and checked, but have **not** been run

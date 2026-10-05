@@ -4,10 +4,12 @@
 //   1. find the game's Bin64 folder: --game <path>, else `game =` in sc-offline.ini, else the
 //      usual Roberts Space Industries folders on every fixed drive (Wine's C: and Z: included);
 //   2. set the SC_OFFLINE_* variables the mod reads, pointing at data\ next to this exe;
-//   3. copy dinput8.dll into Bin64 (asks for administrator rights only if the copy is refused)
-//      and data\OfflineDB\default_1.xml into LIVE\user\client\0;
-//   4. start StarCitizen.exe, wait until every StarCitizen.exe has exited, then delete
-//      Bin64\dinput8.dll so the RSI Launcher never sees it.
+//   3. start a watcher (this exe again, `--watch`, no window) that copies dinput8.dll into Bin64
+//      and data\OfflineDB\default_1.xml into LIVE\user\client\0. The watcher runs as
+//      administrator only when the game folder refuses a plain copy; the game never does;
+//   4. start StarCitizen.exe. The watcher waits until this launcher has exited AND no
+//      StarCitizen.exe is left, then deletes Bin64\dinput8.dll so the RSI Launcher never sees
+//      it. Because the watcher is a separate process, closing this window early still cleans up.
 //
 // On Linux, sc-offline.sh runs this inside the game's Wine prefix (see that file).
 #include <windows.h>
@@ -70,7 +72,7 @@ static int Fail(const char* fmt, ...) {
     return 1;
 }
 
-// sc-offline.ini: `key = value` lines, '#' starts a comment. Unknown keys are reported, not ignored.
+// sc-offline.ini: `key = value` lines; a line starting with '#' is a comment. Unknown keys are reported, not ignored.
 struct Config {
     wstring game, channel = L"LIVE", bootMap = L"PU_All", startShip = L"DRAK_Cutlass_Black", start;
 };
@@ -89,9 +91,8 @@ static bool ReadConfig(const wstring& path, Config& c) {
     while (pos <= text.size()) {
         size_t nl = text.find(L'\n', pos); if (nl == wstring::npos) nl = text.size();
         wstring line = text.substr(pos, nl - pos); pos = nl + 1; ++lineNo;
-        if (const size_t h = line.find(L'#'); h != wstring::npos) line.erase(h);
+        if (Trim(line).empty() || Trim(line)[0] == L'#') continue;   // whole-line comments only: paths may hold '#'
         const size_t eq = line.find(L'=');
-        if (Trim(line).empty()) continue;
         if (eq == wstring::npos) { std::printf("[!] sc-offline.ini line %d: expected key = value\n", lineNo); continue; }
         const wstring k = Trim(line.substr(0, eq)), v = Trim(line.substr(eq + 1));
         if      (!_wcsicmp(k.c_str(), L"game"))       c.game = v;
@@ -141,9 +142,10 @@ static std::vector<wstring> DetectBin64(const wstring& channel) {
     return found;
 }
 
+// A failed snapshot counts as "running": the caller must never delete the mod early.
 static bool GameRunning() {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snap == INVALID_HANDLE_VALUE) return false;
+    if (snap == INVALID_HANDLE_VALUE) return true;
     PROCESSENTRY32W pe{}; pe.dwSize = sizeof(pe);
     bool hit = false;
     for (BOOL ok = Process32FirstW(snap, &pe); ok && !hit; ok = Process32NextW(snap, &pe))
@@ -152,33 +154,85 @@ static bool GameRunning() {
     return hit;
 }
 
-static bool IsElevated() {
-    HANDLE tok = nullptr;
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok)) return false;
-    TOKEN_ELEVATION e{}; DWORD n = 0;
-    const bool ok = GetTokenInformation(tok, TokenElevation, &e, sizeof(e), &n) && e.TokenIsElevated;
-    CloseHandle(tok);
-    return ok;
+static bool CanWriteTo(const wstring& dir) {
+    const wstring probe = dir + L"\\sc-offline.write-test";
+    HANDLE f = CreateFileW(probe.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                           FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    CloseHandle(f);
+    return true;
 }
 
-// Runs this exe again as administrator with the same arguments and returns its exit code.
-static int RelaunchElevated() {
+// Drops the last path component: ...\LIVE\Bin64 -> ...\LIVE.
+static wstring ParentDir(const wstring& p) {
+    const size_t s = p.find_last_of(L"\\/");
+    return s == wstring::npos ? p : p.substr(0, s);
+}
+
+// --watch <Bin64> <launcher pid> <event name>
+// Copies the mod in, signals the event, then removes the mod once the launcher is gone and no
+// StarCitizen.exe is left. Exit codes: 0 removed, 2 copy failed, 3 removal failed, 4 bad args.
+static int Watch(const wstring& bin, DWORD parentPid, const wstring& eventName) {
+    const wstring here = ExeDir();
+    const wstring target = bin + L"\\dinput8.dll";
+    HANDLE parent = OpenProcess(SYNCHRONIZE, FALSE, parentPid);
+    HANDLE ready = OpenEventW(EVENT_MODIFY_STATE, FALSE, eventName.c_str());
+    if (!parent || !ready) return 4;
+
+    if (!CopyFileW((here + L"\\dinput8.dll").c_str(), target.c_str(), FALSE)) return 2;
+    const wstring user = ParentDir(bin) + L"\\user\\client\\0";
+    SHCreateDirectoryExW(nullptr, user.c_str(), nullptr);   // ERROR_ALREADY_EXISTS is fine
+    CopyFileW((here + L"\\data\\OfflineDB\\default_1.xml").c_str(), (user + L"\\default_1.xml").c_str(), FALSE);
+    SetEvent(ready);
+    CloseHandle(ready);
+
+    WaitForSingleObject(parent, INFINITE);
+    CloseHandle(parent);
+    while (GameRunning()) Sleep(2000);
+    for (int tries = 0; tries < 30; ++tries) {
+        if (DeleteFileW(target.c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND) return 0;
+        Sleep(1000);
+    }
+    return 3;
+}
+
+// Starts the watcher: hidden and unelevated when Bin64 is writable, otherwise elevated (one UAC
+// prompt). Returns its process handle, or null.
+static HANDLE StartWatcher(const wstring& bin, const wstring& eventName) {
     wchar_t self[MAX_PATH * 2];
     GetModuleFileNameW(nullptr, self, ARRAYSIZE(self));
+    const wstring args = L"--watch \"" + bin + L"\" " + std::to_wstring(GetCurrentProcessId()) + L" " + eventName;
+    if (CanWriteTo(bin)) {
+        wstring cmd = L"\"" + wstring(self) + L"\" " + args;
+        STARTUPINFOW si{};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi{};
+        if (!CreateProcessW(self, cmd.data(), nullptr, nullptr, FALSE,
+                            DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, nullptr, nullptr, &si, &pi))
+            return nullptr;
+        CloseHandle(pi.hThread);
+        return pi.hProcess;
+    }
+    std::printf("[i] the game folder needs administrator rights for the mod; Windows will ask once.\n"
+                "    Only the copy/remove helper runs as administrator, not the game.\n");
     SHELLEXECUTEINFOW sei{};
     sei.cbSize = sizeof(sei);
     sei.fMask = SEE_MASK_NOCLOSEPROCESS;
     sei.lpVerb = L"runas";
     sei.lpFile = self;
-    sei.lpParameters = PathGetArgsW(GetCommandLineW());
-    sei.nShow = SW_SHOWNORMAL;
-    if (!ShellExecuteExW(&sei) || !sei.hProcess)
-        return Fail("Administrator rights were refused, so the mod can't be copied into the game folder.");
-    std::printf("Continuing in the administrator window.\n");
-    WaitForSingleObject(sei.hProcess, INFINITE);
-    DWORD code = 1; GetExitCodeProcess(sei.hProcess, &code);
-    CloseHandle(sei.hProcess);
-    return (int)code;
+    sei.lpParameters = args.c_str();
+    sei.nShow = SW_HIDE;
+    if (!ShellExecuteExW(&sei)) return nullptr;
+    return sei.hProcess;
+}
+
+// Ctrl+C would kill only this window; the watcher still cleans up, but say so instead of dying.
+static BOOL WINAPI OnCtrl(DWORD type) {
+    if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT) {
+        std::printf("\n[i] Ctrl+C ignored: close the game instead. The mod is removed when it exits.\n");
+        return TRUE;
+    }
+    return FALSE;   // window closed / logoff: let it go; the watcher removes the mod
 }
 
 static void SetVar(const wchar_t* name, const wstring& v) {
@@ -191,6 +245,8 @@ static bool OnWine() {
 }
 
 int wmain(int argc, wchar_t** argv) {
+    if (argc == 5 && !_wcsicmp(argv[1], L"--watch"))
+        return Watch(argv[2], wcstoul(argv[3], nullptr, 10), argv[4]);
     std::printf("sc-offline launcher (ChrisWareOffline %s)\n\n", CWO_VERSION);
     const wstring here = ExeDir();
     const wstring modDll = here + L"\\dinput8.dll";
@@ -202,8 +258,10 @@ int wmain(int argc, wchar_t** argv) {
 
     wstring gameArg;
     for (int i = 1; i < argc; ++i) {
-        if (!_wcsicmp(argv[i], L"--game") && i + 1 < argc) gameArg = argv[++i];
-        else return Fail("unknown argument '%ls'. Usage: sc-offline.exe [--game <Star Citizen folder>]", argv[i]);
+        if (!_wcsicmp(argv[i], L"--game")) {
+            if (i + 1 >= argc) return Fail("--game needs a folder: sc-offline.exe --game \"D:\\Games\\StarCitizen\"");
+            gameArg = argv[++i];
+        } else return Fail("unknown argument '%ls'. Usage: sc-offline.exe [--game <Star Citizen folder>]", argv[i]);
     }
 
     // 1. Find the game.
@@ -224,13 +282,17 @@ int wmain(int argc, wchar_t** argv) {
             std::printf("[i] also found %ls (set game = in sc-offline.ini to use it)\n", found[i].c_str());
     }
     std::printf("Game:  %ls\n", bin.c_str());
-    if (OnWine()) std::printf("Wine:  yes (dinput8 must load native: sc-offline.sh sets WINEDLLOVERRIDES)\n");
+    if (OnWine()) {
+        wchar_t ov[512];
+        const DWORD n = GetEnvironmentVariableW(L"WINEDLLOVERRIDES", ov, ARRAYSIZE(ov));
+        std::printf("Wine:  yes, WINEDLLOVERRIDES=%ls\n", n && n < ARRAYSIZE(ov) ? ov : L"(not set - dinput8 needs n,b; use sc-offline.sh)");
+    }
 
     if (!IsFile(modDll)) return Fail("dinput8.dll is missing: %ls\n    Extract the whole zip into one folder and run this from there.", modDll.c_str());
     if (GameRunning()) return Fail("%ls is already running. Close it first.", kGameExe);
 
     // 2. What the mod reads (same names and values launch_offline.bat used).
-    const wstring user = bin + L"\\..\\user\\client\\0";
+    const wstring user = ParentDir(bin) + L"\\user\\client\\0";
     SetVar(L"SC_OFFLINE_BOOT_MAP", cfg.bootMap);
     SetVar(L"SC_OFFLINE_MOD_LOG", data + L"\\mod.log");
     SetVar(L"SC_OFFLINE_SPAWN_FILE", data + L"\\spawn.txt");
@@ -239,44 +301,40 @@ int wmain(int argc, wchar_t** argv) {
     SetVar(L"SC_OFFLINE_START_SHIP", cfg.startShip);
     SetVar(L"SC_USER", user);
 
-    // 3. Put the mod in.
-    const wstring target = bin + L"\\dinput8.dll";
-    if (!CopyFileW(modDll.c_str(), target.c_str(), FALSE)) {
-        const DWORD e = GetLastError();
-        if (e == ERROR_ACCESS_DENIED && !IsElevated()) {
-            std::printf("[i] the game folder needs administrator rights; asking Windows for them\n");
-            return RelaunchElevated();
-        }
-        return Fail("couldn't copy dinput8.dll into %ls (error %lu)", bin.c_str(), e);
+    // 3. Put the mod in, through the watcher (see the top of this file).
+    const wstring eventName = L"Local\\sc-offline-ready-" + std::to_wstring(GetCurrentProcessId());
+    HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, eventName.c_str());
+    HANDLE watcher = ready ? StartWatcher(bin, eventName) : nullptr;
+    if (!watcher) return Fail("couldn't start the mod helper (error %lu); administrator rights refused?", GetLastError());
+    HANDLE waitOn[2] = { ready, watcher };
+    // No timeout: a UAC prompt can sit there as long as the player likes. The helper either
+    // signals (copied) or exits (copy failed, nothing to clean up).
+    if (WaitForMultipleObjects(2, waitOn, FALSE, INFINITE) != WAIT_OBJECT_0) {
+        DWORD code = 0; GetExitCodeProcess(watcher, &code);
+        return Fail("couldn't copy dinput8.dll into %ls (helper exit %lu)", bin.c_str(), code);
     }
+    CloseHandle(ready);
     std::printf("Mod:   copied into Bin64\n");
+    SetConsoleCtrlHandler(OnCtrl, TRUE);
 
-    SHCreateDirectoryExW(nullptr, user.c_str(), nullptr);   // fine if it already exists
-    const wstring loadout = data + L"\\OfflineDB\\default_1.xml";
-    if (!CopyFileW(loadout.c_str(), (user + L"\\default_1.xml").c_str(), FALSE))
-        std::printf("[!] couldn't copy data\\OfflineDB\\default_1.xml (error %lu) - you will start with no ships\n", GetLastError());
-
-    // 4. Play, then take the mod back out.
+    // 4. Play. The game runs with this window's rights, never the helper's.
     const wstring exe = bin + L"\\" + kGameExe;
     wstring cmd = L"\"" + exe + L"\"";
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
+    int rc = 0;
     if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, bin.c_str(), &si, &pi)) {
         std::printf("[!] couldn't start %ls (error %lu)\n", exe.c_str(), GetLastError());
+        rc = 1;
     } else {
-        std::printf("\nPlaying. Leave this window open: when the game closes, the mod is removed.\n");
+        std::printf("\nPlaying. When the game closes, the mod is removed from Bin64.\n");
         WaitForSingleObject(pi.hProcess, INFINITE);
         CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
         while (GameRunning()) Sleep(2000);   // the game can hand over to a second StarCitizen.exe
     }
-
-    for (int tries = 0; tries < 30; ++tries) {
-        if (DeleteFileW(target.c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND) {
-            std::printf("Mod:   removed from Bin64. The RSI Launcher is safe to use.\n");
-            return 0;
-        }
-        Sleep(1000);
-    }
-    return Fail("couldn't remove %ls (error %lu)\n    DELETE IT YOURSELF before launching through the RSI Launcher.", target.c_str(), GetLastError());
+    CloseHandle(watcher);
+    std::printf("Mod:   the helper removes it from Bin64 as this window closes.\n");
+    if (rc) PauseIfOwnConsole();
+    return rc;
 }

@@ -47,7 +47,7 @@ for f in "$ROOT"/src/*.cpp "$ROOT"/launcher/*.cpp; do
   fi
   [ -n "$errs" ] && printf '%s\n' "$errs" | sed -E "s#^.*/(src|launcher)/##; s#:[0-9]+:[0-9]+:#:#" >> "$TMP"
 done
-[ $n -gt 0 ] || { echo "check: no src/*.cpp under $ROOT"; rm -f "$TMP"; exit 2; }
+[ $n -gt 0 ] || { echo "check: no src/*.cpp or launcher/*.cpp under $ROOT"; rm -f "$TMP"; exit 2; }
 [ $broken -eq 0 ] || { rm -f "$TMP"; exit 2; }
 
 # MSVC C2712 screen (clang does not enforce it): a function containing __try may not own
