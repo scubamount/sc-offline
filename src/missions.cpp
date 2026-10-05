@@ -65,15 +65,7 @@ static void FindScriptLoading(const Section& text, const Section& rdata) {
     }
 }
 
-static bool ScriptsFolder(char* dir, size_t n) {
-    char path[MAX_PATH];
-    if (!ShipsFilePath(path, sizeof(path))) return false;
-    char* slash = strrchr(path, '\\');
-    if (!slash) slash = strrchr(path, '/');
-    if (!slash) return false;
-    *slash = 0;
-    return sprintf_s(dir, n, "%s\\scripts", path) > 0;
-}
+static bool ScriptsFolder(char* dir, size_t n) { return DataFilePath(dir, static_cast<DWORD>(n), "scripts"); }
 
 static void CollectScripts(const char* dir, const char* game) {
     char pattern[MAX_PATH];

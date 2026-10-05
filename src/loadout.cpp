@@ -14,7 +14,9 @@ static struct {
 
 bool ResolveLoadoutApi(const Section& text, const Section& rdata) {
     const uint8_t* folder = FindCString(rdata, "Scripts/Loadouts/Player");
-    uint8_t* const end = text.base + text.size - 7;
+    // The scan below reads as far as h + 0x9A, i.e. p + 0x56 past the LEA it
+    // started from, so the loop bound has to leave that much room inside .text.
+    uint8_t* const end = text.base + text.size - 0x5F;
     for (uint8_t* p = text.base + 0x44; folder && p < end; ++p) {
         p = static_cast<uint8_t*>(memchr(p, 0x48, static_cast<size_t>(end - p)));
         if (!p) break;
@@ -31,7 +33,7 @@ bool ResolveLoadoutApi(const Section& text, const Section& rdata) {
         g_lo.ok = true;
         break;
     }
-    if (!g_lo.ok) Log("[gear] loadout loader not found; gear menu disabled");
+    if (!g_lo.ok) Log("[gear] loadout loader not found; gear menu and outfits disabled");
     return g_lo.ok;
 }
 
@@ -63,19 +65,9 @@ void Menu_RequestEquip(const int picks[Gear_SlotCount]) {
     ReleaseSRWLockExclusive(&g_gearLock);
 }
 
-static bool DataFilePath(char* path, DWORD n, const char* file) {
-    if (!ShipsFilePath(path, n)) return false;
-    char* slash = strrchr(path, '\\');
-    if (!slash) slash = strrchr(path, '/');
-    if (!slash || static_cast<DWORD>(slash + 1 - path) + strlen(file) + 1 > n) return false;
-    strcpy_s(slash + 1, n - static_cast<DWORD>(slash + 1 - path), file);
-    return true;
-}
-static bool ItemsFilePath(char* path, DWORD n) { return DataFilePath(path, n, "items.txt"); }
-
 static int BuildGearLists() {
     char path[MAX_PATH];
-    if (!ItemsFilePath(path, sizeof(path))) return 0;
+    if (!DataFilePath(path, sizeof(path), "items.txt")) return 0;
     FILE* f = _fsopen(path, "r", _SH_DENYNO);
     if (!f) { Log("[gear] can't open %s", path); return 0; }
     const uintptr_t registry = VCall<uintptr_t>(*g_tp.entitySystem, 0xC0);
@@ -122,14 +114,16 @@ static const char* MatchingMag(const char* gun) {
     }
 }
 
-static std::string Item(const char* port, const char* name, const std::string& children = std::string()) {
+bool LoadoutApiReady() { return g_lo.ok; }
+
+std::string LoadoutItem(const char* port, const char* name, const std::string& children) {
     std::string s = std::string("<Item portName=\"") + port + "\" itemName=\"" + name + "\"";
     return children.empty() ? s + "/>" : s + "><Items>" + children + "</Items></Item>";
 }
 
 static std::string Gun(const char* port, const char* gun) {
     const char* mag = MatchingMag(gun);
-    return Item(port, gun, mag ? Item("magazine_attach", mag) : std::string());
+    return LoadoutItem(port, gun, mag ? LoadoutItem("magazine_attach", mag) : std::string());
 }
 
 static std::string HeadAndMobiGlas();
@@ -143,33 +137,33 @@ static std::string LoadoutXml(const int picks[Gear_SlotCount]) {
     if (!ammo) ammo = MatchingMag(primary);
 
     std::string onTorso, onLegs;
-    if (const char* b = Pick(picks, Gear_Backpack)) onTorso += Item("backpack", b);
+    if (const char* b = Pick(picks, Gear_Backpack)) onTorso += LoadoutItem("backpack", b);
     if (primary) onTorso += Gun("wep_stocked_3", primary);
-    for (int i = 1; ammo && i <= (torso ? 4 : 2); ++i) onTorso += Item(("magazine_attach_" + std::to_string(i)).c_str(), ammo);
+    for (int i = 1; ammo && i <= (torso ? 4 : 2); ++i) onTorso += LoadoutItem(("magazine_attach_" + std::to_string(i)).c_str(), ammo);
     if (const char* g = Pick(picks, Gear_Grenade); g && torso)
-        for (int i = 1; i <= 2; ++i) onTorso += Item(("grenade_attach_" + std::to_string(i)).c_str(), g);
+        for (int i = 1; i <= 2; ++i) onTorso += LoadoutItem(("grenade_attach_" + std::to_string(i)).c_str(), g);
     if (sidearm) onLegs += Gun("wep_sidearm", sidearm);
-    onLegs += Item("medPen_attach_1", "crlf_consumable_healing_01");
+    onLegs += LoadoutItem("medPen_attach_1", "crlf_consumable_healing_01");
 
     std::string onSuit;
-    if (const char* h = Pick(picks, Gear_Helmet)) onSuit += Item("Armor_Helmet", h);
-    if (torso) onSuit += Item("Armor_Torso", torso, onTorso); else onSuit += onTorso;
-    if (const char* a = Pick(picks, Gear_Arms)) onSuit += Item("Armor_Arms", a);
-    if (legs) onSuit += Item("Armor_Legs", legs, onLegs); else onSuit += onLegs;
+    if (const char* h = Pick(picks, Gear_Helmet)) onSuit += LoadoutItem("Armor_Helmet", h);
+    if (torso) onSuit += LoadoutItem("Armor_Torso", torso, onTorso); else onSuit += onTorso;
+    if (const char* a = Pick(picks, Gear_Arms)) onSuit += LoadoutItem("Armor_Arms", a);
+    if (legs) onSuit += LoadoutItem("Armor_Legs", legs, onLegs); else onSuit += onLegs;
 
     const char* suit = Pick(picks, Gear_Undersuit);
-    return "<Loadout><Items>" + Item("Body_ItemPort", "body_01",
-        Item("Armor_Undersuit", suit ? suit : "rsi_odyssey_undersuit_01_01_01", onSuit) + HeadAndMobiGlas())
+    return "<Loadout><Items>" + LoadoutItem("Body_ItemPort", "body_01",
+        LoadoutItem("Armor_Undersuit", suit ? suit : "rsi_odyssey_undersuit_01_01_01", onSuit) + HeadAndMobiGlas())
         + "</Items></Loadout>\n";
 }
 
 static std::string HeadAndMobiGlas() {
-    return Item("Head_ItemPort", "PU_Protos_Head",
-                Item("Eyes_ItemPort", "Head_Eyes_Blue_01", Item("Lens_ItemPort", "Default_LensDisplay_PU"))
+    return LoadoutItem("Head_ItemPort", "PU_Protos_Head",
+                LoadoutItem("Eyes_ItemPort", "Head_Eyes_Blue_01", LoadoutItem("Lens_ItemPort", "Default_LensDisplay_PU"))
                 + "<Item portName=\"Teeth_ItemPort\" itemName=\"Head_Teeth\" tag=\"Char_Accessory_Head\"/>"
                 + "<Item portName=\"Hair_ItemPort\" itemName=\"hair_37\" tag=\"Char_Head_Hair Male\"><Items>"
-                + Item("Material_Variant", "Hair_Var_Brown") + "</Items></Item>")
-        + Item("mobiglas_attach", "MobiGlas",
+                + LoadoutItem("Material_Variant", "Hair_Var_Brown") + "</Items></Item>")
+        + LoadoutItem("mobiglas_attach", "MobiGlas",
                "<Item portName=\"mobiglas_screen_attach\" itemName=\"PersonalMobiGlas_PU\" tag=\"MobiGlas\"/>"
                "<Item portName=\"legacy_mobiglas_screen_attach\" itemName=\"LegacyMobiGlas\" tag=\"MobiGlas\"/>");
 }
@@ -186,27 +180,30 @@ static const char* LoadLoadout(const char* gamePath) {
     }
 }
 
-static void Equip(const std::string& xml) {
+// Game thread only (ProcessLoadout / ProcessOutfits): writes the XML into SC_USER and has the
+// player's actor load it. One counter and one "last file" for both callers, so the gear menu
+// and the outfit menu can't hand out the same file name or delete each other's current file.
+void EquipLoadoutXml(const std::string& xml, const char* tag) {
     static int  counter = 0;
     static char lastFile[MAX_PATH] = "";
     char dir[MAX_PATH];
     const DWORD n = GetEnvironmentVariableA("SC_USER", dir, sizeof(dir));
-    if (n == 0 || n >= sizeof(dir)) { Log("[gear] SC_USER isn't set (start the game with launch_offline.bat)"); return; }
+    if (n == 0 || n >= sizeof(dir)) { Log("[%s] SC_USER isn't set (start the game with launch_offline.bat)", tag); return; }
     char name[64], file[MAX_PATH], gamePath[96];
     snprintf(name, sizeof(name), "offline_loadout_%lu_%d.xml", GetCurrentProcessId(), ++counter);
     snprintf(file, sizeof(file), "%s\\%s", dir, name);
     snprintf(gamePath, sizeof(gamePath), "%%USER%%/%s", name);
     FILE* f = _fsopen(file, "w", _SH_DENYNO);
-    if (!f) { Log("[gear] can't write %s", file); return; }
+    if (!f) { Log("[%s] can't write %s", tag, file); return; }
     fwrite(xml.data(), 1, xml.size(), f);
     fclose(f);
-    if (const char* err = LoadLoadout(gamePath)) { Log("[gear] equip failed: %s", err); return; }
-    Log("[gear] equipped (%s)", name);
+    if (const char* err = LoadLoadout(gamePath)) { Log("[%s] equip failed: %s", tag, err); return; }
+    Log("[%s] equipped (%s)", tag, name);
     if (lastFile[0]) DeleteFileA(lastFile);
     strcpy_s(lastFile, file);
 }
 
-static void EquipPicks(const int picks[Gear_SlotCount]) { Equip(LoadoutXml(picks)); }
+static void EquipPicks(const int picks[Gear_SlotCount]) { EquipLoadoutXml(LoadoutXml(picks), "gear"); }
 
 void ProcessLoadout() {
     if (!g_lo.ok || !g_tp.ok) return;

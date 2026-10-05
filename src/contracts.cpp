@@ -561,15 +561,6 @@ static const Flow kFlows[] = {
         { Act::Search, "SearchArea", "@SP_InvisibleTimer_Obj", "@SP_InvisibleTimer_Long" } } },
 };
 
-static const Flow kAwayFlows[] = {
-    { "mine and deliver", "Mine|Mining|Rockcracker|ScanRocks|ResourceGathering|Salvage",
-      { { Act::Away, "MineResources", "@mg_battaglia_mining_objective_short_001", "@mg_battaglia_mining_objective_short_001" },
-        { Act::Deliver, "DeliverShipment", "@delivery_obj_short_03", "@HaulCargo_obj_short_02" } } },
-    { "out and back", "",
-      { { Act::Away, "CollectShipment", "@HaulCargo_obj_short_01", "@delivery_obj_long_02" },
-        { Act::Deliver, "DeliverShipment", "@delivery_obj_short_03", "@HaulCargo_obj_short_02" } } },
-};
-
 static int LogFault(const EXCEPTION_POINTERS* ep, const char* what);
 
 static bool MatchesAny(const char* contract, const char* kinds) {
@@ -1083,62 +1074,6 @@ static int64_t __fastcall HelperSpawnedHook(const uint8_t* capture, uintptr_t a2
     return r;
 }
 
-static int HelpersOf(const uint8_t mission[16], uint64_t* out, int max) {
-    int n = 0;
-    AcquireSRWLockShared(&g_helperLock);
-    for (const Helper& h : g_helpers)
-        if (h.entity && n < max && !memcmp(h.mission, mission, 16)) out[n++] = h.entity;
-    ReleaseSRWLockShared(&g_helperLock);
-    return n;
-}
-
-static void StartDetached(Plan& plan) {
-    plan.done = true;
-    if (g_runningCount >= kMaxOurs) { Log("[contracts] too many running contracts; this one gets no objectives"); return; }
-    uintptr_t actor = 0, player = 0;
-    if (!GetLocalPlayer(actor, player)) return;
-    uint64_t own = 0;
-    const double here[3] = {};
-    g_objectiveStep = "spawning our mission entity";
-    const char* err = SpawnEntityNearPlayer("MissionEntityStreamable", here, own);
-    if (err || !own) { Log("[contracts] '%s': couldn't spawn a mission entity for its objectives (%s)", plan.contract, err ? err : "no entity"); return; }
-    Running& r = g_running[g_runningCount++];
-    r = Running{};
-    memcpy(r.mission, plan.mission, 16);
-    r.contract = plan.contract ? plan.contract : "?";
-    r.hostiles = &kStandIns[sizeof(kStandIns) / sizeof(kStandIns[0]) - 1];
-    for (const StandIn& s : kStandIns)
-        if (*s.kind && ContainsNoCase(r.contract, s.kind)) { r.hostiles = &s; break; }
-    r.meId = own;
-    r.ground = -1;
-    r.step = kPending;
-    r.since = GetTickCount();
-    const uintptr_t zone = VCall<uintptr_t>(player, 0x6B8);
-    r.homeZone = zone ? ZoneId(zone) : 0;
-    Vec3Out(player, 0x2B8, r.home);
-    uint64_t helpers[8];
-    const int n = HelpersOf(r.mission, helpers, 8);
-    if (n) {
-        r.flow = &FlowFor(r.contract);
-        r.target = helpers[0];
-        double a[3] = {};
-        if (const uintptr_t t = EntityById(r.target)) Vec3Out(t, 0x318, a);
-        double farthest = kMinDropoffM;
-        for (int i = 1; i < n && r.flow->steps[1].act == Act::Deliver; ++i)
-            if (const uintptr_t e = EntityById(helpers[i])) {
-                double p[3];
-                Vec3Out(e, 0x318, p);
-                if (Distance(p, a) > farthest) { farthest = Distance(p, a); r.dropoff = helpers[i]; }
-            }
-    } else {
-        r.flow = &kAwayFlows[sizeof(kAwayFlows) / sizeof(kAwayFlows[0]) - 1];
-        for (const Flow& f : kAwayFlows)
-            if (*f.kinds && MatchesAny(r.contract, f.kinds)) { r.flow = &f; break; }
-    }
-    Log("[contracts] '%s': no mission module; %s contract with %d site(s) (%s), objectives on our own mission entity %llu", r.contract,
-        r.flow->name, n, n ? (r.dropoff ? "pickup + drop-off" : "one site") : "out and back", static_cast<unsigned long long>(own));
-}
-
 static void StartPending(Running& r, DWORD now) {
     uintptr_t entity = 0;
     const uintptr_t me = MissionEntityById(r.meId, entity);
@@ -1163,10 +1098,7 @@ static void StartDetachedContracts(DWORD now) {
 
 static int TestCommand() {
     char path[MAX_PATH];
-    const DWORD n = GetEnvironmentVariableA("SC_OFFLINE_MOD_LOG", path, MAX_PATH);
-    char* slash = n && n < MAX_PATH ? strrchr(path, '\\') : nullptr;
-    if (!slash || static_cast<size_t>(slash + 1 - path) + 18 > MAX_PATH) return 0;
-    strcpy_s(slash + 1, MAX_PATH - static_cast<size_t>(slash + 1 - path), "contract_test.txt");
+    if (!ModLogSibling(path, MAX_PATH, "contract_test.txt")) return 0;
     FILE* f = _fsopen(path, "r", _SH_DENYNO);
     if (!f) return 0;
     char word[32] = {};
@@ -1181,13 +1113,7 @@ static int TestCommand() {
 constexpr size_t kWalletUec = 0xC8;
 static int64_t g_walletSaved = -1;
 
-static bool WalletPath(char path[MAX_PATH]) {
-    const DWORD n = GetEnvironmentVariableA("SC_OFFLINE_MOD_LOG", path, MAX_PATH);
-    char* slash = n && n < MAX_PATH ? strrchr(path, '\\') : nullptr;
-    if (!slash || static_cast<size_t>(slash + 1 - path) + 11 > MAX_PATH) return false;
-    strcpy_s(slash + 1, MAX_PATH - static_cast<size_t>(slash + 1 - path), "wallet.txt");
-    return true;
-}
+static bool WalletPath(char path[MAX_PATH]) { return ModLogSibling(path, MAX_PATH, "wallet.txt"); }
 
 static uintptr_t PlayerWallet() {
     uintptr_t actor = 0, player = 0;
@@ -1394,10 +1320,7 @@ static bool UiNotifyOff() {
     static int off = -1;
     if (off < 0) {
         char path[MAX_PATH];
-        const DWORD pn = GetEnvironmentVariableA("SC_OFFLINE_MOD_LOG", path, MAX_PATH);
-        char* slash = pn && pn < MAX_PATH ? strrchr(path, '\\') : nullptr;
-        if (slash) strcpy_s(slash + 1, MAX_PATH - static_cast<size_t>(slash + 1 - path), "ui_notify_off.txt");
-        off = slash && GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES ? 1 : 0;
+        off = ModLogSibling(path, MAX_PATH, "ui_notify_off.txt") && GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES ? 1 : 0;
         if (off) Log("[contracts] ui_notify_off.txt: new objectives aren't announced to mobiGlas");
     }
     return off == 1;
@@ -1680,10 +1603,7 @@ static void PhaseTest() {
     if (now - last < 1000) return;
     last = now;
     char path[MAX_PATH];
-    const DWORD n = GetEnvironmentVariableA("SC_OFFLINE_MOD_LOG", path, MAX_PATH);
-    char* slash = n && n < MAX_PATH ? strrchr(path, '\\') : nullptr;
-    if (!slash || static_cast<size_t>(slash + 1 - path) + 15 > MAX_PATH) return;
-    strcpy_s(slash + 1, MAX_PATH - static_cast<size_t>(slash + 1 - path), "phase_test.txt");
+    if (!ModLogSibling(path, MAX_PATH, "phase_test.txt")) return;
     FILE* f = _fsopen(path, "r", _SH_DENYNO);
     if (!f) return;
     char word[32] = {};
@@ -2358,11 +2278,7 @@ static int HexNibble(char c) {
 
 static void ReadContractScripts() {
     char path[MAX_PATH];
-    if (g_scripted || !ShipsFilePath(path, sizeof(path))) return;
-    char* slash = strrchr(path, '\\');
-    if (!slash) slash = strrchr(path, '/');
-    if (!slash) return;
-    strcpy_s(slash + 1, sizeof(path) - static_cast<size_t>(slash + 1 - path), "contract_scripts.txt");
+    if (g_scripted || !DataFilePath(path, sizeof(path), "contract_scripts.txt")) return;
     FILE* f = _fsopen(path, "r", _SH_DENYNO);
     if (!f) { Log("[contracts] %s is missing; no contracts listed", path); return; }
     g_scripted = static_cast<Scripted*>(calloc(kMaxDefs, sizeof(Scripted)));
@@ -2460,10 +2376,7 @@ static void Fill(int count) {
     Log("[contracts] %d of the generator's %d contracts are in contract_scripts.txt%s", known, g_defCount, g_scriptedSwapped ? " (ids matched swapped)" : "");
     for (int i = n - 1; i > 0; --i) { const int j = rand() % (i + 1); const int t = order[i]; order[i] = order[j]; order[j] = t; }
     char path[MAX_PATH];
-    const DWORD pn = GetEnvironmentVariableA("SC_OFFLINE_MOD_LOG", path, MAX_PATH);
-    char* slash = pn && pn < MAX_PATH ? strrchr(path, '\\') : nullptr;
-    if (slash && static_cast<size_t>(slash + 1 - path) + 15 <= MAX_PATH) {
-        strcpy_s(slash + 1, MAX_PATH - static_cast<size_t>(slash + 1 - path), "list_first.txt");
+    if (ModLogSibling(path, MAX_PATH, "list_first.txt")) {
         if (FILE* f = _fsopen(path, "r", _SH_DENYNO)) {
             char want[128];
             int front = 0;

@@ -43,3 +43,8 @@ constexpr uint64_t kPtrMask = 0xFFFFFFFFFFFFull;
 
 bool GameHasFocus();
 bool ShipsFilePath(char* path, DWORD n);
+// <directory of the path in envVar>\file. False when the variable is unset or the result won't fit.
+bool SiblingPath(const char* envVar, const char* file, char* path, DWORD n);
+// The menu's lists sit beside ships.txt; the mod's own state and test files sit beside mod.log.
+bool DataFilePath(char* path, DWORD n, const char* file);
+bool ModLogSibling(char* path, DWORD n, const char* file);

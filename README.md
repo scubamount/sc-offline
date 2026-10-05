@@ -48,11 +48,10 @@ Everything runs through one in-game menu. Press **M** to open it.
 | **Clear NPCs** | Remove every NPC the mod spawned. |
 | **Wallet** | Your aUEC balance is read from `data/wallet.txt` when you spawn and written back as you spend it. Edit the file to set the starting amount. |
 | **God mode** | Toggle invulnerability. |
-| **Build mode (F6)** | Free build mode, 3746 buildable entries. |
-| **Item Picker** | Equip any item (1499 entries) from the gear menu. |
-| **Outfits** | Wear one of the 35 Squadron 42 outfits (178 named pieces) and cast members' heads. |
+| **Build mode (F6)** | Free build mode, 3728 buildable entries in 18 groups. |
+| **Gear** | Equip any item (1489 entries, ten slots) from the gear menu on the Main tab. |
+| **Outfits** | Wear one of the 35 Squadron 42 outfits (143 named pieces) and cast members' heads. |
 | **Squadron 42 tab** | Spoiler-gated tab — see [below](#squadron-42-tab). |
-| **Missions** | Start 34 environmental missions that normally need the online backend — combat assist, pirate blockades, and more. |
 | **Contracts** | 2153 generated contracts with their mission scripts wired up locally. |
 | **Teleport** | Save a position (F7) and teleport back to it (F8). |
 
@@ -157,8 +156,8 @@ sections:
   session only; nothing is written to `USER.cfg`.
 - **Spawn** — drop a buildable in front of you without entering build mode. The
   list opens filtered to the `[sq42]` group in `data/buildables.txt`; clear the
-  filter to reach all 3746. What you spawn joins your base, so **Undo** and
-  **Clear base** in Build mode remove it.
+  filter to reach all 3728. What you spawn joins your base, so **Undo** and
+  **Clear base** in Build mode are meant to remove it — see [Notes](#notes).
 - **Ships** — the SQ42 list (Idris-P, Gladius, Retaliator, Starfarer, Avenger
   Stalker, Hornet), the Vanduul AI wing, and Bengal A / Bengal B. Player ships put
   you in the pilot seat; the Vanduul ones spawn 300 m up and come for you; Bengals
@@ -191,10 +190,10 @@ format in a header comment. Trim a list and the menu gets shorter.
 | --- | --- |
 | `ships.txt` | 1102 spawnable vehicles |
 | `npcs.txt` | 2239 NPC archetypes |
-| `items.txt` | 1499 gear items, in ten slot sections |
-| `buildables.txt` | 3746 objects for Build mode and the Spawn section |
+| `items.txt` | 1489 gear items, in ten slot sections |
+| `buildables.txt` | 3728 objects in 18 groups, for Build mode and the Spawn section |
 | `outfits.txt` | 35 outfits — one `[name]` block, then one line per piece |
-| `missions.txt` | 34 startable missions |
+| `missions.txt` | 34 environmental mission ids — **not read by any current build**; kept for a future Missions menu |
 | `contract_scripts.txt` | 2153 contract mission scripts |
 | `wallet.txt` | Your aUEC balance, created on first run |
 | `spawn.txt` | Your saved teleport spot (F7 / F8) |
@@ -218,7 +217,8 @@ format in a header comment. Trim a list and the menu gets shorter.
 
 The full C++ source is in `src/`. To compile the mod yourself:
 
-1. Install **Visual Studio 2022** (17.10+) or **VS 2026** with the **Desktop development with C++** workload.
+1. Install **Visual Studio 2026** with the **Desktop development with C++** workload. The project
+   uses the `v145` toolset; on VS 2022, retarget it to `v143` (Project → Retarget) first.
 2. Open `ChrisWareOffline.slnx` in Visual Studio.
 3. Select **Release | x64** and build (Ctrl+Shift+B).
 4. The output is `x64/Release/dinput8.dll`, next to `ChrisWareOffline.slnx`. Copy it
@@ -233,6 +233,12 @@ msbuild ChrisWareOffline.slnx /p:Configuration=Release /p:Platform=x64 /m
 No Visual Studio? Every push to `main` compiles one anyway — grab the
 `dinput8-release` artifact from
 [Actions](https://github.com/scubamount/sc-offline/actions).
+
+Before pushing from macOS or Linux, `tools/check.sh` parses every source file with
+clang against the Windows headers and screens for MSVC error C2712 (`__try` in a
+function that owns a `std::string`), in a few seconds. CI runs it first on every
+push. It is not the build — only MSVC's is — but it catches the two failures a
+non-Windows machine otherwise can't see before CI does.
 
 ---
 
@@ -301,6 +307,10 @@ Everything is back to normal.
   `data/mod.log` and the game's `Game.log` — that is how these get fixed.
 - The lists the menu reads all live in `data/` as plain text; see
   [Data files](#data-files-and-environment-variables).
+- **Known issue — removing things:** **Clear NPCs**, and **Undo** / **Clear base** in build
+  mode, pass the game an entity *id* where it wants an entity *handle*. Upstream found this in
+  play and fixed it in ChrisWareOffline 0.9.0-rc1 (see its `CHANGELOG.md`); the fix is not in
+  this repository yet, so expect those buttons to leave things in place.
 
 ---
 

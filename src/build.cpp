@@ -130,15 +130,6 @@ void Menu_RequestPlace(int index, bool inFront, float aheadMetres) {
     InterlockedExchange(&g_placeReq.pending, 1);
 }
 
-static bool BuildablesFilePath(char* path, DWORD n) {
-    if (!ShipsFilePath(path, n)) return false;
-    char* slash = strrchr(path, '\\');
-    if (!slash) slash = strrchr(path, '/');
-    if (!slash || static_cast<DWORD>(slash + 1 - path) + 15 > n) return false;
-    strcpy_s(slash + 1, n - static_cast<DWORD>(slash + 1 - path), "buildables.txt");
-    return true;
-}
-
 static bool IsNpcClass(const char* name) {
     static const char* const kPrefixes[] = { "NPC_", "AIShip_CrewProfiles", "PU_Pilots", "PU_Human", "Vanduul_Pilot" };
     for (const char* p : kPrefixes)
@@ -148,7 +139,7 @@ static bool IsNpcClass(const char* name) {
 
 static int BuildList() {
     char path[MAX_PATH];
-    if (!BuildablesFilePath(path, sizeof(path))) return 0;
+    if (!DataFilePath(path, sizeof(path), "buildables.txt")) return 0;
     FILE* f = _fsopen(path, "r", _SH_DENYNO);
     if (!f) { Log("[build] can't open %s", path); return 0; }
     const uintptr_t registry = VCall<uintptr_t>(*g_tp.entitySystem, 0xC0);

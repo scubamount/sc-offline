@@ -222,7 +222,7 @@ static volatile LONG g_menuShipCount = -1;
 static volatile LONG g_menuWantShips = 0;
 static SRWLOCK       g_menuLock = SRWLOCK_INIT;
 static char          g_menuStatus[256] = "Pick a ship and press Spawn.";
-static struct { bool pending; int index; float height; bool sit; bool flightReady; bool daymar; } g_spawnRequest;
+static struct { bool pending; int index; float height; bool sit; bool flightReady; } g_spawnRequest;
 static struct { bool pending; bool enemyWing; char cls[64]; float height; bool sit; bool flightReady; } g_classRequest;
 
 static bool g_startDaymarPending = false;
@@ -265,13 +265,7 @@ const MenuShip* Menu_Ships() { return g_menuShips; }
 
 void Menu_RequestSpawn(int index, float heightAboveMe, bool sitInPilotSeat, bool flightReady) {
     AcquireSRWLockExclusive(&g_menuLock);
-    g_spawnRequest = { true, index, heightAboveMe, sitInPilotSeat, flightReady, false };
-    ReleaseSRWLockExclusive(&g_menuLock);
-}
-
-void Menu_RequestDaymar(int index) {
-    AcquireSRWLockExclusive(&g_menuLock);
-    g_spawnRequest = { true, index, 0.0f, true, true, true };
+    g_spawnRequest = { true, index, heightAboveMe, sitInPilotSeat, flightReady };
     ReleaseSRWLockExclusive(&g_menuLock);
 }
 
@@ -903,8 +897,6 @@ void ProcessShipMenu(DWORD now) {
             strncpy_s(g_seatJob.name, classReq.cls, _TRUNCATE);
             SetMenuStatus("Spawning %s - you'll be put in the pilot seat as soon as it's there (big ships take up to a minute).", classReq.cls);
         }
-    } else if (req.pending && req.daymar && req.index >= 0 && req.index < g_menuShipCount) {
-        StartDaymarArrival(g_menuShips[req.index].name, now);
     } else if (req.pending && req.index >= 0 && req.index < g_menuShipCount) {
         const char* name = g_menuShips[req.index].name;
         uint64_t id = 0;
@@ -922,11 +914,8 @@ void ProcessShipMenu(DWORD now) {
     if (now - lastTestFile >= 2000) {
         lastTestFile = now;
         char path[MAX_PATH];
-        const DWORD pn = GetEnvironmentVariableA("SC_OFFLINE_MOD_LOG", path, MAX_PATH);
-        char* slash = pn && pn < MAX_PATH ? strrchr(path, '\\') : nullptr;
         char line[128] = "";
-        if (slash) {
-            strcpy_s(slash + 1, MAX_PATH - static_cast<size_t>(slash + 1 - path), "spawn_test.txt");
+        if (ModLogSibling(path, MAX_PATH, "spawn_test.txt")) {
             FILE* f = nullptr;
             if (fopen_s(&f, path, "r") == 0 && f) {
                 if (!fgets(line, sizeof(line), f)) line[0] = 0;

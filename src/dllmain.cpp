@@ -96,7 +96,7 @@ static void StartOffline() {
     ResolveQuantumApi(g_text, g_rdata);
     if (ResolveTeleportApi(g_text, g_rdata)) {
         ResolveSpawnApi(g_text, g_rdata);
-        ResolveLoadoutApi(g_text, g_rdata);
+        g_outfitsOk = ResolveLoadoutApi(g_text, g_rdata);  // outfits ride the gear menu's loader
         ResolveNpcApi(g_text);
         ResolveBuildApi(g_text, g_rdata);
         ResolveCVarsApi(g_text, g_rdata);
@@ -104,7 +104,6 @@ static void StartOffline() {
         ResolveContractsApi(g_text, g_rdata);
         ResolveAmmoApi(g_text);
         ResolveHangarsApi(g_text, g_rdata);
-        g_outfitsOk = ResolveOutfitApi(g_text, g_rdata);
     }
 }
 
@@ -117,7 +116,7 @@ static void LogStartup() {
     if (SpawnerReady()) Log("[+] ship spawner: ready (M = menu)");
     else                Log("[!] ship spawner: unavailable (see above)");
     if (g_outfitsOk) Log("[+] outfits: ready (Squadron 42 tab, data/outfits.txt)");
-    else             Log("[!] outfits: unavailable (see above)");
+    else             Log("[!] outfits: unavailable (they use the gear menu's loader; see [gear] above)");
     if (g_offline)
         Log("[i] check Game.log: \"Process sc-client started\" line should show bOnline[0].");
     else

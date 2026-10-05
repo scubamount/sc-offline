@@ -225,44 +225,6 @@ static const char* TeleportToSpot(const Spot& s, int& level) {
     }
 }
 
-const char* TeleportToEntity(uint64_t entityId, double up) {
-    __try {
-        uintptr_t actor, entity;
-        if (!GetLocalPlayer(actor, entity)) return "player not spawned";
-        const uintptr_t es = *g_tp.entitySystem;
-        const uintptr_t target = es && entityId ? VCall<uintptr_t>(es, 0x120, entityId) : 0;
-        if (!target) return "no such entity here (not streamed in?)";
-        const uintptr_t zone = VCall<uintptr_t>(target, 0x6B8);
-        if (!zone) return "the entity isn't in a zone";
-        const uint64_t zoneId = ZoneId(zone);
-        if (!zoneId || ZoneFromId(zoneId) != zone) return "zone id lookup mismatch";
-        double local[3];
-        Vec3Out(target, 0x2B8, local);
-        const double r = sqrt(Dot(local, local));
-        if (r > 100000.0) for (int i = 0; i < 3; ++i) local[i] += local[i] / r * up;
-        else local[2] += up;
-        if (!PositionLooksValid(local)) return "position out of range";
-        double world[3];
-        LocalToWorld(zone, local, world);
-        alignas(16) uint8_t params[0x80] = {};
-        *reinterpret_cast<uint64_t*>(params + 0x00) = zoneId;
-        reinterpret_cast<double*>(params + 0x08)[3] = 1.0;
-        memcpy(params + 0x28, local, 3 * sizeof(double));
-        *reinterpret_cast<double*>(params + 0x40) = 1.0;
-        memcpy(params + 0x48, world, sizeof(world));
-        reinterpret_cast<float*>(params + 0x60)[3] = 1.0f;
-        params[0x7D] = 1;
-        const uintptr_t comp = VCall<uintptr_t>(actor, 0x9D8);
-        if (!comp) return "no teleport component";
-        VCall<void>(comp, 0x158, params);
-        Log("[tp] to entity %llu in '%s' (%.0f, %.0f, %.0f)", static_cast<unsigned long long>(entityId), ZoneName(zone),
-            local[0], local[1], local[2]);
-        return nullptr;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return "fault while teleporting";
-    }
-}
-
 static bool SpotFilePath(char* path, DWORD n) {
     const DWORD len = GetEnvironmentVariableA("SC_OFFLINE_SPAWN_FILE", path, n);
     return len > 0 && len < n;
