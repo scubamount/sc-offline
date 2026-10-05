@@ -33,7 +33,7 @@ bool ResolveLoadoutApi(const Section& text, const Section& rdata) {
         g_lo.ok = true;
         break;
     }
-    if (!g_lo.ok) Log("[gear] loadout loader not found; gear menu disabled");
+    if (!g_lo.ok) Log("[gear] loadout loader not found; gear menu and outfits disabled");
     return g_lo.ok;
 }
 

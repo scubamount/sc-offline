@@ -24,9 +24,13 @@ MWINC=${MINGW_INCLUDE:-$(ls -d /opt/homebrew/opt/mingw-w64/toolchain-x86_64/x86_
 CXXINC=${MINGW_CXX_INCLUDE:-$(ls -d "$MWINC"/c++/[0-9]* /usr/lib/gcc/x86_64-w64-mingw32/*-posix/include/c++ \
                                     /usr/lib/gcc/x86_64-w64-mingw32/*/include/c++ 2>/dev/null | sort -V | tail -1)}
 CLANG=${CLANG:-$(command -v /opt/homebrew/opt/llvm/bin/clang++ || command -v clang++)}
+# Fail closed: a missing tool must never read as "0 new diagnostics".
+[ -n "${CLANG:-}" ] && [ -x "$CLANG" ] || { echo "check: clang++ not found (set CLANG)"; exit 2; }
+command -v python3 >/dev/null || { echo "check: python3 not found"; exit 2; }
 [ -d "${MWINC:-}" ] && [ -f "${CXXINC:-}/string" ] || { echo "check: mingw-w64 headers not found (set MINGW_INCLUDE / MINGW_CXX_INCLUDE)"; exit 2; }
-n=0
+n=0; broken=0
 TMP=$(mktemp)
+shopt -s nullglob
 for f in "$ROOT"/src/*.cpp; do
   n=$((n+1))
   out=$("$CLANG" -fsyntax-only -std=c++20 --target=x86_64-w64-windows-gnu \
@@ -35,8 +39,16 @@ for f in "$ROOT"/src/*.cpp; do
      -nostdinc++ -isystem "$CXXINC" -isystem "$CXXINC/x86_64-w64-mingw32" -isystem "$CXXINC/backward" \
      -isystem "$MWINC" -I "$ROOT/src" -I "$ROOT/src/third_party/imgui" \
      -Wno-everything "$f" 2>&1)
-  echo "$out" | grep -E "error:" | sed -E "s#^.*/src/##; s#:[0-9]+:[0-9]+:#:#" >> "$TMP"
+  rc=$?
+  errs=$(printf '%s\n' "$out" | grep -E "error:")
+  # clang exits 1 on diagnostics; anything else, or a failure with no "error:" line, is a broken run.
+  if [ $rc -gt 1 ] || { [ $rc -ne 0 ] && [ -z "$errs" ]; }; then
+    echo "check: clang failed on $(basename "$f") (exit $rc):"; printf '%s\n' "$out" | head -5; broken=1
+  fi
+  [ -n "$errs" ] && printf '%s\n' "$errs" | sed -E "s#^.*/src/##; s#:[0-9]+:[0-9]+:#:#" >> "$TMP"
 done
+[ $n -gt 0 ] || { echo "check: no src/*.cpp under $ROOT"; rm -f "$TMP"; exit 2; }
+[ $broken -eq 0 ] || { rm -f "$TMP"; exit 2; }
 
 # MSVC C2712 screen (clang does not enforce it): a function containing __try may not own
 # an object that needs unwinding. Flags __try functions that construct std:: objects or call
@@ -64,9 +76,14 @@ for f, raw in src.items():
                      set(re.findall(r'\bstd::(?:string|wstring|vector|unique_ptr)\b', body)))
         if bad: print(f"{f}: C2712 risk: {m.group(1)} owns __try and {', '.join(bad)}")
 PY
+[ $? -eq 0 ] || { echo "check: C2712 screen failed to run"; rm -f "$TMP"; exit 2; }
 sort -u "$TMP" > "$TMP.now"
 [ -f "$BASELINE" ] || { cat "$TMP.now"; echo "check: baseline $BASELINE missing"; rm -f "$TMP" "$TMP.now"; exit 2; }
 new=$(comm -13 "$BASELINE" "$TMP.now")
-echo "check: $n translation units, $(wc -l < "$TMP.now" | tr -d ' ') diagnostics (baseline $(wc -l < "$BASELINE" | tr -d ' ')), $(printf '%s' "$new" | grep -c .) new"
+gone=$(comm -23 "$BASELINE" "$TMP.now")
+echo "check: $n translation units, $(wc -l < "$TMP.now" | tr -d ' ') diagnostics (baseline $(wc -l < "$BASELINE" | tr -d ' ')), $(printf '%s' "$new" | grep -c .) new, $(printf '%s' "$gone" | grep -c .) gone"
 rm -f "$TMP" "$TMP.now"
 [ -z "$new" ] || { echo "$new"; exit 1; }
+# A baseline line that no longer appears means the code improved (delete the line) or the
+# compiler stopped seeing the file. Either way the baseline is stale, so fail and say which.
+[ -z "$gone" ] || { echo "baseline lines no longer produced (remove them from $BASELINE):"; echo "$gone"; exit 1; }
