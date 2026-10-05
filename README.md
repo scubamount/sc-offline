@@ -305,11 +305,13 @@ happens on tags:
 Every action in the workflow is pinned to a commit SHA, and the workflow runs with
 `contents: read` — only the release job is granted `contents: write`.
 
-Current state: [`v0.2.0-rc1`](https://github.com/scubamount/sc-offline/releases/tag/v0.2.0-rc1)
-is a **pre-release**: upstream ChrisWareOffline 0.9.0-rc1 with the Squadron 42 tab on top. It has
-been compiled and string-checked, **not played** — see [Notes](#notes).
+Current state: [`v0.2.0-rc2`](https://github.com/scubamount/sc-offline/releases/tag/v0.2.0-rc2)
+is a **pre-release**: the 0.2.0-rc1 mod (upstream ChrisWareOffline 0.9.0-rc1 plus the Squadron 42
+tab) with the `sc-offline.exe` launcher and the release zip. It has been compiled and checked,
+**not played**, and the launcher has not been run on Windows or Linux — see [Notes](#notes).
 [`v0.1.1`](https://github.com/scubamount/sc-offline/releases/tag/v0.1.1) stays the full release
-until someone has run 0.2.0-rc1.
+until someone has run 0.2.0-rc2. It predates the launcher: it ships the bare DLL, for the
+`launch_offline.bat` in its own source tree.
 
 ---
 

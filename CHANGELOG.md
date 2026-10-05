@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## sc-offline 0.2.0-rc2
+
+The launcher release. Same mod as 0.2.0-rc1; how you start it changed.
+Release candidate: compiled and checked, not yet run on Windows or Linux.
 
 ### Launcher
 - `sc-offline.exe` replaces `launch_offline.bat`. Same steps (copy the mod in, start the game,
