@@ -307,12 +307,13 @@ happens on tags:
 Every action in the workflow is pinned to a commit SHA, and the workflow runs with
 `contents: read` — only the release job is granted `contents: write`.
 
-Current state: [`v0.2.0-rc2`](https://github.com/scubamount/sc-offline/releases/tag/v0.2.0-rc2)
-is the **Latest** release: the 0.2.0-rc1 mod (upstream ChrisWareOffline 0.9.0-rc1 plus the Squadron 42
-tab) with the `sc-offline.exe` launcher and the release zip. It was promoted before anyone ran it:
-compiled and checked, **not yet played**, and the launcher not yet run on Windows or Linux — see
-[Notes](#notes). If it misbehaves, [`v0.1.1`](https://github.com/scubamount/sc-offline/releases/tag/v0.1.1)
-is the previous build (bare DLL, started with the `launch_offline.bat` in its own source tree).
+Current state: [`v0.2.0-rc3`](https://github.com/scubamount/sc-offline/releases/tag/v0.2.0-rc3)
+is the **Latest** release: rc2's launcher and mod, with outfits, the menu and the missions setup
+brought in line with the original author's DLL (see [CHANGELOG](CHANGELOG.md)). It was promoted
+before anyone ran it: compiled and checked, **not yet played**, and the launcher not yet run on
+Windows or Linux — see [Notes](#notes). If it misbehaves,
+[`v0.1.1`](https://github.com/scubamount/sc-offline/releases/tag/v0.1.1) is the last build from
+before this fork's changes (bare DLL, started with the `launch_offline.bat` in its own source tree).
 
 ---
 
