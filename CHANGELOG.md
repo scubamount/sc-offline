@@ -1,6 +1,6 @@
 # Changelog
 
-## sc-offline 0.2.0-rc4 — unreleased
+## sc-offline 0.2.0-rc4 — 2026-10-06
 
 Second parity pass against the original author's DLL (REA 4.1.0 + Ghidra), a launcher with
 subcommands and self-checks, and the documentation split into a short README plus `docs/`.
