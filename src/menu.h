@@ -67,7 +67,6 @@ int             Menu_BuildPlacedCount();
 int             Menu_OutfitCount();
 const char*     Menu_OutfitName(int index);
 void            Menu_RequestWearOutfit(int index);
-void            Menu_RequestWearSq42();
 void            Menu_SetS42VisorHud(bool on);
 
 void Menu_Start(HWND gameWindow);

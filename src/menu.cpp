@@ -642,7 +642,9 @@ static void DrawVehiclesTab(bool& keepOpen) {
     } else {
         const MenuShip* ships = Menu_Ships();
         if (selected >= count) selected = 0;
-        SearchBox("##shipFilter", "Search ships", filter, sizeof(filter));
+        if (SearchBox("##shipFilter", "Search ships", filter, sizeof(filter)))
+            for (int i = 0; i < count; ++i)
+                if (MatchesFilter(ships[i].name, filter)) { selected = i; break; }
         const ImGuiTableFlags flags = ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter
                                     | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp;
         if (ImGui::BeginTable("##ships", 3, flags, ImVec2(0, 230))) {
@@ -944,54 +946,53 @@ static void DrawStatusStrip(float height) {
     ImGui::PopStyleColor();
 }
 
+// Set by the Squadron 42 spoiler gate's Back button; DrawMenu selects the first tab once.
+static bool g_backToFirstTab = false;
+
 static void DrawSq42Tab(bool& keepOpen) {
     static bool spoilerOk = false;
     if (!spoilerOk) {
         ImGui::SeparatorText("Spoiler warning");
         ImGui::TextWrapped("This tab could have Squadron 42 spoilers.");
-        if (ImGui::Button("Press OK to continue.", ImVec2(-1, 0))) spoilerOk = true;
+        ImGui::TextWrapped("Press OK to continue.");
+        if (ImGui::Button("OK", ImVec2(120, 0))) spoilerOk = true;
+        ImGui::SameLine();
+        if (ImGui::Button("Back", ImVec2(120, 0))) g_backToFirstTab = true;
         return;
     }
 
     ImGui::SeparatorText("Outfits");
     const int outfits = Menu_OutfitCount();
+    static int outfit = 0;
     if (outfits < 0) {
         ImGui::TextWrapped("Loading outfits... (you need to be spawned in the universe)");
+    } else if (outfits == 0) {
+        ImGui::TextWrapped("No outfits found - check outfits.txt.");
     } else {
-        static int  outfit = 0;
         static char filter[64] = "";
-        static bool visor = false;
-        if (outfits == 0) {
-            ImGui::TextWrapped("No outfits found - check outfits.txt.");
-        } else {
-            if (outfit >= outfits) outfit = 0;
-            ImGui::SetNextItemWidth(-1);
-            ImGui::InputTextWithHint("##outfitFilter", "search outfits...", filter, sizeof(filter));
-            ImGui::SetNextItemWidth(-1);
-            if (ImGui::BeginCombo("##outfit", Menu_OutfitName(outfit), ImGuiComboFlags_HeightLargest)) {
-                for (int i = 0; i < outfits; ++i) {
-                    const char* name = Menu_OutfitName(i);
-                    if (!MatchesFilter(name, filter)) continue;
-                    ImGui::PushID(i);
-                    if (ImGui::Selectable(name, i == outfit)) {
-                        outfit = i;
-                        Menu_RequestWearOutfit(i);
-                        keepOpen = false;
-                    }
-                    if (i == outfit) ImGui::SetItemDefaultFocus();
-                    ImGui::PopID();
-                }
-                ImGui::EndCombo();
+        if (outfit >= outfits) outfit = 0;
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputTextWithHint("##outfitFilter", "search outfits...", filter, sizeof(filter));
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::BeginCombo("##outfit", Menu_OutfitName(outfit), ImGuiComboFlags_HeightLargest)) {
+            for (int i = 0; i < outfits; ++i) {
+                const char* name = Menu_OutfitName(i);
+                if (!MatchesFilter(name, filter)) continue;
+                ImGui::PushID(i);
+                if (ImGui::Selectable(name, i == outfit)) outfit = i;
+                if (i == outfit) ImGui::SetItemDefaultFocus();
+                ImGui::PopID();
             }
+            ImGui::EndCombo();
         }
-        if (ImGui::Checkbox("SQ42 visor HUD (applies on the next Equip or outfit)", &visor))
-            Menu_SetS42VisorHud(visor);
-        // The preset is built in code, so it works even when outfits.txt is missing.
         if (ImGui::Button("Wear SQ42 outfit", ImVec2(-1, 0))) {
-            Menu_RequestWearSq42();
+            Menu_RequestWearOutfit(outfit);
             keepOpen = false;
         }
     }
+    static bool visor = false;
+    if (ImGui::Checkbox("SQ42 visor HUD (applies on the next Equip or outfit)", &visor))
+        Menu_SetS42VisorHud(visor);
 
     ImGui::SeparatorText("Settings");
     for (int i = 0; i < Menu_S42SettingCount(); ++i) {
@@ -1070,11 +1071,13 @@ static void DrawSq42Tab(bool& keepOpen) {
     for (int i = 0; i < n; ++i)
         if (strncmp(list[i].cls, "VNCL_", 5) == 0) { list[i].height = 300.0f; list[i].sit = false; }
 
-    static char bengalB[64];
+    // Not the original's dormant "[battle]" mode (two Bengals fighting each other): these
+    // spawn one UEE Bengal, the second with a Vanduul wing when an enemy side was found.
+    static char bengalWing[64];
     const bool enemySide = Menu_EnemySideAvailable();
-    strcpy_s(bengalB, enemySide ? "Bengal B (enemy)" : "Bengal B (UEE, no enemy side found)");
-    list[n++] = { "Bengal A (UEE)", "RSI_Bengal_PU_AI_UEE", false,      1500.0f, false };
-    list[n++] = { bengalB,          "RSI_Bengal_PU_AI_UEE", enemySide, 1500.0f, false };
+    strcpy_s(bengalWing, enemySide ? "Bengal + Vanduul wing" : "Bengal + wing (UEE, no enemy side found)");
+    list[n++] = { "Bengal (UEE)", "RSI_Bengal_PU_AI_UEE", false,      1500.0f, false };
+    list[n++] = { bengalWing,     "RSI_Bengal_PU_AI_UEE", enemySide, 1500.0f, false };
 
     static int   pick = 0;
     static char  sqFilter[64] = "";
@@ -1136,7 +1139,9 @@ static bool DrawMenu() {
             if (ImGui::BeginChild("##body", ImVec2(0, bodyHeight))) draw();
             ImGui::EndChild();
         };
-        if (ImGui::BeginTabItem("Player"))   { body([&] { DrawPlayerTab(keepOpen); });   ImGui::EndTabItem(); }
+        const ImGuiTabItemFlags firstTab = g_backToFirstTab ? ImGuiTabItemFlags_SetSelected : 0;
+        g_backToFirstTab = false;
+        if (ImGui::BeginTabItem("Player", nullptr, firstTab)) { body([&] { DrawPlayerTab(keepOpen); }); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Travel"))   { body([&] { DrawTravelTab(); });           ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Vehicles")) { body([&] { DrawVehiclesTab(keepOpen); }); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Crew"))     { body([&] { DrawCrewTab(); });             ImGui::EndTabItem(); }

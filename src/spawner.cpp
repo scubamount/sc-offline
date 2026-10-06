@@ -337,7 +337,7 @@ static int VehicleSize(uintptr_t entityClass) {
     return rec ? static_cast<int>(Rd<uint32_t>(rec + 0x10)) : 0;
 }
 
-// The Vanduul wing that makes Bengal B an enemy-side spawn.
+// The Vanduul wing that the "Bengal + Vanduul wing" row spawns alongside its Bengal.
 static const char* const kEnemySideClasses[] = {
     "VNCL_Blade_PU_AI_VAN", "VNCL_Scythe_PU_AI_VAN", "VNCL_Glaive_PU_AI_VAN",
 };
@@ -1596,7 +1596,7 @@ void ProcessShipMenu(DWORD now) {
         if (const char* err = SpawnShipAbovePlayer(classReq.cls, classReq.height, id))
             SetMenuStatus("Spawning %s failed: %s", classReq.cls, err);
         else if (classReq.enemyWing) {
-            SetTarget(id, classReq.cls);   // the Bengal itself, like Bengal A; the wing ships are not targeted
+            SetTarget(id, classReq.cls);   // the Bengal itself, like the plain Bengal row; the wing ships are not targeted
             // The wing goes 300 m up — the height the menu's own hint promises for
             // the Vanduul hulls — rather than on top of the 980 m Bengal.
             int wing = 0;

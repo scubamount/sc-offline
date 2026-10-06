@@ -185,12 +185,13 @@ When you report back, include the launcher's output, `data/mod.log`, and the gam
 
 ## Squadron 42 tab
 
-Press **M**, open **Squadron 42**, and accept the spoiler warning once. Five
-sections:
+Press **M**, open **Squadron 42**, and press **OK** on the spoiler warning once
+(**Back** returns to the first tab). Five sections:
 
-- **Outfits** — searchable list from `data/outfits.txt`; picking one wears it.
-  **Wear SQ42 outfit** applies a built-in pilot preset, so it still works if that
-  file is missing. **SQ42 visor HUD** swaps the lens display on the next equip.
+- **Outfits** — searchable list from `data/outfits.txt`; pick one, then press
+  **Wear SQ42 outfit**. Outfits that don't name a head get the default face, and
+  unknown item names are skipped at load (counted in `data/mod.log`).
+  **SQ42 visor HUD** swaps the lens display on the next Equip or outfit.
 - **Settings** — four game toggles, each with a tooltip: SQ42 auto targeting,
   visor mini-map, visor greebles, and the SQ42 frontend menu. They last for the
   session only; nothing is written to `USER.cfg`.
@@ -199,11 +200,12 @@ sections:
   filter to reach all 3728. What you spawn joins your base, so **Undo** and
   **Clear base** in the Build tab remove it.
 - **Ships** — the SQ42 list (Idris-P, Gladius, Retaliator, Starfarer, Avenger
-  Stalker, Hornet), the Vanduul AI wing, and Bengal A / Bengal B. Player ships put
+  Stalker, Hornet), the Vanduul AI wing, and two Bengal rows. Player ships put
   you in the pilot seat through the Vehicles tab's seat rules. Everything spawned
-  here except Bengal B's enemy wing becomes the Crew tab's target ship; the Vanduul ones spawn 300 m up and come for you; Bengals
-  spawn 1500 m up. Bengal B brings its enemy wing when this game build has those
-  classes, and its label says which case you got.
+  here except the Bengal's Vanduul wing becomes the Crew tab's target ship; the Vanduul
+  ones spawn 300 m up and come for you; Bengals spawn 1500 m up. **Bengal + Vanduul
+  wing** brings the wing when this game build has those classes, and its label
+  says which case you got.
 - **Console** — press Enter to run a command in the game's own console. Its output
   goes to the game's log, not to the menu.
 
@@ -305,12 +307,13 @@ happens on tags:
 Every action in the workflow is pinned to a commit SHA, and the workflow runs with
 `contents: read` — only the release job is granted `contents: write`.
 
-Current state: [`v0.2.0-rc2`](https://github.com/scubamount/sc-offline/releases/tag/v0.2.0-rc2)
-is the **Latest** release: the 0.2.0-rc1 mod (upstream ChrisWareOffline 0.9.0-rc1 plus the Squadron 42
-tab) with the `sc-offline.exe` launcher and the release zip. It was promoted before anyone ran it:
-compiled and checked, **not yet played**, and the launcher not yet run on Windows or Linux — see
-[Notes](#notes). If it misbehaves, [`v0.1.1`](https://github.com/scubamount/sc-offline/releases/tag/v0.1.1)
-is the previous build (bare DLL, started with the `launch_offline.bat` in its own source tree).
+Current state: [`v0.2.0-rc3`](https://github.com/scubamount/sc-offline/releases/tag/v0.2.0-rc3)
+is the **Latest** release: rc2's launcher and mod, with outfits, the menu and the missions setup
+brought in line with the original author's DLL (see [CHANGELOG](CHANGELOG.md)). It was promoted
+before anyone ran it: compiled and checked, **not yet played**, and the launcher not yet run on
+Windows or Linux — see [Notes](#notes). If it misbehaves,
+[`v0.1.1`](https://github.com/scubamount/sc-offline/releases/tag/v0.1.1) is the last build from
+before this fork's changes (bare DLL, started with the `launch_offline.bat` in its own source tree).
 
 ---
 
