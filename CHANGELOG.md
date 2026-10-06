@@ -41,9 +41,9 @@ Release candidate: compiled and checked, not yet run in game.
   `--prefix` / `--wine` override the guesses.
 
 ### Repository
-- Documentation: a short README for players; features, data files, launcher, Linux, build and
-  reverse-engineering notes moved to `docs/`. Stale release history and the wrong "about 1 GB" and
-  "2153 contracts wired up" claims are gone.
+- Documentation: a short README for players; features, data files, launcher, Linux and build
+  notes moved to `docs/`. Stale release history is gone; corrected: the download is about
+  1.4 MB, not 1 GB, and of 2153 listed contracts 1657 have their scripts shipped and 491 are offered.
 - `data/missions.txt` removed: no build ever read it.
 - CI: dead NuGet steps removed; runner images pinned (`windows-2025-vs2026`, `ubuntu-24.04`); a
   newer push cancels the older branch build. The release zip now carries `docs/`.
