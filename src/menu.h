@@ -44,6 +44,7 @@ int             Menu_GearCount(int slot);
 const char*     Menu_GearName(int slot, int index);
 void            Menu_RequestEquip(const int picks[Gear_SlotCount]);
 void            Menu_RunConsole(const char* cmd);
+bool            Menu_ConsoleReady();   // the game's console was found
 
 int             Menu_NpcCount();
 const char*     Menu_NpcName(int index);

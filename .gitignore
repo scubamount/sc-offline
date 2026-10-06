@@ -12,15 +12,20 @@ launcher/x64/
 *.exp
 *.lib
 *.dll
+# ...except the original author's prebuilt DLL, tracked on purpose (see README).
+!/dinput8.dll
 *.tlog/
 *.log
 
 data/wallet.txt
 data/spawn*.txt
+# contract-system dev hooks read by src/contracts.cpp (see docs/data-files.md)
 data/*_test.txt
 data/list_first.txt
 data/ui_notify_off.txt
-discord.ini
+# written by sc-offline.exe
+data/launcher.log
+data/game-build.txt
 
 # your own menu background image (not part of the project)
 data/menu_background.*

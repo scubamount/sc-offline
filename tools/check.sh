@@ -53,10 +53,10 @@ done
 # MSVC C2712 screen (clang does not enforce it): a function containing __try may not own
 # an object that needs unwinding. Flags __try functions that construct std:: objects or call
 # a function returning one by value.
-python3 - "$ROOT/src" <<'PY' >> "$TMP"
+python3 - "$ROOT/src" "$ROOT/launcher" <<'PY' >> "$TMP"
 import os, re, sys
-S = sys.argv[1]
-src = {f: open(os.path.join(S, f), encoding="utf-8", errors="replace").read() for f in os.listdir(S) if f.endswith((".cpp", ".h"))}
+src = {f: open(os.path.join(S, f), encoding="utf-8", errors="replace").read()
+       for S in sys.argv[1:] for f in os.listdir(S) if f.endswith((".cpp", ".h"))}
 strip = lambda t: re.sub(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"', '""', t, flags=re.S)
 ret = set()
 for t in src.values():

@@ -1045,7 +1045,7 @@ void Menu_RequestStandAll()                                  { QueueSeatAction(S
 
 static struct {
     uint64_t id; DWORD since; DWORD lastSend; int sends; int evictions;
-    bool flightReady, replaceNpc, startedAboard, lastWasEvict, namedFallback;
+    bool flightReady, replaceNpc, startedAboard, lastWasEvict, namedFallback, seatsLogged;
     int mode; uint64_t wantSeat; uint64_t sentSeat; char name[64]; char seatName[48];
 } g_seatJob;
 static SeatInfo g_lastSeat;
@@ -1115,6 +1115,21 @@ static SeatStep SeatPlayer(uintptr_t playerEntity) {
     const int n = EnumerateShipSeats(g_seatJob.id);
     if (n < 0) return SeatStep::NotReady;
     if (n == 0) return SeatStep::NoSeat;
+    if (!g_seatJob.seatsLogged) {
+        // Like the original: one line per seat job naming every seat, so a tester's mod.log
+        // shows the names the "Board in a seat by name" mode matches against.
+        g_seatJob.seatsLogged = true;
+        char line[1024]; int len = 0;
+        for (int i = 0; i < n && len < static_cast<int>(sizeof(line)) - 80; ++i) {
+            const SeatInfo& s = g_seatList[i];
+            const int w = snprintf(line + len, sizeof(line) - len, "%s%s(%u%s)", i ? ", " : "", s.name, s.priority,
+                                   s.state == SeatState_Empty ? "" : ", taken");
+            if (w < 0) break;
+            len += w;
+        }
+        line[sizeof(line) - 1] = 0;
+        Log("[ship] %d seats: %s", n, line);
+    }
 
     const SeatInfo* s = ChooseSeat();
     if (!s) { g_haveLastSeat = false; return g_seatJob.wantSeat ? SeatStep::Blocked : SeatStep::NoSeat; }
@@ -1359,7 +1374,7 @@ static void FinishSeatJob(DWORD now) {
         StartPowerJob(g_seatJob.id, g_lastSeat.seatId, g_seatJob.name, now + 1500, 20000);
         SetMenuStatus("You're in the %s's pilot seat - powering up...", g_seatJob.name);
     } else if (pilot) {
-        SetMenuStatus("You're in the %s's pilot seat ('%s').", g_seatJob.name, g_lastSeat.name);
+        SetMenuStatus("You're in the %s's pilot seat ('%s'). Press R (Flight Ready) to power up.", g_seatJob.name, g_lastSeat.name);
     } else if (have && g_seatJob.mode == SeatMode_Pilot && !g_seatJob.wantSeat) {
         SetMenuStatus("You're in the %s, but its pilot seat wasn't free%s - you got '%s'.", g_seatJob.name,
                       g_seatJob.replaceNpc ? "" : " (tick 'replace NPC' to take it)", g_lastSeat.name);

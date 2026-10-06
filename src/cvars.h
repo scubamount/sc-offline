@@ -11,4 +11,5 @@ int         Menu_S42SettingCount();
 const char* Menu_S42SettingLabel(int index);
 const char* Menu_S42SettingTip(int index);
 bool        Menu_S42SettingOn(int index);      // cached; refreshed on the game thread
+bool        Menu_S42SettingKnown(int index);   // false until the game thread has read the cvar
 void        Menu_RequestS42Setting(int index, bool on);

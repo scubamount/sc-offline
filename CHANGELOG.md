@@ -1,6 +1,57 @@
 # Changelog
 
-## sc-offline 0.2.0-rc3
+## sc-offline 0.2.0-rc4 — unreleased
+
+Second parity pass against the original author's DLL (REA 4.1.0 + Ghidra), a launcher with
+subcommands and self-checks, and the documentation split into a short README plus `docs/`.
+Release candidate: compiled and checked, not yet run in game.
+
+### Squadron 42 tab
+- **Spawn** lists the whole `[sq42]` group again. The search box started as `sq42`, which matched
+  item names and hid 59 of the 60 entries; it now starts empty and searches within the group.
+- **Ships** are greyed out when this game build doesn't have the class, instead of failing after
+  the click. Your own ships spawn 30 m up by default, like the original (was 20 m).
+- **Settings** checkboxes are greyed until the game's current value has been read.
+- **Console** has a **Run** button and is disabled until the game's console is found; commands
+  can be 255 characters (was 191).
+
+### Ships and seats
+- Sitting in a pilot seat with Flight Ready off now says "Press R (Flight Ready) to power up."
+- `mod.log` lists every seat of a spawned ship once (`[ship] N seats: name(priority, taken)`),
+  the names "Board in a seat by name" matches against.
+
+### Build
+- The reach tooltip says where objects land when you look at the sky: under the point that far out.
+
+### Launcher
+- Commands: `sc-offline.exe [play|install|uninstall|status|help]`, plus `--dry-run` (print every
+  step, change nothing) and `--skip-eac-check`. A double-click is `play`, as before.
+- Self-checks on every run: which `dinput8.dll` it is (source build version, or the original
+  author's prebuilt by SHA-256, with a `boot_map = PU` warning for the prebuilt), whether the game
+  updated since the last play (`build_manifest.id`), a mod left in the game folder after a crash,
+  and Easy Anti-Cheat (`EasyAntiCheat_EOS.exe` present, hosts-file block). An active EAC stops
+  `play` and `install` with the fix printed.
+- `default_1.xml` is backed up before the launcher replaces it and restored afterwards (it used
+  to be overwritten and left behind). Another mod's `dinput8.dll` is set aside and put back.
+- `Bin64\sc-offline.installed` records what was installed, so `uninstall` knows what to undo.
+- Everything printed also goes to `data\launcher.log`. Exit codes: 0 ok, 1 error, 2 EAC active,
+  3 the game is running.
+- `sc-offline.sh` takes the same commands and also finds Lutris and Steam/Proton prefixes
+  (Flatpak Steam included) and their Wine, checks `/etc/hosts`, and `--dry-run` starts nothing.
+  `--prefix` / `--wine` override the guesses.
+
+### Repository
+- Documentation: a short README for players; features, data files, launcher, Linux, build and
+  reverse-engineering notes moved to `docs/`. Stale release history and the wrong "about 1 GB" and
+  "2153 contracts wired up" claims are gone.
+- `data/missions.txt` removed: no build ever read it.
+- CI: dead NuGet steps removed; runner images pinned (`windows-2025-vs2026`, `ubuntu-24.04`); a
+  newer push cancels the older branch build. The release zip now carries `docs/`.
+- `.gitattributes` fixes line endings per file type (`sc-offline.sh` stays LF on Windows clones).
+- `tools/check.sh` screens `launcher/` for MSVC C2712 too.
+- CHANGELOG entries carry their release dates.
+
+## sc-offline 0.2.0-rc3 — 2026-10-06
 
 Brings ours in line with the original author's prebuilt DLL, based on a Ghidra decompile of it.
 Release candidate: compiled and checked, not yet run in game.
@@ -29,7 +80,7 @@ Release candidate: compiled and checked, not yet run in game.
 - The AI debug-nodes console command uses the original's name `SubsumptionEnableDebugNodes`
   unless only the `ai_` form exists in this game build.
 
-## sc-offline 0.2.0-rc2
+## sc-offline 0.2.0-rc2 — 2026-10-05
 
 The launcher release. Same mod as 0.2.0-rc1; how you start it changed.
 Release candidate: compiled and checked, not yet run on Windows or Linux.
@@ -52,7 +103,7 @@ Release candidate: compiled and checked, not yet run on Windows or Linux.
 - `sc-offline.sh` runs the launcher inside a Star Citizen Wine prefix (LUG Helper layout),
   with `WINEDLLOVERRIDES=dinput8=n,b` so Wine loads the mod instead of its own `dinput8`.
 
-## sc-offline 0.2.0-rc1
+## sc-offline 0.2.0-rc1 — 2026-10-05
 
 This repository's build of upstream 0.9.0-rc1 (below) with the Squadron 42 tab on top.
 Release candidate: compiled and string-checked, not yet played.

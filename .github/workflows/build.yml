@@ -12,6 +12,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same branch or PR replaces the running build; tags always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 jobs:
   # Seconds on Linux: parse errors and MSVC C2712 risks fail here, before the Windows build.
   check:
@@ -29,7 +34,8 @@ jobs:
 
   build:
     needs: check
-    runs-on: windows-latest
+    # Pinned: the project builds with the v145 toolset, which this image carries (VS 2026).
+    runs-on: windows-2025-vs2026
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,12 +46,6 @@ jobs:
         uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
         with:
           msbuild-architecture: x64
-
-      - name: Setup NuGet
-        uses: NuGet/setup-nuget@fd55a6f3b34392fa83fde1454582407d8c714123 # v4.0
-
-      - name: Restore NuGet packages
-        run: nuget restore ChrisWareOffline.slnx
 
       - name: Build (Release x64)
         run: msbuild ChrisWareOffline.slnx /p:Configuration=Release /p:Platform=x64 /m
@@ -63,7 +63,7 @@ jobs:
 
   release:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
@@ -89,6 +89,7 @@ jobs:
           mkdir -p "stage/$pkg"
           cp built/dinput8.dll built/sc-offline.exe "stage/$pkg/"
           cp launcher/sc-offline.ini launcher/sc-offline.sh README.md CHANGELOG.md LICENSE "stage/$pkg/"
+          git ls-files -z docs | xargs -0 -r cp --parents -t "stage/$pkg/"
           git ls-files -z data | xargs -0 cp --parents -t "stage/$pkg/"
           chmod +x "stage/$pkg/sc-offline.sh"
           (cd stage && zip -qr "../$pkg.zip" "$pkg")
@@ -102,10 +103,10 @@ jobs:
             ${{ env.ZIP }}
             built/dinput8.dll
           generate_release_notes: true
-          # v1.x and later are real releases; every other tag ships as a
-          # pre-release, so an unfinished build can never look like the
-          # recommended download. Promote a played build with
-          # `gh release edit <tag> --prerelease=false` instead of retagging.
+          # v1.x and later publish as full releases; v0.x tags publish as
+          # pre-releases. A maintainer may promote one to Latest
+          # (`gh release edit <tag> --prerelease=false --latest`) before anyone
+          # has played it; the release notes then say it is untested.
           prerelease: ${{ !startsWith(github.ref_name, 'v1.') }}
           body: |
             **Built from this repository's source** — commit `${{ github.sha }}` on
@@ -115,7 +116,8 @@ jobs:
 
             **Playing:** download `sc-offline-${{ github.ref_name }}.zip`, extract it, and run
             `sc-offline.exe` (Linux, experimental: `sc-offline.sh`). Do the README's one-time
-            Setup first. `dinput8.dll` is attached on its own for anyone swapping DLLs.
+            Setup first; `sc-offline.exe status` checks it. `dinput8.dll` is attached on its
+            own for anyone swapping DLLs.
 
             Every runtime path in a release is unproven until someone has run it.
             If something breaks, send back the matching lines from `mod.log` and

@@ -884,7 +884,7 @@ static void DrawBuildTab(bool& keepOpen) {
     float reach = Menu_BuildReach();
     ImGui::SetNextItemWidth(-1);
     ImGui::SliderFloat("##reach", &reach, 5.0f, 300.0f, "Reach %.0f m");
-    ImGui::SetItemTooltip("How far ahead objects are placed. They land on the ground where you look.");
+    ImGui::SetItemTooltip("How far ahead objects are placed. They land on the ground where you look, or under the point this far out.");
     Menu_SetBuild(build, reach);
     const bool building = Menu_BuildModeActive();
     if (PrimaryButton(building ? "Stop building (F6)" : "Start building (F6)")) {
@@ -998,15 +998,19 @@ static void DrawSq42Tab(bool& keepOpen) {
     for (int i = 0; i < Menu_S42SettingCount(); ++i) {
         bool on = Menu_S42SettingOn(i);
         ImGui::PushID(i);
+        const bool known = Menu_S42SettingKnown(i);   // greyed until the game thread has read the cvar
+        ImGui::BeginDisabled(!known);
         if (ImGui::Checkbox(Menu_S42SettingLabel(i), &on)) Menu_RequestS42Setting(i, on);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Menu_S42SettingTip(i));
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("%s", known ? Menu_S42SettingTip(i) : "Reading this setting from the game...");
         ImGui::PopID();
     }
 
     ImGui::SeparatorText("Spawn");
     {
         static int   thing = -1;
-        static char  thingFilter[64] = "sq42";
+        static char  thingFilter[64] = "";
         static bool  inFront = true;
         static float ahead = 8.0f;
         const int buildables = Menu_BuildCount();
@@ -1023,10 +1027,12 @@ static void DrawSq42Tab(bool& keepOpen) {
             if (thing >= buildables) thing = 0;
             ImGui::Checkbox("Spawn in front of you", &inFront);
             ImGui::SetNextItemWidth(-1);
-            ImGui::InputTextWithHint("##thingFilter", "search buildables...", thingFilter, sizeof(thingFilter));
+            ImGui::InputTextWithHint("##thingFilter", "search the [sq42] group...", thingFilter, sizeof(thingFilter));
             ImGui::SetNextItemWidth(-1);
             if (ImGui::BeginCombo("##sq42thing", Menu_BuildName(thing), ImGuiComboFlags_HeightLargest)) {
                 for (int i = 0; i < buildables; ++i) {
+                    // Only the [sq42] group, like the original; the text filter narrows it further.
+                    if (_stricmp(Menu_BuildCategory(i), "sq42") != 0) continue;
                     const char* name = Menu_BuildName(i);
                     if (!MatchesFilter(name, thingFilter)) continue;
                     ImGui::PushID(i);
@@ -1081,9 +1087,19 @@ static void DrawSq42Tab(bool& keepOpen) {
 
     static int   pick = 0;
     static char  sqFilter[64] = "";
-    static float height = 20.0f;
+    static float height = 30.0f;   // the original's fixed spawn height for your own ships
     static bool  sit = true;
     if (pick >= n) pick = 0;
+    // Greys out classes this game build doesn't have, like the original, instead of failing
+    // after the click with "unknown entity class".
+    auto known = [](const char* cls) {
+        const int count = Menu_ShipCount();
+        if (count < 0) return true;   // ship list still loading: don't block
+        const MenuShip* ships = Menu_Ships();
+        for (int i = 0; i < count; ++i)
+            if (_stricmp(ships[i].name, cls) == 0) return true;
+        return false;
+    };
 
     ImGui::TextWrapped("Your ships put you in the pilot seat; the Vanduul ones spawn 300 m up and come for you.");
     ImGui::SetNextItemWidth(-1);
@@ -1093,17 +1109,23 @@ static void DrawSq42Tab(bool& keepOpen) {
         for (int i = 0; i < n; ++i) {
             if (sqFilter[0] && !MatchesFilter(list[i].label, sqFilter)) continue;
             ImGui::PushID(i);
-            if (ImGui::Selectable(list[i].label, i == pick)) pick = i;
+            const bool have = known(list[i].cls);
+            if (ImGui::Selectable(list[i].label, i == pick, have ? 0 : ImGuiSelectableFlags_Disabled)) pick = i;
+            if (!have) ImGui::SetItemTooltip("%s isn't in this game build's ship list.", list[i].cls);
             if (i == pick) ImGui::SetItemDefaultFocus();
             ImGui::PopID();
         }
         ImGui::EndCombo();
     }
+    const bool pickKnown = known(list[pick].cls);
     if (list[pick].sit) {
         ImGui::SliderFloat("height above me (m)", &height, 0.0f, 500.0f, "%.0f");
         ImGui::Checkbox("put me in the pilot seat", &sit);
     }
-    if (ImGui::Button("Spawn", ImVec2(-1, 42))) {
+    ImGui::BeginDisabled(!pickKnown);
+    const bool spawnClicked = ImGui::Button("Spawn", ImVec2(-1, 42));
+    ImGui::EndDisabled();
+    if (spawnClicked) {
         Menu_RequestSpawnClass(list[pick].cls,
                                list[pick].sit ? height : list[pick].height,
                                list[pick].sit && sit, list[pick].sit && sit,
@@ -1112,14 +1134,22 @@ static void DrawSq42Tab(bool& keepOpen) {
     }
 
     ImGui::SeparatorText("Console");
-    static char cmd[192] = "";
-    ImGui::SetNextItemWidth(-1);
-    if (ImGui::InputTextWithHint("##console",
-                                 "a console command, e.g. i_target_selector.targeting2_enabled 1",
-                                 cmd, sizeof(cmd), ImGuiInputTextFlags_EnterReturnsTrue) && cmd[0]) {
+    static char cmd[256] = "";
+    const bool consoleReady = Menu_ConsoleReady();
+    ImGui::BeginDisabled(!consoleReady);
+    const float runWidth = ImGui::CalcTextSize("Run").x + ImGui::GetStyle().FramePadding.x * 2;
+    ImGui::SetNextItemWidth(-(runWidth + ImGui::GetStyle().ItemSpacing.x));
+    bool run = ImGui::InputTextWithHint("##console",
+                                        "a console command, e.g. i_target_selector.targeting2_enabled 1",
+                                        cmd, sizeof(cmd), ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SameLine();
+    run |= ImGui::Button("Run");
+    ImGui::EndDisabled();
+    if (run && cmd[0]) {
         Menu_RunConsole(cmd);
         cmd[0] = 0;
     }
+    if (!consoleReady) ImGui::TextDisabled("The game's console wasn't found yet.");
     ImGui::TextWrapped("Runs in the game's own console. What it did shows in the game's log, not here.");
 }
 

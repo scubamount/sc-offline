@@ -58,6 +58,8 @@ static SRWLOCK       g_lock = SRWLOCK_INIT;
 static char          g_command[256];
 static volatile LONG g_commandPending = 0;
 
+bool Menu_ConsoleReady() { return g_console && *g_console; }
+
 void Menu_RunConsole(const char* cmd) {
     AcquireSRWLockExclusive(&g_lock);
     strncpy_s(g_command, cmd, _TRUNCATE);
@@ -128,6 +130,7 @@ int         Menu_S42SettingCount() { return kS42SettingCount; }
 const char* Menu_S42SettingLabel(int i) { return i >= 0 && i < kS42SettingCount ? kS42Settings[i].label : ""; }
 const char* Menu_S42SettingTip(int i)   { return i >= 0 && i < kS42SettingCount ? kS42Settings[i].tip   : ""; }
 bool        Menu_S42SettingOn(int i)    { return i >= 0 && i < kS42SettingCount && g_s42On[i] == 1; }
+bool        Menu_S42SettingKnown(int i) { return i >= 0 && i < kS42SettingCount && g_s42On[i] >= 0; }
 
 // One pending slot per toggle rather than one overall, so two toggles inside the
 // same game tick both land. Value first, mask second: a reader that sees the bit

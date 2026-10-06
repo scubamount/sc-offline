@@ -1,0 +1,13 @@
+# Line endings by file type, so a clone on any OS builds and runs.
+* text=auto
+*.sh        text eol=lf
+*.ini       text eol=crlf
+*.bat       text eol=crlf
+*.vcxproj   text eol=crlf
+*.filters   text eol=crlf
+*.slnx      text eol=crlf
+*.dll       binary
+*.exe       binary
+*.webp      binary
+*.png       binary
+*.jpg       binary
