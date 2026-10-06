@@ -1,5 +1,34 @@
 # Changelog
 
+## sc-offline 0.2.0-rc3
+
+Brings ours in line with the original author's prebuilt DLL, based on a Ghidra decompile of it.
+Release candidate: compiled and checked, not yet run in game.
+
+### Outfits
+- Outfits that don't name a head (all the Navy, Marine, bridge, deck and medic ones) get the
+  default face instead of stripping the head. Named heads get eyes and teeth when the outfit
+  lists none.
+- Hats, eye and head accessories, Vanduul horns and jewellery go on the head.
+- The belt / vest layer (`Clothing_Torso2`) sits inside `Clothing_Torso_1`, and clothing no
+  longer nests inside armor. An undersuit is added when an outfit names armor but no undersuit.
+- Unknown item names in `outfits.txt` are skipped at load, and outfits left empty are dropped;
+  `mod.log` counts both.
+- Picking an outfit only selects it; **Wear SQ42 outfit** wears the selection. The built-in
+  `sq42_pilot_*` preset is gone (none of its item names exist in the original DLL).
+- The **SQ42 visor HUD** checkbox now applies to the gear menu's **Equip** too, and shows
+  before the outfit list has loaded.
+
+### Menu
+- Typing in the ship search box selects the first matching ship, so a filtered-out ship can't
+  be spawned by accident.
+- The Squadron 42 spoiler warning has **OK** and **Back**; Back returns to the first tab.
+- The Bengal rows are labelled for what they do: **Bengal (UEE)** and **Bengal + Vanduul wing**.
+
+### Missions
+- The AI debug-nodes console command uses the original's name `SubsumptionEnableDebugNodes`
+  unless only the `ai_` form exists in this game build.
+
 ## sc-offline 0.2.0-rc2
 
 The launcher release. Same mod as 0.2.0-rc1; how you start it changed.

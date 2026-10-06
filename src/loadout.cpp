@@ -116,17 +116,47 @@ static const char* MatchingMag(const char* gun) {
 
 bool LoadoutApiReady() { return g_lo.ok; }
 
+static volatile LONG g_s42VisorHud = 0;
+void Menu_SetS42VisorHud(bool on) { InterlockedExchange(&g_s42VisorHud, on ? 1 : 0); }
+
 std::string LoadoutItem(const char* port, const char* name, const std::string& children) {
     std::string s = std::string("<Item portName=\"") + port + "\" itemName=\"" + name + "\"";
     return children.empty() ? s + "/>" : s + "><Items>" + children + "</Items></Item>";
+}
+
+// The player's head, as the original builds it (orig 1800265d0). A head item is always
+// emitted: with no Head_ItemPort the player gets the default PU face, otherwise the named
+// head gets PU_Head_Eyes / PU_Head_Teeth when the outfit names none. The lens always sits
+// under the eyes; Default_LensDisplay is the SQ42 visor HUD the Settings checkbox picks.
+// Accessories (hat, eye/head accessories, horns, jewellery) go under the head in both cases.
+std::string HeadItem(const HeadParts& p) {
+    const char* lens = InterlockedCompareExchange(&g_s42VisorHud, 0, 0) != 0
+                     ? "Default_LensDisplay" : "Default_LensDisplay_PU";
+    if (!p.head)
+        return LoadoutItem("Head_ItemPort", "PU_Protos_Head",
+                   LoadoutItem("Eyes_ItemPort", "Head_Eyes_Blue_01", LoadoutItem("Lens_ItemPort", lens))
+                   + "<Item portName=\"Teeth_ItemPort\" itemName=\"Head_Teeth\" tag=\"Char_Accessory_Head\"/>"
+                   + "<Item portName=\"Hair_ItemPort\" itemName=\"hair_37\" tag=\"Char_Head_Hair Male\"><Items>"
+                   + LoadoutItem("Material_Variant", "Hair_Var_Brown") + "</Items></Item>"
+                   + p.accessories);
+    std::string children = LoadoutItem("Eyes_ItemPort", p.eyes ? p.eyes : "PU_Head_Eyes", LoadoutItem("Lens_ItemPort", lens))
+                         + LoadoutItem("Teeth_ItemPort", p.teeth ? p.teeth : "PU_Head_Teeth");
+    if (p.eyebrow) children += LoadoutItem("Eyebrow_ItemPort", p.eyebrow);
+    if (p.hair)    children += LoadoutItem("Hair_ItemPort", p.hair, p.hairColor ? LoadoutItem("Material_Variant", p.hairColor) : std::string());
+    return LoadoutItem("Head_ItemPort", p.head, children + p.accessories);
+}
+
+// MobiGlas sits under the body in both the gear menu and outfits.
+std::string MobiGlasItem() {
+    return LoadoutItem("mobiglas_attach", "MobiGlas",
+               "<Item portName=\"mobiglas_screen_attach\" itemName=\"PersonalMobiGlas_PU\" tag=\"MobiGlas\"/>"
+               "<Item portName=\"legacy_mobiglas_screen_attach\" itemName=\"LegacyMobiGlas\" tag=\"MobiGlas\"/>");
 }
 
 static std::string Gun(const char* port, const char* gun) {
     const char* mag = MatchingMag(gun);
     return LoadoutItem(port, gun, mag ? LoadoutItem("magazine_attach", mag) : std::string());
 }
-
-static std::string HeadAndMobiGlas();
 
 static std::string LoadoutXml(const int picks[Gear_SlotCount]) {
     const char* torso   = Pick(picks, Gear_Torso);
@@ -153,19 +183,9 @@ static std::string LoadoutXml(const int picks[Gear_SlotCount]) {
 
     const char* suit = Pick(picks, Gear_Undersuit);
     return "<Loadout><Items>" + LoadoutItem("Body_ItemPort", "body_01",
-        LoadoutItem("Armor_Undersuit", suit ? suit : "rsi_odyssey_undersuit_01_01_01", onSuit) + HeadAndMobiGlas())
+        LoadoutItem("Armor_Undersuit", suit ? suit : "rsi_odyssey_undersuit_01_01_01", onSuit)
+        + HeadItem(HeadParts{}) + MobiGlasItem())
         + "</Items></Loadout>\n";
-}
-
-static std::string HeadAndMobiGlas() {
-    return LoadoutItem("Head_ItemPort", "PU_Protos_Head",
-                LoadoutItem("Eyes_ItemPort", "Head_Eyes_Blue_01", LoadoutItem("Lens_ItemPort", "Default_LensDisplay_PU"))
-                + "<Item portName=\"Teeth_ItemPort\" itemName=\"Head_Teeth\" tag=\"Char_Accessory_Head\"/>"
-                + "<Item portName=\"Hair_ItemPort\" itemName=\"hair_37\" tag=\"Char_Head_Hair Male\"><Items>"
-                + LoadoutItem("Material_Variant", "Hair_Var_Brown") + "</Items></Item>")
-        + LoadoutItem("mobiglas_attach", "MobiGlas",
-               "<Item portName=\"mobiglas_screen_attach\" itemName=\"PersonalMobiGlas_PU\" tag=\"MobiGlas\"/>"
-               "<Item portName=\"legacy_mobiglas_screen_attach\" itemName=\"LegacyMobiGlas\" tag=\"MobiGlas\"/>");
 }
 
 static const char* LoadLoadout(const char* gamePath) {

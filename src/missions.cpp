@@ -1,4 +1,5 @@
 #include "missions.h"
+#include "cvars.h"
 #include "spawner.h"
 #include "teleport.h"
 #include "hooks.h"
@@ -283,7 +284,10 @@ void ProcessMissions() {
     __try { live = GetLocalPlayer(actor, entity); } __except (EXCEPTION_EXECUTE_HANDLER) {}
     if (!live) return;
     if (stage == 0) {
-        Menu_RunConsole("ai_SubsumptionEnableDebugNodes 1");
+        // The original sends the bare name; keep the ai_ form only for builds that register it.
+        float v;
+        Menu_RunConsole(GetCVarNow("ai_SubsumptionEnableDebugNodes", v) && !GetCVarNow("SubsumptionEnableDebugNodes", v)
+                        ? "ai_SubsumptionEnableDebugNodes 1" : "SubsumptionEnableDebugNodes 1");
         stage = 1;
         return;
     }
