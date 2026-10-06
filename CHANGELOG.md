@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Docs
+- README cut to what a player needs; details moved to `docs/` (features, launcher, data files,
+  Linux, build). The release zip now includes `docs/`.
+- Corrected: the download is about 1.4 MB, not 1 GB; 2153 contracts are listed, 1657 can run with
+  the shipped scripts and 491 are offered; the release policy allows promoting an unplayed build;
+  the launcher leaves `user\client\0\default_1.xml` behind.
+
 ## sc-offline 0.2.0-rc3
 
 Brings ours in line with the original author's prebuilt DLL, based on a Ghidra decompile of it.
