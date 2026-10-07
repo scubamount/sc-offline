@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 (unreleased)
+## 0.4.0 (2026-10-07)
 
 - **The launcher sets up offline play itself.** Each play, its helper blocks `StarCitizen.exe` in Windows Firewall, adds the EAC hosts line and renames `EasyAntiCheat_EOS.exe`, then undoes exactly those changes when the game closes. New `sc-offline.ini` switches `block_network`, `eac_hosts`, `eac_rename` (all on). Changes are recorded in `%ProgramData%\sc-offline\pc-changes.txt`; after a crash, `status` lists them, `uninstall` undoes them and `play` offers to.
 - The manual EAC steps are gone from the README's Setup; Windows now asks for administrator rights once per play.
