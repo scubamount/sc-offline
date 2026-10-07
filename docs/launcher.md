@@ -176,6 +176,8 @@ Keep `Game.log` if you want to report a bug. Set `clean_logs = off` in `sc-offli
 
 Each line is `key = value`. Lines starting with `#` are comments. An unknown key is reported when the launcher starts, not silently ignored.
 
+There is no wallet setting: your aUEC balance is kept in `data\wallet.txt` (see [Features](features.md#player)).
+
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `game` | (found automatically) | Your Star Citizen folder. You can point at `Roberts Space Industries`, at `StarCitizen`, at the channel folder, or at the folder that holds `StarCitizen`. |
@@ -184,8 +186,8 @@ Each line is `key = value`. Lines starting with `#` are comments. An unknown key
 | `clean_logs` | `ask` | After the game closes, list this session's game logs and ask (twice) before deleting them. `off` skips it. |
 | `channel` | `LIVE` | Which install to use when `game` points above it: `LIVE`, `PTU`, `EPTU`, and so on. |
 | `boot_map` | `PU_All` | `PU_All` loads every star system, so Travel can reach Pyro and Nyx. |
-| `start_ship` | `DRAK_Cutlass_Black` | The ship you start in. |
-| `start` | (empty) | `Daymar` starts you over Daymar, in that ship. |
+| `start_ship` | `DRAK_Cutlass_Black` | The ship used by `start = Daymar`. **Without `start = Daymar` it does nothing.** |
+| `start` | (empty) | Empty: the game's own spawn (Orison with `boot_map = PU`, a Pyro station with `PU_All`). `Daymar`: about 10 seconds after you spawn, `start_ship` is spawned over Daymar and you're put in its pilot seat. |
 | `block_network` | `on` | Block `StarCitizen.exe`, the RSI Launcher and the game's `CrashHandler.exe` in Windows Firewall while you play. See [PC changes](#pc-changes). |
 | `eac_hosts` | `on` | Add the EAC hosts line while you play. |
 | `eac_rename` | `on` | Rename `EasyAntiCheat_EOS.exe` while you play. |

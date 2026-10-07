@@ -8,7 +8,7 @@ Most of the lists below are plain text files in `data/`, and the counts are take
 
 - Noclip, god mode, infinite ammo.
 - Gear menu: equip any of 1489 items, sorted into ten slots (`items.txt`).
-- Wallet: your aUEC balance is loaded from `data/wallet.txt` when you spawn and saved back as you spend. Edit that file to change the starting amount.
+- Wallet: your aUEC balance is loaded from `data/wallet.txt` when you spawn and saved back as it changes. The file holds just the number; edit it while the game is closed to change your balance. Without the file, you start with the `aUEC amount` in `data/OfflineDB/default_1.xml` (100,000,000). Once `wallet.txt` exists, that amount is no longer used, so delete `wallet.txt` to go back to it.
 
 ## Travel
 
@@ -62,6 +62,15 @@ Background image settings. Save a picture as `data/menu_background.png` (or `.jp
 ## Logging
 
 Everything the mod does is written to `data/mod.log`. The first line of the file is the version.
+
+## Not available offline
+
+These need RSI's servers, and the mod doesn't replace them:
+
+- Character creation and customization: the main menu is skipped. Not planned ([#24](https://github.com/scubamount/sc-offline/issues/24)).
+- ASOP fleet terminals, which load forever, and the mobiGlas vehicle manager, which shows locked blank entries. Use the **Vehicles** tab to spawn ships.
+- Your account's ships, items and hangar.
+- Choosing a spawn location. You start at the game's own spawn, or over Daymar with `start = Daymar` (see [launcher.md](launcher.md#sc-offlineini)).
 
 ## Items still to confirm in game
 

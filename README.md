@@ -99,7 +99,7 @@ The light at the top shows whether it's safe to go online. Questions (`Update no
 | <kbd>F7</kbd> | Save your position |
 | <kbd>F8</kbd> | Teleport back to the saved position |
 
-The launcher finds your install by itself: it asks the RSI Launcher where the game is, checks the usual folders, then searches your drives, and if all that fails it lets you pick the folder. It remembers the answer for next time. To force a folder, set `game =` in `sc-offline.ini`. The same file also chooses your start ship, the boot map and the channel (`LIVE`, `PTU`, and so on); see [docs/launcher.md](docs/launcher.md).
+The launcher finds your install by itself: it asks the RSI Launcher where the game is, checks the usual folders, then searches your drives, and if all that fails it lets you pick the folder. It remembers the answer for next time. To force a folder, set `game =` in `sc-offline.ini`. The same file also chooses the boot map, the channel (`LIVE`, `PTU`, and so on) and an optional start in a ship over Daymar (`start = Daymar` with `start_ship`); see [docs/launcher.md](docs/launcher.md). ASOP terminals, the vehicle manager and character creation don't work offline; see [Not available offline](docs/features.md#not-available-offline).
 
 What's in each menu tab: [docs/features.md](docs/features.md).
 
