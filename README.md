@@ -31,7 +31,7 @@ Spawn ships, NPCs and buildings, travel the star systems and wear Squadron 42 ou
 
 1. **Download** `sc-offline-<version>.zip` from the [latest release](https://github.com/scubamount/sc-offline/releases/latest) and extract it anywhere.
 2. **Close** the RSI Launcher and the game.
-3. **Run** `sc-offline.exe` and say yes to the administrator prompt.
+3. **Open** `sc-offline.exe`, click **Play**, and say yes to the administrator prompt.
 4. **Press `M`** once the game has loaded you in.
 
 The launcher puts the mod into your game folder while you play and takes it out again afterwards, along with every change it made to your PC.
@@ -71,8 +71,20 @@ When the game closes, it undoes exactly what it changed and prints what it undid
 
 ## Play
 
+Double-clicking `sc-offline.exe` opens its window:
+
+| Button | Does the same as |
+| --- | --- |
+| **Play** | `sc-offline.exe play`: add the mod, start the game, take the mod out when it closes |
+| **Status** | `sc-offline.exe status`: check the setup, change nothing |
+| **Update** | `sc-offline.exe update`: check GitHub for a newer sc-offline |
+| **Install** / **Uninstall** | `sc-offline.exe install` / `uninstall` |
+| **Open settings** / **Open logs** | open `sc-offline.ini` in Notepad / the `data` folder |
+
+The light at the top shows whether it's safe to go online. Questions (`Update now?`, `Delete these files?`) get **Yes** and **No** buttons. Every command still works from a terminal.
+
 1. Close the RSI Launcher and the game.
-2. Double-click `sc-offline.exe`. It prints the game folder it found. Windows asks for administrator rights; say yes. That prompt is for the small helper that makes the changes above and copies the mod in and out; the game itself never runs as administrator.
+2. Double-click `sc-offline.exe` and click **Play**. The window shows the game folder it found. Windows asks for administrator rights; say yes. That prompt is for the small helper that makes the changes above and copies the mod in and out; the game itself never runs as administrator.
 3. Once the game has loaded you in, press <kbd>M</kbd> to open the menu.
 
 | Key | Action |
@@ -154,8 +166,8 @@ That's expected until the mod is updated for the new game version.
 
 ## Go back online
 
-1. Close the game and wait for the launcher window to say the changes are undone.
-2. Run `sc-offline.exe status`. It should say `Installed: no` and list no leftover PC changes. If not, run `sc-offline.exe uninstall`.
+1. Close the game.
+2. In the sc-offline window, check the light at the top. **Green** means the mod is out of the game folder and every PC change is undone. **Red** lists what is left: click **Uninstall**, which is enabled only then. (From a terminal: `sc-offline.exe status`, then `sc-offline.exe uninstall` if needed.)
 3. If you set `eac_hosts` or `eac_rename` to `off` and made those changes by hand, undo them by hand: rename `EasyAntiCheat_EOS.exe.bak` back, delete the `modules-cdn.eac-prod.on.epicgames.com` line from your hosts file, and run `ipconfig /flushdns`.
 
 ## More docs

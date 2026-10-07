@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.0 (2026-10-07)
+
+- **Launcher window** ([#20](https://github.com/scubamount/sc-offline/issues/20)). Double-clicking `sc-offline.exe` opens a window with **Play**, **Status**, **Update**, **Install**, **Uninstall**, **Open settings** and **Open logs**. Each button runs the same CLI command, its output shows in the window, and its questions get Yes/No buttons. An **Online-safe** light is green when the mod is out of Bin64 and no PC changes are left, red with a list otherwise; **Uninstall** is enabled only when there is something to undo. Every CLI command works as before; `--console` keeps the old double-click behaviour.
+
 ## 0.5.1 (2026-10-07)
 
 - **Firewall also blocks the RSI Launcher and CIG's `CrashHandler.exe`** while you play ([#17](https://github.com/scubamount/sc-offline/issues/17)), recorded and removed with the existing rule. `sc-offline.exe` stays online for updates.

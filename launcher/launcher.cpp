@@ -32,6 +32,7 @@
 #include <shobjidl.h>
 #include <tlhelp32.h>
 #include <winhttp.h>
+#include <commctrl.h>
 #include <cctype>
 #include <cstdarg>
 #include <cstdio>
@@ -50,6 +51,11 @@
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "user32.lib")
+#pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "comctl32.lib")
+// Visual styles for the window (issue #20); MSVC embeds this, MinGW builds get classic controls.
+#pragma comment(linker, "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 using std::wstring;
 
@@ -102,7 +108,12 @@ static void OpenLog(const wstring& dataDir, bool append, const char* header) {
 
 // Only waits for a key when this exe owns its console window (double-clicked), so the window
 // doesn't vanish before the player reads the message. From a terminal it returns at once.
+// Set by the launcher window (issue #20) for the command it runs: output goes to a pipe the window
+// shows, and [y/N] questions are answered with its Yes/No buttons through stdin.
+static bool GuiChild() { return GetEnvironmentVariableW(L"SC_OFFLINE_GUI", nullptr, 0) > 0; }
+
 static void PauseIfOwnConsole() {
+    if (GuiChild()) return;
     DWORD ids[2];
     if (GetConsoleProcessList(ids, 2) > 1) return;
     std::printf("\nPress Enter to close this window.");
@@ -110,7 +121,8 @@ static void PauseIfOwnConsole() {
 }
 
 // Exit codes: 0 ok, 1 error, 2 Easy Anti-Cheat active, 3 the game is running.
-enum { kExitOk = 0, kExitError = 1, kExitEac = 2, kExitRunning = 3 };
+// kExitRestart: only for the window; an update was applied and the window should restart itself.
+enum { kExitOk = 0, kExitError = 1, kExitEac = 2, kExitRunning = 3, kExitRestart = 10 };
 
 static int FailCode(int code, const char* fmt, ...) {
     va_list a; va_start(a, fmt);
@@ -1004,7 +1016,7 @@ static wstring PickFolder() {
         dlg->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
         dlg->SetTitle(L"sc-offline: pick your StarCitizen folder (the one with LIVE in it)");
         IShellItem* item = nullptr;
-        if (SUCCEEDED(dlg->Show(GetConsoleWindow())) && SUCCEEDED(dlg->GetResult(&item))) {
+        if (SUCCEEDED(dlg->Show(GuiChild() ? nullptr : GetConsoleWindow())) && SUCCEEDED(dlg->GetResult(&item))) {
             PWSTR path = nullptr;
             if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) { result = path; CoTaskMemFree(path); }
             item->Release();
@@ -1015,7 +1027,7 @@ static wstring PickFolder() {
     return result;
 }
 
-static bool OwnsConsoleInput() { DWORD m; return GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &m) != 0; }
+static bool OwnsConsoleInput() { DWORD m; return GuiChild() || GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &m) != 0; }
 
 static bool OwnsConsole() { DWORD ids[2]; return GetConsoleProcessList(ids, 2) <= 1; }
 
@@ -1758,6 +1770,294 @@ static CheckResult SelfChecks(const wstring& here, const Config& cfg, const Game
     return r;
 }
 
+
+// --- Launcher window (issue #20) -----------------------------------------------------------
+// Double-clicking sc-offline.exe (no arguments, its own console) opens this window instead of the
+// console run. Every button runs `sc-offline.exe <command>` as a hidden child with SC_OFFLINE_GUI
+// set, so the window and the CLI share one code path: the child's output is streamed into the box,
+// and its [y/N] questions are answered by the Yes/No buttons through its stdin.
+
+enum { kIdPlay = 101, kIdStatus, kIdUpdate, kIdInstall, kIdUninstall, kIdSettings, kIdLogs, kIdYes, kIdNo,
+       kIdOutput, kIdLight, kIdLightText, kIdPrompt };
+enum { kMsgOutput = WM_APP + 1, kMsgDone, kTimerLight = 1 };
+
+struct Gui {
+    HWND wnd = nullptr, out = nullptr, light = nullptr, lightText = nullptr, prompt = nullptr, yes = nullptr, no = nullptr;
+    HWND buttons[5] = {};
+    HANDLE child = nullptr, childIn = nullptr;
+    std::wstring tail;           // the end of the output, to spot a [y/N] question
+    std::wstring running;        // command being run, "" when idle
+    int state = 0;               // 0 grey (unknown / game running), 1 green, 2 red
+    bool hasLeftovers = false;
+    HFONT font = nullptr, mono = nullptr;
+    HBRUSH brushes[3] = {};
+    wstring here;
+};
+static Gui g_gui;
+
+// What the light shows. Uses only cheap facts (no drive search): the game folder from
+// sc-offline.ini or the one remembered from the last run.
+static void RefreshLight() {
+    Gui& g = g_gui;
+    Config cfg;
+    { FILE* saved = g_log; g_log = nullptr; ReadConfig(g.here + L"\\sc-offline.ini", cfg); g_log = saved; }
+    wstring bin = cfg.game.empty() ? L"" : ToBin64(cfg.game, cfg.channel);
+    if (bin.empty()) { std::vector<Found> f; FromRemembered(g.here, cfg.channel, f); if (!f.empty()) bin = f.front().bin; }
+    std::wstring text;
+    std::vector<std::wstring> left;
+    if (!bin.empty()) {
+        const GamePaths p(bin);
+        const DllInfo d = Identify(p.dll);
+        if (IsFile(p.marker) || (d.present && d.ours)) left.push_back(L"the mod is still in Bin64");
+    }
+    const std::string pc = PcChangesLeft();
+    if (!pc.empty()) {
+        for (const FwRule& r : kFwRules) if (Field(pc, r.key) == "added") left.push_back(std::wstring(L"firewall rule \"") + r.name + L"\"");
+        if (Field(pc, "hosts") == "added") left.push_back(L"the EAC line in the hosts file");
+        if (Field(pc, "eac") == "renamed") left.push_back(L"EasyAntiCheat_EOS.exe renamed to .bak");
+    }
+    g.hasLeftovers = !left.empty();
+    if (GameRunning()) {
+        g.state = 0; text = L"Star Citizen is running. When it closes, sc-offline takes the mod out and undoes its PC changes.";
+    } else if (!left.empty()) {
+        g.state = 2; text = L"NOT safe to go online yet. Click Uninstall to undo: ";
+        for (size_t i = 0; i < left.size(); ++i) text += (i ? L"; " : L"") + left[i];
+    } else if (bin.empty()) {
+        g.state = 0; text = L"Game folder not known yet. Click Status or Play to find it. No PC changes are left over.";
+    } else {
+        g.state = 1; text = L"Safe to go online: the mod is out of the game folder and no PC changes are left.";
+    }
+    SetWindowTextW(g.lightText, text.c_str());
+    InvalidateRect(g.light, nullptr, TRUE);
+    const bool idle = g.running.empty();
+    const bool gameUp = g.state == 0 && GameRunning();
+    for (int i = 0; i < 5; ++i) {
+        bool on = idle && !gameUp;
+        if (i == 4) on = on && g.hasLeftovers;   // Uninstall: only with something to undo
+        if (i == 1) on = idle;                   // Status: always, it changes nothing
+        EnableWindow(g.buttons[i], on);
+    }
+}
+
+static void AppendOutput(const std::wstring& w) {
+    Gui& g = g_gui;
+    std::wstring t;
+    for (wchar_t c : w) { if (c == L'\r') continue; if (c == L'\n') t += L"\r\n"; else t += c; }
+    const int len = GetWindowTextLengthW(g.out);
+    if (len > 400000) { SendMessageW(g.out, EM_SETSEL, 0, 100000); SendMessageW(g.out, EM_REPLACESEL, FALSE, (LPARAM)L""); }
+    const int end = GetWindowTextLengthW(g.out);
+    SendMessageW(g.out, EM_SETSEL, end, end);
+    SendMessageW(g.out, EM_REPLACESEL, FALSE, (LPARAM)t.c_str());
+    SendMessageW(g.out, EM_SCROLLCARET, 0, 0);
+    g.tail += w;
+    if (g.tail.size() > 600) g.tail.erase(0, g.tail.size() - 600);
+    // A question is the last line, ending in "[y/N] " with no newline after it.
+    const size_t q = g.tail.rfind(L"[y/N] ");
+    const bool asking = q != std::wstring::npos && q + 6 == g.tail.size();
+    if (asking) {
+        const size_t nl = g.tail.find_last_of(L'\n', q);
+        SetWindowTextW(g.prompt, g.tail.substr(nl == std::wstring::npos ? 0 : nl + 1, q - (nl == std::wstring::npos ? 0 : nl + 1)).c_str());
+    }
+    ShowWindow(g.prompt, asking ? SW_SHOW : SW_HIDE);
+    ShowWindow(g.yes, asking ? SW_SHOW : SW_HIDE);
+    ShowWindow(g.no, asking ? SW_SHOW : SW_HIDE);
+    if (asking) SetFocus(g.no);
+}
+
+struct ReaderArgs { HANDLE pipe, proc; HWND wnd; };
+static DWORD WINAPI ReaderThread(void* p) {
+    ReaderArgs a = *(ReaderArgs*)p; delete (ReaderArgs*)p;
+    char buf[4096]; DWORD got = 0; std::string pending;
+    while (ReadFile(a.pipe, buf, sizeof(buf), &got, nullptr) && got) {
+        pending.append(buf, got);
+        // Hand over whole UTF-8 sequences only.
+        size_t cut = pending.size();
+        while (cut > 0 && cut > pending.size() - 4 && (pending[cut - 1] & 0xC0) == 0x80) --cut;
+        if (cut > 0 && (unsigned char)pending[cut - 1] >= 0xC0) --cut;
+        if (!cut) continue;
+        const std::wstring w = Wide(pending.substr(0, cut));
+        pending.erase(0, cut);
+        PostMessageW(a.wnd, kMsgOutput, 0, (LPARAM)new std::wstring(w));
+    }
+    if (!pending.empty()) PostMessageW(a.wnd, kMsgOutput, 0, (LPARAM)new std::wstring(Wide(pending)));
+    CloseHandle(a.pipe);
+    WaitForSingleObject(a.proc, INFINITE);
+    DWORD code = 1; GetExitCodeProcess(a.proc, &code);
+    PostMessageW(a.wnd, kMsgDone, code, 0);
+    return 0;
+}
+
+static void RunCommand(const wchar_t* cmd) {
+    Gui& g = g_gui;
+    if (!g.running.empty()) return;
+    SECURITY_ATTRIBUTES sa{ sizeof(sa), nullptr, TRUE };
+    HANDLE outR, outW, inR, inW;
+    if (!CreatePipe(&outR, &outW, &sa, 0)) return;
+    if (!CreatePipe(&inR, &inW, &sa, 0)) { CloseHandle(outR); CloseHandle(outW); return; }
+    SetHandleInformation(outR, HANDLE_FLAG_INHERIT, 0);
+    SetHandleInformation(inW, HANDLE_FLAG_INHERIT, 0);
+    wchar_t self[MAX_PATH * 2]; GetModuleFileNameW(nullptr, self, ARRAYSIZE(self));
+    wstring line = L"\"" + wstring(self) + L"\" " + cmd;
+    STARTUPINFOW si{}; si.cb = sizeof(si); si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = inR; si.hStdOutput = outW; si.hStdError = outW;
+    PROCESS_INFORMATION pi{};
+    SetEnvironmentVariableW(L"SC_OFFLINE_GUI", L"1");
+    const BOOL ok = CreateProcessW(self, line.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, g.here.c_str(), &si, &pi);
+    SetEnvironmentVariableW(L"SC_OFFLINE_GUI", nullptr);
+    CloseHandle(outW); CloseHandle(inR);
+    if (!ok) { CloseHandle(outR); CloseHandle(inW); AppendOutput(L"[!] couldn't start sc-offline.exe " + wstring(cmd) + L"\n"); return; }
+    CloseHandle(pi.hThread);
+    g.child = pi.hProcess; g.childIn = inW; g.running = cmd; g.tail.clear();
+    SetWindowTextW(g.out, L"");
+    AppendOutput(L"> sc-offline.exe " + wstring(cmd) + L"\n");
+    RefreshLight();
+    HANDLE dup = nullptr;
+    DuplicateHandle(GetCurrentProcess(), pi.hProcess, GetCurrentProcess(), &dup, SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, 0);
+    CloseHandle(CreateThread(nullptr, 0, ReaderThread, new ReaderArgs{ outR, dup, g.wnd }, 0, nullptr));
+}
+
+static void Answer(bool yes) {
+    Gui& g = g_gui;
+    if (!g.childIn) return;
+    const char* a = yes ? "y\n" : "n\n"; DWORD put = 0;
+    WriteFile(g.childIn, a, 2, &put, nullptr);
+    AppendOutput(yes ? L"y\n" : L"n\n");
+}
+
+static void Layout(HWND wnd) {
+    Gui& g = g_gui;
+    RECT r; GetClientRect(wnd, &r);
+    const int W = r.right, H = r.bottom, m = 12, bh = 34;
+    MoveWindow(g.light, m, m, 18, 18, TRUE);
+    MoveWindow(g.lightText, m + 28, m - 2, W - 2 * m - 28, 40, TRUE);
+    int x = m; const int y = m + 46;
+    const int widths[] = { 90, 80, 80, 80, 90 };
+    for (int i = 0; i < 5; ++i) { MoveWindow(g.buttons[i], x, y, widths[i], bh, TRUE); x += widths[i] + 6; }
+    MoveWindow(GetDlgItem(wnd, kIdLogs), W - m - 100, y, 100, bh, TRUE);
+    MoveWindow(GetDlgItem(wnd, kIdSettings), W - m - 100 - 6 - 110, y, 110, bh, TRUE);
+    const int qy = H - m - bh;
+    MoveWindow(g.prompt, m, qy + 7, W - 2 * m - 190, 24, TRUE);
+    MoveWindow(g.yes, W - m - 180, qy, 85, bh, TRUE);
+    MoveWindow(g.no, W - m - 90, qy, 90, bh, TRUE);
+    MoveWindow(g.out, m, y + bh + 10, W - 2 * m, qy - (y + bh + 10) - 8, TRUE);
+}
+
+static LRESULT CALLBACK GuiProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
+    Gui& g = g_gui;
+    switch (msg) {
+    case WM_CREATE: {
+        g.wnd = wnd;
+        auto mk = [&](const wchar_t* cls, const wchar_t* text, DWORD style, int id) {
+            HWND h = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style, 0, 0, 10, 10, wnd, (HMENU)(INT_PTR)id, nullptr, nullptr);
+            SendMessageW(h, WM_SETFONT, (WPARAM)g.font, TRUE);
+            return h;
+        };
+        g.light = mk(L"STATIC", L"", SS_NOTIFY, kIdLight);
+        g.lightText = mk(L"STATIC", L"", 0, kIdLightText);
+        const wchar_t* names[] = { L"\u25B6  Play", L"Status", L"Update", L"Install", L"Uninstall" };
+        for (int i = 0; i < 5; ++i) g.buttons[i] = mk(L"BUTTON", names[i], BS_PUSHBUTTON | WS_TABSTOP, kIdPlay + i);
+        SendMessageW(g.buttons[0], BM_SETSTYLE, BS_DEFPUSHBUTTON, TRUE);
+        mk(L"BUTTON", L"Open settings", BS_PUSHBUTTON | WS_TABSTOP, kIdSettings);
+        mk(L"BUTTON", L"Open logs", BS_PUSHBUTTON | WS_TABSTOP, kIdLogs);
+        g.out = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
+                                0, 0, 10, 10, wnd, (HMENU)(INT_PTR)kIdOutput, nullptr, nullptr);
+        SendMessageW(g.out, WM_SETFONT, (WPARAM)g.mono, TRUE);
+        SendMessageW(g.out, EM_SETLIMITTEXT, 0, 0);
+        g.prompt = mk(L"STATIC", L"", 0, kIdPrompt);
+        g.yes = mk(L"BUTTON", L"Yes", BS_PUSHBUTTON | WS_TABSTOP, kIdYes);
+        g.no = mk(L"BUTTON", L"No", BS_PUSHBUTTON | WS_TABSTOP, kIdNo);
+        ShowWindow(g.prompt, SW_HIDE); ShowWindow(g.yes, SW_HIDE); ShowWindow(g.no, SW_HIDE);
+        SetWindowTextW(g.out, (L"sc-offline " + Wide(SCO_VERSION) + L" - Star Citizen offline mod\r\n\r\n"
+            L"Play       add the mod, start the game, take the mod out when it closes\r\n"
+            L"Status     check the setup; changes nothing\r\n"
+            L"Update     check GitHub for a newer sc-offline\r\n"
+            L"Install    add the mod and leave it (Uninstall before going online)\r\n"
+            L"Uninstall  take the mod out and undo the PC changes\r\n\r\n"
+            L"The light above tells you whether it is safe to go back online.\r\n").c_str());
+        SetTimer(wnd, kTimerLight, 3000, nullptr);
+        RefreshLight();
+        return 0;
+    }
+    case WM_SIZE: Layout(wnd); return 0;
+    case WM_GETMINMAXINFO: ((MINMAXINFO*)lp)->ptMinTrackSize = { 720, 420 }; return 0;
+    case WM_TIMER: if (g.running.empty()) RefreshLight(); return 0;
+    case WM_CTLCOLORSTATIC:
+        if ((HWND)lp == g.light) {
+            static const COLORREF c[3] = { RGB(150, 150, 150), RGB(40, 170, 70), RGB(210, 50, 50) };
+            if (!g.brushes[0]) for (int i = 0; i < 3; ++i) g.brushes[i] = CreateSolidBrush(c[i]);
+            return (LRESULT)g.brushes[g.state];
+        }
+        break;
+    case WM_COMMAND:
+        switch (LOWORD(wp)) {
+        case kIdPlay: RunCommand(L"play"); return 0;
+        case kIdStatus: RunCommand(L"status"); return 0;
+        case kIdUpdate: RunCommand(L"update"); return 0;
+        case kIdInstall: RunCommand(L"install"); return 0;
+        case kIdUninstall: RunCommand(L"uninstall"); return 0;
+        case kIdYes: Answer(true); return 0;
+        case kIdNo: Answer(false); return 0;
+        case kIdSettings: ShellExecuteW(wnd, L"open", L"notepad.exe", (L"\"" + g.here + L"\\sc-offline.ini\"").c_str(), nullptr, SW_SHOWNORMAL); return 0;
+        case kIdLogs: { const wstring d = g.here + L"\\data"; CreateDirectoryW(d.c_str(), nullptr);
+                        ShellExecuteW(wnd, L"open", d.c_str(), nullptr, nullptr, SW_SHOWNORMAL); return 0; }
+        }
+        break;
+    case kMsgOutput: { std::wstring* w = (std::wstring*)lp; AppendOutput(*w); delete w; return 0; }
+    case kMsgDone: {
+        const DWORD code = (DWORD)wp;
+        if (g.child) { CloseHandle(g.child); g.child = nullptr; }
+        if (g.childIn) { CloseHandle(g.childIn); g.childIn = nullptr; }
+        ShowWindow(g.prompt, SW_HIDE); ShowWindow(g.yes, SW_HIDE); ShowWindow(g.no, SW_HIDE);
+        g.running.clear();
+        if (code == kExitRestart) {
+            wchar_t self[MAX_PATH * 2]; GetModuleFileNameW(nullptr, self, ARRAYSIZE(self));
+            ShellExecuteW(nullptr, L"open", self, nullptr, g.here.c_str(), SW_SHOWNORMAL);
+            DestroyWindow(wnd);
+            return 0;
+        }
+        AppendOutput(code == 0 ? L"\n[done]\n" : L"\n[finished with exit code " + std::to_wstring(code) + L"; see above]\n");
+        RefreshLight();
+        return 0;
+    }
+    case WM_CLOSE:
+        if (!g.running.empty() &&
+            MessageBoxW(wnd, L"A command is still running. If you close this window, sc-offline still takes the mod out and undoes "
+                             L"its PC changes when the game closes, but any question it asks is answered No.\n\nClose anyway?",
+                        L"sc-offline", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+            return 0;
+        DestroyWindow(wnd);
+        return 0;
+    case WM_DESTROY: PostQuitMessage(0); return 0;
+    }
+    return DefWindowProcW(wnd, msg, wp, lp);
+}
+
+static int RunGui() {
+    g_gui.here = ExeDir();
+    INITCOMMONCONTROLSEX icc{ sizeof(icc), ICC_STANDARD_CLASSES };
+    InitCommonControlsEx(&icc);
+    NONCLIENTMETRICSW ncm{}; ncm.cbSize = sizeof(ncm);
+    SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
+    g_gui.font = CreateFontIndirectW(&ncm.lfMessageFont);
+    g_gui.mono = CreateFontW(-14, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, FIXED_PITCH, L"Consolas");
+    WNDCLASSW wc{};
+    wc.lpfnWndProc = GuiProc; wc.hInstance = GetModuleHandleW(nullptr); wc.lpszClassName = L"sc-offline";
+    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW); wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    RegisterClassW(&wc);
+    const wstring title = L"sc-offline " + Wide(SCO_VERSION) + L" - Star Citizen offline mod";
+    HWND wnd = CreateWindowExW(0, L"sc-offline", title.c_str(), WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 820, 560,
+                               nullptr, nullptr, wc.hInstance, nullptr);
+    if (!wnd) return kExitError;
+    ShowWindow(wnd, SW_SHOWNORMAL);
+    MSG m;
+    while (GetMessageW(&m, nullptr, 0, 0) > 0) {
+        if (IsDialogMessageW(wnd, &m)) continue;
+        TranslateMessage(&m); DispatchMessageW(&m);
+    }
+    return kExitOk;
+}
+
 static const char* kUsage =
     "usage: sc-offline.exe [command] [--game <folder>] [--dry-run] [--skip-eac-check]\n"
     "\n"
@@ -1771,12 +2071,17 @@ static const char* kUsage =
     "  --game <folder>   your StarCitizen, LIVE or Bin64 folder (else sc-offline.ini, else searched)\n"
     "  --dry-run         print every step, change nothing, start nothing\n"
     "  --skip-eac-check  don't stop when Easy Anti-Cheat looks active\n"
+    "  --console         double-clicked: run `play` in this console instead of opening the window\n"
     "\n"
     "exit codes: 0 ok, 1 error, 2 Easy Anti-Cheat active, 3 the game is running\n";
 
 int wmain(int argc, wchar_t** argv) {
     if (argc == 7 && !_wcsicmp(argv[1], L"--helper"))
         return Helper(argv[2], argv[3], wcstoul(argv[4], nullptr, 10), argv[5], argv[6]);
+    // Double-clicked with no arguments: the window (issue #20). From a terminal, or with any
+    // argument, the CLI runs exactly as before. `sc-offline.exe --console` forces the console run.
+    if (argc == 1 && !GuiChild() && OwnsConsole() && !OnWine()) { FreeConsole(); return RunGui(); }
+    if (GuiChild()) { std::setvbuf(stdout, nullptr, _IONBF, 0); SetConsoleOutputCP(CP_UTF8); }
     if (argc == 4 && !_wcsicmp(argv[1], L"--delete-logs"))
         return DeleteSessionLogs(argv[2], _wcstoui64(argv[3], nullptr, 10));
     if (argc == 3 && !_wcsicmp(argv[1], L"--elevated-update")) {
@@ -1797,6 +2102,7 @@ int wmain(int argc, wchar_t** argv) {
             if (i + 1 >= argc) return Fail("--game needs a folder: sc-offline.exe --game \"D:\\Games\\StarCitizen\"");
             gameArg = argv[++i];
         } else if (!_wcsicmp(a, L"--dry-run")) dry = true;
+        else if (!_wcsicmp(a, L"--console")) {}
         else if (!_wcsicmp(a, L"--skip-eac-check")) skipEac = true;
         else if (!sawCommand && (!_wcsicmp(a, L"play") || !_wcsicmp(a, L"install") || !_wcsicmp(a, L"uninstall") ||
                                  !_wcsicmp(a, L"status") || !_wcsicmp(a, L"update") || !_wcsicmp(a, L"help"))) {
@@ -1840,6 +2146,7 @@ int wmain(int argc, wchar_t** argv) {
             else if (!OwnsConsoleInput()) Out("          (not asking: no console to answer in)\n");
             else if (AskYes("Update now? Your saves and sc-offline.ini are kept.")) {
                 if (ApplyUpdateMaybeElevated(here, u)) {
+                    if (GuiChild()) { Out("[i] restarting sc-offline with the new version\n"); return kExitRestart; }
                     Out("[i] starting the new version\n\n");
                     if (g_log) { std::fclose(g_log); g_log = nullptr; }
                     Relaunch(here);

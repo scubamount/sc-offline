@@ -10,7 +10,7 @@ sc-offline.exe [play|install|uninstall|status|update|help] [--game <folder>] [--
 
 | Command | What it does |
 | --- | --- |
-| `play` | The default, and what a double-click does. Copies the mod in, starts the game, takes the mod out when the game closes. |
+| `play` | The default from a terminal (a double-click opens the [window](#the-window)). Copies the mod in, starts the game, takes the mod out when the game closes. |
 | `install` | Copies the mod in and leaves it there, for starting the game some other way. Run `uninstall` before going online. |
 | `uninstall` | Takes the mod out, puts back anything it replaced, and undoes leftover [PC changes](#pc-changes). Refuses while the game is running. |
 | `status` | Runs the checks below and changes nothing. |
@@ -22,10 +22,28 @@ sc-offline.exe [play|install|uninstall|status|update|help] [--game <folder>] [--
 | `--game <folder>` | Your `Roberts Space Industries`, `StarCitizen`, channel or `Bin64` folder. Overrides `game =` in `sc-offline.ini`. |
 | `--dry-run` | Prints every step it would take, then stops. Nothing is copied, deleted or started. |
 | `--skip-eac-check` | Don't stop when Easy Anti-Cheat looks active. |
+| `--console` | Double-clicked: run `play` in the console instead of opening the window. |
 
 Exit codes: `0` ok · `1` error · `2` Easy Anti-Cheat is active · `3` the game is running. The helper's own codes, in `launcher.log`: `5` a PC change failed.
 
 Everything the launcher prints also goes to `data\launcher.log` (rewritten each run; the helper appends to it).
+
+## The window
+
+A double-click (no arguments, the exe's own console) opens a window instead of the console run. Each button
+runs `sc-offline.exe <command>` as a hidden child with `SC_OFFLINE_GUI=1`, so the window and the CLI share one
+code path. The child's output streams into the box, and its `[y/N]` questions are answered with the
+**Yes**/**No** buttons. Command buttons are disabled while one runs and while the game runs (except **Status**).
+
+The light uses only cheap checks: the game folder from `game =` or `data\game-path.txt`, the
+`sc-offline.installed` marker or sc-offline's `dinput8.dll` in Bin64, and `%ProgramData%\sc-offline\pc-changes.txt`.
+It refreshes every 3 seconds and after every command:
+- **green**: nothing of the mod is in Bin64 and no PC changes are left;
+- **red**: lists what is left. **Uninstall** is enabled only in this state;
+- **grey**: the game is running, or the game folder isn't known yet.
+
+After **Update** applies a new version, the window restarts itself. Under Wine, or with any argument, the
+console run is unchanged.
 
 ## Checks it runs every time
 
