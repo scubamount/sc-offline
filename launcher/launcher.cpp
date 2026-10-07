@@ -12,8 +12,12 @@
 //      and data\OfflineDB\default_1.xml into <channel>\user\client\0, backing up anything it
 //      replaces. The helper runs as administrator only when the game folder refuses a plain
 //      write; the game never does;
+//      Before that, on play, the helper blocks StarCitizen.exe in Windows Firewall, adds the EAC
+//      hosts line and renames EasyAntiCheat_EOS.exe (each switchable in sc-offline.ini), recording
+//      every change in %ProgramData%\sc-offline\pc-changes.txt; the helper then also runs elevated;
 //   5. start StarCitizen.exe. The helper waits until this launcher has exited AND no
-//      StarCitizen.exe is left, then takes the mod out and restores the backups. Because it is a
+//      StarCitizen.exe is left, then takes the mod out, restores the backups and undoes the recorded
+//      PC changes. Because it is a
 //      separate process, closing this window early still cleans up.
 // install / uninstall do step 4's copy or its cleanup on their own; status does steps 1-2 only.
 // Everything printed also goes to data\launcher.log.
@@ -114,7 +118,15 @@ static int FailCode(int code, const char* fmt, ...) {
 // sc-offline.ini: `key = value` lines; a line starting with '#' is a comment. Unknown keys are reported, not ignored.
 struct Config {
     wstring game, channel = L"LIVE", bootMap = L"PU_All", startShip = L"DRAK_Cutlass_Black", start;
+    // What the helper changes on the PC while you play, and undoes when the game closes.
+    bool firewall = true, eacHosts = true, eacRename = true;
 };
+
+static bool ParseOnOff(const wstring& v, bool& out) {
+    if (!_wcsicmp(v.c_str(), L"1") || !_wcsicmp(v.c_str(), L"on") || !_wcsicmp(v.c_str(), L"yes") || !_wcsicmp(v.c_str(), L"true")) { out = true; return true; }
+    if (!_wcsicmp(v.c_str(), L"0") || !_wcsicmp(v.c_str(), L"off") || !_wcsicmp(v.c_str(), L"no") || !_wcsicmp(v.c_str(), L"false")) { out = false; return true; }
+    return false;
+}
 
 static bool ReadConfig(const wstring& path, Config& c) {
     HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
@@ -139,6 +151,10 @@ static bool ReadConfig(const wstring& path, Config& c) {
         else if (!_wcsicmp(k.c_str(), L"boot_map"))   c.bootMap = v;
         else if (!_wcsicmp(k.c_str(), L"start_ship")) c.startShip = v;
         else if (!_wcsicmp(k.c_str(), L"start"))      c.start = v;
+        else if (!_wcsicmp(k.c_str(), L"block_network") || !_wcsicmp(k.c_str(), L"eac_hosts") || !_wcsicmp(k.c_str(), L"eac_rename")) {
+            bool& b = !_wcsicmp(k.c_str(), L"block_network") ? c.firewall : !_wcsicmp(k.c_str(), L"eac_hosts") ? c.eacHosts : c.eacRename;
+            if (!ParseOnOff(v, b)) Out("[!] sc-offline.ini line %d: %ls must be on or off\n", lineNo, k.c_str());
+        }
         else Out("[!] sc-offline.ini line %d: unknown key '%ls'\n", lineNo, k.c_str());
     }
     return true;
@@ -424,75 +440,6 @@ static int TakeMod(const GamePaths& g, bool dry) {
     return rc;
 }
 
-// --helper <play|install|uninstall> <Bin64> <launcher pid> <event name>
-// The part that writes to the game folder; runs elevated when that folder needs it.
-// play: put the mod in, signal the event, wait for the launcher and every StarCitizen.exe to
-// exit, take it out. install: put in. uninstall: take out.
-// Exit codes: 0 ok, 2 copy failed, 3 removal failed, 4 bad args.
-static int Helper(const wstring& op, const wstring& bin, DWORD parentPid, const wstring& eventName) {
-    const wstring here = ExeDir();
-    OpenLog(here + L"\\data", true, Narrow(L"helper " + op).c_str());
-    const GamePaths g(bin);
-    if (!_wcsicmp(op.c_str(), L"uninstall")) return TakeMod(g, false);
-    const bool play = !_wcsicmp(op.c_str(), L"play");
-    if (!play && _wcsicmp(op.c_str(), L"install")) return 4;
-    HANDLE parent = play ? OpenProcess(SYNCHRONIZE, FALSE, parentPid) : nullptr;
-    if (play && !parent) return 4;
-    const int rc = PutMod(here, g, play ? "play" : "install", false);
-    if (rc) { if (parent) CloseHandle(parent); return rc; }
-    if (HANDLE ready = OpenEventW(EVENT_MODIFY_STATE, FALSE, eventName.c_str())) { SetEvent(ready); CloseHandle(ready); }
-    if (!play) return 0;
-
-    WaitForSingleObject(parent, INFINITE);
-    CloseHandle(parent);
-    while (GameRunning()) Sleep(2000);
-    return TakeMod(g, false);
-}
-
-// Starts the helper: hidden and unelevated when the game folder is writable, otherwise elevated
-// (one UAC prompt). Returns its process handle, or null.
-static HANDLE StartHelper(const wchar_t* op, const GamePaths& g, const wstring& eventName) {
-    wchar_t self[MAX_PATH * 2];
-    GetModuleFileNameW(nullptr, self, ARRAYSIZE(self));
-    const wstring args = L"--helper " + wstring(op) + L" \"" + g.bin + L"\" " + std::to_wstring(GetCurrentProcessId()) +
-                         L" " + eventName;
-    if (CanWriteTo(g.bin) && CanWriteTo(ParentDir(g.bin))) {
-        wstring cmd = L"\"" + wstring(self) + L"\" " + args;
-        STARTUPINFOW si{};
-        si.cb = sizeof(si);
-        PROCESS_INFORMATION pi{};
-        if (!CreateProcessW(self, cmd.data(), nullptr, nullptr, FALSE,
-                            DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, nullptr, nullptr, &si, &pi))
-            return nullptr;
-        CloseHandle(pi.hThread);
-        return pi.hProcess;
-    }
-    Out("[i] the game folder needs administrator rights for the mod; Windows will ask once.\n"
-        "    Only the copy/remove helper runs as administrator, not the game.\n");
-    SHELLEXECUTEINFOW sei{};
-    sei.cbSize = sizeof(sei);
-    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-    sei.lpVerb = L"runas";
-    sei.lpFile = self;
-    sei.lpParameters = args.c_str();
-    sei.nShow = SW_HIDE;
-    if (!ShellExecuteExW(&sei)) return nullptr;
-    return sei.hProcess;
-}
-
-// Ctrl+C would kill only this window; the helper still cleans up, but say so instead of dying.
-static BOOL WINAPI OnCtrl(DWORD type) {
-    if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT) {
-        std::printf("\n[i] Ctrl+C ignored: close the game instead. The mod is removed when it exits.\n");
-        return TRUE;
-    }
-    return FALSE;   // window closed / logoff: let it go; the helper removes the mod
-}
-
-static void SetVar(const wchar_t* name, const wstring& v) {
-    SetEnvironmentVariableW(name, v.empty() ? nullptr : v.c_str());   // empty = unset
-}
-
 static bool OnWine() {
     const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
     return ntdll && GetProcAddress(ntdll, "wine_get_version");
@@ -556,7 +503,270 @@ static bool HostsBlocksEac() {
     return false;
 }
 
-struct CheckResult { bool eacActive = false; std::string gameBuild; };
+// --- what the helper changes on the PC while you play ------------------------------------------
+// Three switches in sc-offline.ini, all on by default, all undone when the game closes:
+//   block_network  a Windows Firewall rule that blocks StarCitizen.exe (this install only), in and out;
+//   eac_hosts      the hosts line that stops the RSI Launcher downloading Easy Anti-Cheat again;
+//   eac_rename     EasyAntiCheat_EOS.exe renamed to .bak.
+// Only what this helper changed is recorded, and only that is undone: a hosts line or a .bak you made
+// yourself is left alone. The record lives in %ProgramData%\sc-offline\pc-changes.txt so that after a
+// crash any later run (play, status, uninstall) finds it.
+
+static const char*    kEacHost      = "modules-cdn.eac-prod.on.epicgames.com";
+static const char*    kHostsTag     = "# added by sc-offline, removed when the game closes";
+static const wchar_t* kFirewallRule = L"sc-offline: block StarCitizen.exe";
+
+struct PcWanted { bool firewall = false, eacHosts = false, eacRename = false; };
+
+static wstring PcChangesPath() { return EnvOr(L"ProgramData", L"C:\\ProgramData") + L"\\sc-offline\\pc-changes.txt"; }
+static wstring HostsPath()     { return EnvOr(L"SystemRoot", L"C:\\Windows") + L"\\System32\\drivers\\etc\\hosts"; }
+static wstring EacExe()        { return EnvOr(L"ProgramFiles(x86)", L"C:\\Program Files (x86)") + L"\\EasyAntiCheat_EOS\\EasyAntiCheat_EOS.exe"; }
+
+// Runs a Windows tool without a window. Returns its exit code, or -1 if it couldn't start.
+static int RunTool(const wstring& exe, const wstring& args) {
+    wstring cmd = L"\"" + exe + L"\" " + args;
+    STARTUPINFOW si{}; si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+        return -1;
+    WaitForSingleObject(pi.hProcess, 60000);
+    DWORD code = 1; GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    return static_cast<int>(code);
+}
+
+static wstring System32(const wchar_t* tool) { return EnvOr(L"SystemRoot", L"C:\\Windows") + L"\\System32\\" + tool; }
+
+static bool FirewallRuleExists() {
+    return RunTool(System32(L"netsh.exe"), L"advfirewall firewall show rule name=\"" + wstring(kFirewallRule) + L"\"") == 0;
+}
+
+static bool AddFirewallRule(const wstring& gameExe) {
+    for (const wchar_t* dir : { L"out", L"in" }) {
+        const wstring args = L"advfirewall firewall add rule name=\"" + wstring(kFirewallRule) + L"\" dir=" + dir +
+                             L" action=block enable=yes profile=any program=\"" + gameExe + L"\"";
+        if (RunTool(System32(L"netsh.exe"), args) != 0) return false;
+    }
+    return true;
+}
+
+static bool DeleteFirewallRule() {
+    return RunTool(System32(L"netsh.exe"), L"advfirewall firewall delete rule name=\"" + wstring(kFirewallRule) + L"\"") == 0;
+}
+
+// Appends the EAC line, tagged so it can be found again. Keeps the file's line endings.
+static bool AddHostsLine() {
+    std::string hosts;
+    if (!ReadAll(HostsPath(), hosts)) return false;
+    const std::string eol = hosts.find("\r\n") != std::string::npos || hosts.empty() ? "\r\n" : "\n";
+    if (!hosts.empty() && hosts.back() != '\n') hosts += eol;
+    hosts += std::string("127.0.0.1 ") + kEacHost + " " + kHostsTag + eol;
+    return WriteAll(HostsPath(), hosts);
+}
+
+// Removes only the lines this launcher added (the ones carrying kHostsTag).
+static bool RemoveHostsLine() {
+    std::string hosts, kept;
+    if (!ReadAll(HostsPath(), hosts)) return false;
+    bool removed = false;
+    for (size_t pos = 0; pos < hosts.size();) {
+        size_t nl = hosts.find('\n', pos);
+        const size_t end = nl == std::string::npos ? hosts.size() : nl + 1;
+        const std::string line = hosts.substr(pos, end - pos);
+        if (line.find(kHostsTag) != std::string::npos) removed = true; else kept += line;
+        pos = end;
+    }
+    return !removed || WriteAll(HostsPath(), kept);
+}
+
+static void FlushDns() { RunTool(System32(L"ipconfig.exe"), L"/flushdns"); }
+
+// What a previous helper recorded and hasn't undone yet ("" = nothing).
+static std::string PcChangesLeft() {
+    std::string s;
+    return ReadAll(PcChangesPath(), s) ? s : "";
+}
+
+static void DescribePcChanges(const std::string& rec) {
+    if (Field(rec, "firewall") == "added") Out("          - firewall rule \"%ls\"\n", kFirewallRule);
+    if (Field(rec, "hosts") == "added")    Out("          - hosts line for %s\n", kEacHost);
+    if (Field(rec, "eac") == "renamed")    Out("          - EasyAntiCheat_EOS.exe renamed to .bak\n");
+}
+
+// Undoes what the record says this launcher did, then deletes the record. 0 ok, 5 something stayed.
+static int UndoPcChanges(bool dry) {
+    const std::string rec = PcChangesLeft();
+    if (rec.empty()) return 0;
+    int rc = 0;
+    if (Field(rec, "firewall") == "added" && Step(dry, "remove the firewall rule \"%ls\"", kFirewallRule) &&
+        !DeleteFirewallRule() && FirewallRuleExists()) {
+        Out("[!] couldn't remove the firewall rule; remove \"%ls\" in Windows Defender Firewall\n", kFirewallRule); rc = 5;
+    }
+    if (Field(rec, "hosts") == "added" && Step(dry, "remove sc-offline's line from the hosts file")) {
+        if (RemoveHostsLine()) FlushDns();
+        else { Out("[!] couldn't edit %ls (error %lu); delete the %s line by hand\n", HostsPath().c_str(), GetLastError(), kEacHost); rc = 5; }
+    }
+    if (Field(rec, "eac") == "renamed" && Step(dry, "rename EasyAntiCheat_EOS.exe.bak back")) {
+        const wstring exe = EacExe(), bak = exe + L".bak";
+        if (IsFile(bak) && !IsFile(exe) && !MoveFileExW(bak.c_str(), exe.c_str(), 0)) {
+            Out("[!] couldn't rename %ls back (error %lu)\n", bak.c_str(), GetLastError()); rc = 5;
+        }
+    }
+    if (rc == 0 && !dry) DeleteFileW(PcChangesPath().c_str());
+    return rc;
+}
+
+// Makes the wanted changes and records each one as soon as it is made. 0 ok, 5 failed (anything
+// already changed stays recorded, and the caller undoes it).
+static int ApplyPcChanges(const PcWanted& w, const wstring& gameExe, bool dry) {
+    std::string rec = PcChangesLeft();   // a leftover record after a crash: keep it, add to it
+    const wstring dir = ParentDir(PcChangesPath());
+    if (!dry) CreateDirectoryW(dir.c_str(), nullptr);
+    auto record = [&](const char* key, const char* value) {
+        if (Field(rec, key) == value) return;
+        rec += std::string(key) + "=" + value + "\n";
+        if (!WriteAll(PcChangesPath(), rec)) Out("[!] couldn't write %ls (error %lu)\n", PcChangesPath().c_str(), GetLastError());
+    };
+    if (!dry && rec.find("time=") == std::string::npos) {
+        SYSTEMTIME t; GetLocalTime(&t);
+        char ts[32]; std::snprintf(ts, sizeof(ts), "%04u-%02u-%02u %02u:%02u", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute);
+        record("time", ts);
+    }
+
+    if (w.firewall) {
+        if (Field(rec, "firewall") == "added" && !dry && FirewallRuleExists()) Out("[i] firewall rule already in place\n");
+        else if (Step(dry, "add a firewall rule blocking %ls", gameExe.c_str())) {
+            if (!AddFirewallRule(gameExe)) { Out("[!] couldn't add the firewall rule (netsh failed)\n"); DeleteFirewallRule(); return 5; }
+            record("firewall", "added");
+        }
+    }
+    if (w.eacHosts) {
+        if (HostsBlocksEac()) Out("[i] hosts file already blocks %s\n", kEacHost);
+        else if (Step(dry, "add `127.0.0.1 %s` to the hosts file", kEacHost)) {
+            if (!AddHostsLine()) { Out("[!] couldn't edit %ls (error %lu); antivirus may protect it\n", HostsPath().c_str(), GetLastError()); return 5; }
+            record("hosts", "added");
+            FlushDns();
+        }
+    }
+    if (w.eacRename) {
+        const wstring exe = EacExe(), bak = exe + L".bak";
+        if (!IsFile(exe)) Out("[i] Easy Anti-Cheat is already off or not installed\n");
+        else if (Step(dry, "rename EasyAntiCheat_EOS.exe to .bak")) {
+            if (!MoveFileExW(exe.c_str(), bak.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+                Out("[!] couldn't rename %ls (error %lu)\n", exe.c_str(), GetLastError()); return 5;
+            }
+            record("eac", "renamed");
+        }
+    }
+    return 0;
+}
+
+static bool NeedsPcChanges(const PcWanted& w) { return !OnWine() && (w.firewall || w.eacHosts || w.eacRename); }
+
+static wstring PcFlags(const PcWanted& w) {
+    if (OnWine()) return L"-";
+    wstring f;
+    if (w.firewall) f += L'f';
+    if (w.eacHosts) f += L'h';
+    if (w.eacRename) f += L'e';
+    return f.empty() ? L"-" : f;
+}
+
+static PcWanted ParsePcFlags(const wstring& f) {
+    PcWanted w;
+    w.firewall = f.find(L'f') != wstring::npos;
+    w.eacHosts = f.find(L'h') != wstring::npos;
+    w.eacRename = f.find(L'e') != wstring::npos;
+    return w;
+}
+
+// --helper <play|install|uninstall> <Bin64> <launcher pid> <event name> <pc flags>
+// The part that changes the game folder and the PC; runs elevated when either needs it.
+// play: make the PC changes (pc flags: f firewall, h hosts, e EAC rename, - none), put the mod in,
+// signal the event, wait for the launcher and every StarCitizen.exe to exit, then take the mod
+// out and undo the PC changes. install: put in. uninstall: take out and undo leftover PC changes.
+// Exit codes: 0 ok, 2 copy failed, 3 removal failed, 4 bad args, 5 PC change failed.
+static int Helper(const wstring& op, const wstring& bin, DWORD parentPid, const wstring& eventName, const wstring& flags) {
+    const wstring here = ExeDir();
+    OpenLog(here + L"\\data", true, Narrow(L"helper " + op).c_str());
+    const GamePaths g(bin);
+    if (!_wcsicmp(op.c_str(), L"uninstall")) { const int a = TakeMod(g, false), b = UndoPcChanges(false); return a ? a : b; }
+    const bool play = !_wcsicmp(op.c_str(), L"play");
+    if (!play && _wcsicmp(op.c_str(), L"install")) return 4;
+    HANDLE parent = play ? OpenProcess(SYNCHRONIZE, FALSE, parentPid) : nullptr;
+    if (play && !parent) return 4;
+    if (play) {
+        const int pc = ApplyPcChanges(ParsePcFlags(flags), bin + L"\\" + kGameExe, false);
+        if (pc) { UndoPcChanges(false); CloseHandle(parent); return pc; }
+    }
+    const int rc = PutMod(here, g, play ? "play" : "install", false);
+    if (rc) { if (parent) { UndoPcChanges(false); CloseHandle(parent); } return rc; }
+    if (HANDLE ready = OpenEventW(EVENT_MODIFY_STATE, FALSE, eventName.c_str())) { SetEvent(ready); CloseHandle(ready); }
+    if (!play) return 0;
+
+    WaitForSingleObject(parent, INFINITE);
+    CloseHandle(parent);
+    while (GameRunning()) Sleep(2000);
+    const int taken = TakeMod(g, false);
+    const bool hadPc = !PcChangesLeft().empty();
+    const int undone = UndoPcChanges(false);
+    if (hadPc && undone == 0) Out("[+] PC changes undone\n");
+    return taken ? taken : undone;
+}
+
+// Starts the helper: hidden and unelevated when the game folder is writable, otherwise elevated
+// (one UAC prompt). Returns its process handle, or null.
+static HANDLE StartHelper(const wchar_t* op, const GamePaths& g, const wstring& eventName, const PcWanted& pc) {
+    wchar_t self[MAX_PATH * 2];
+    GetModuleFileNameW(nullptr, self, ARRAYSIZE(self));
+    const wstring args = L"--helper " + wstring(op) + L" \"" + g.bin + L"\" " + std::to_wstring(GetCurrentProcessId()) +
+                         L" " + eventName + L" " + PcFlags(pc);
+    const bool isPlay = !_wcsicmp(op, L"play");
+    const bool pcChanges = (isPlay && NeedsPcChanges(pc)) ||
+                           ((isPlay || !_wcsicmp(op, L"uninstall")) && !PcChangesLeft().empty());
+    if (!pcChanges && CanWriteTo(g.bin) && CanWriteTo(ParentDir(g.bin))) {
+        wstring cmd = L"\"" + wstring(self) + L"\" " + args;
+        STARTUPINFOW si{};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi{};
+        if (!CreateProcessW(self, cmd.data(), nullptr, nullptr, FALSE,
+                            DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, nullptr, nullptr, &si, &pi))
+            return nullptr;
+        CloseHandle(pi.hThread);
+        return pi.hProcess;
+    }
+    if (pcChanges)
+        Out("[i] Windows will ask for administrator rights once: the helper blocks the game's network and\n"
+            "    turns Easy Anti-Cheat off while you play, and undoes both when the game closes.\n"
+            "    Only the helper runs as administrator, not the game.\n");
+    else
+        Out("[i] the game folder needs administrator rights for the mod; Windows will ask once.\n"
+            "    Only the copy/remove helper runs as administrator, not the game.\n");
+    SHELLEXECUTEINFOW sei{};
+    sei.cbSize = sizeof(sei);
+    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+    sei.lpVerb = L"runas";
+    sei.lpFile = self;
+    sei.lpParameters = args.c_str();
+    sei.nShow = SW_HIDE;
+    if (!ShellExecuteExW(&sei)) return nullptr;
+    return sei.hProcess;
+}
+
+// Ctrl+C would kill only this window; the helper still cleans up, but say so instead of dying.
+static BOOL WINAPI OnCtrl(DWORD type) {
+    if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT) {
+        std::printf("\n[i] Ctrl+C ignored: close the game instead. The mod is removed when it exits.\n");
+        return TRUE;
+    }
+    return FALSE;   // window closed / logoff: let it go; the helper removes the mod
+}
+
+static void SetVar(const wchar_t* name, const wstring& v) {
+    SetEnvironmentVariableW(name, v.empty() ? nullptr : v.c_str());   // empty = unset
+}
+
+struct CheckResult { bool eacActive = false, pcLeftover = false; std::string gameBuild; };
 
 static CheckResult SelfChecks(const wstring& here, const Config& cfg, const GamePaths& g) {
     CheckResult r;
@@ -594,17 +804,31 @@ static CheckResult SelfChecks(const wstring& here, const Config& cfg, const Game
         Out("[!] the mod is still in the game folder (a crash, or `install`).\n"
             "    Run `sc-offline.exe uninstall` before going online.\n");
 
-    // 4. Easy Anti-Cheat.
+    // 4. What sc-offline changed on the PC, if a previous run didn't get to undo it (a crash).
+    const std::string pcLeft = PcChangesLeft();
+    if (!pcLeft.empty()) {
+        r.pcLeftover = true;
+        Out("[!] PC changes from a previous run (%s) are still in place:\n", Field(pcLeft, "time").c_str());
+        DescribePcChanges(pcLeft);
+        if (!GameRunning()) Out("    Run `sc-offline.exe uninstall` to undo them before going online.\n");
+    }
+    if (!OnWine()) Out("Network:  %s\n", cfg.firewall ? "blocked for StarCitizen.exe while you play (block_network)"
+                                                       : "NOT blocked (block_network = off)");
+
+    // 5. Easy Anti-Cheat.
     const Eac eac = EacState();
     Out("EAC:      %s\n", eac == Eac::Active ? "ACTIVE" : eac == Eac::Disabled ? "disabled (EasyAntiCheat_EOS.exe.bak)" : "not installed");
     if (OnWine()) Out("Hosts:    checked by sc-offline.sh against /etc/hosts\n");
     else Out("Hosts:    %s\n", HostsBlocksEac() ? "EAC download server blocked" : "EAC download server NOT blocked");
-    if (eac == Eac::Active) {
-        r.eacActive = true;
+    const bool autoEac = !OnWine() && cfg.eacRename;
+    r.eacActive = eac == Eac::Active;
+    if (eac == Eac::Active && autoEac) {
+        Out("[i] Easy Anti-Cheat is on; `play` turns it off while you play and back on afterwards (eac_rename).\n");
+    } else if (eac == Eac::Active) {
         Out("[!] Easy Anti-Cheat is active; the mod can't run with it. In PowerShell as administrator:\n"
             "      ren \"C:\\Program Files (x86)\\EasyAntiCheat_EOS\\EasyAntiCheat_EOS.exe\" EasyAntiCheat_EOS.exe.bak\n"
             "    and block modules-cdn.eac-prod.on.epicgames.com in your hosts file (README, Setup).\n");
-    } else if (!OnWine() && !HostsBlocksEac()) {
+    } else if (!OnWine() && !cfg.eacHosts && !HostsBlocksEac()) {
         Out("[i] add `127.0.0.1 modules-cdn.eac-prod.on.epicgames.com` to your hosts file so the RSI Launcher\n"
             "    doesn't download Easy Anti-Cheat again (README, Setup).\n");
     }
@@ -632,8 +856,8 @@ static const char* kUsage =
     "exit codes: 0 ok, 1 error, 2 Easy Anti-Cheat active, 3 the game is running\n";
 
 int wmain(int argc, wchar_t** argv) {
-    if (argc == 6 && !_wcsicmp(argv[1], L"--helper"))
-        return Helper(argv[2], argv[3], wcstoul(argv[4], nullptr, 10), argv[5]);
+    if (argc == 7 && !_wcsicmp(argv[1], L"--helper"))
+        return Helper(argv[2], argv[3], wcstoul(argv[4], nullptr, 10), argv[5], argv[6]);
 
     wstring command = L"play", gameArg;
     bool dry = false, skipEac = false, sawCommand = false;
@@ -687,6 +911,9 @@ int wmain(int argc, wchar_t** argv) {
     Out("Folder:   %ls\n", bin.c_str());
     const GamePaths g(bin);
 
+    PcWanted pc;
+    pc.firewall = cfg.firewall; pc.eacHosts = cfg.eacHosts; pc.eacRename = cfg.eacRename;
+
     // 2. Self-checks.
     const CheckResult checks = SelfChecks(here, cfg, g);
     Out("\n");
@@ -695,12 +922,19 @@ int wmain(int argc, wchar_t** argv) {
     const bool running = GameRunning();
     if (command == L"uninstall") {
         if (running) return FailCode(kExitRunning, "%ls is running. Close it first.", kGameExe);
-        if (dry) return TakeMod(g, true) ? kExitError : kExitOk;
+        if (dry) return (TakeMod(g, true) | UndoPcChanges(true)) ? kExitError : kExitOk;
     } else {
         if (!IsFile(here + L"\\dinput8.dll"))
             return Fail("dinput8.dll is missing next to sc-offline.exe.\n    Extract the whole zip into one folder and run this from there.");
         if (running) return FailCode(kExitRunning, "%ls is already running. Close it first.", kGameExe);
-        if (checks.eacActive && !skipEac)
+        if (checks.pcLeftover && !dry && command == L"play") {
+            std::printf("Undo them now and stop, instead of playing? [y/N] ");
+            const int c = std::getchar();
+            if (c == 'y' || c == 'Y') { Out("[i] undoing them (same as `sc-offline.exe uninstall`)\n"); command = L"uninstall"; }
+            else Out("[i] playing; they are undone together with this session's changes when the game closes.\n");
+        }
+        const bool playHandlesEac = command == L"play" && cfg.eacRename && !OnWine();
+        if (checks.eacActive && !skipEac && !playHandlesEac)
             return FailCode(kExitEac, "stopped: Easy Anti-Cheat is active (see above). --skip-eac-check overrides this.");
     }
 
@@ -722,16 +956,18 @@ int wmain(int argc, wchar_t** argv) {
 
     // 4. Change the game folder, through the helper (see the top of this file).
     if (dry) {
+        if (play && NeedsPcChanges(pc)) ApplyPcChanges(pc, bin + L"\\" + kGameExe, true);
+        if (command == L"uninstall") UndoPcChanges(true);
         if (PutMod(here, g, play ? "play" : "install", true)) return kExitError;
         if (play) {
             Out("[dry-run] would start %ls\\%ls\n", bin.c_str(), kGameExe);
-            Out("[dry-run] after the game closes: take the mod out and put back what was set aside\n");
+            Out("[dry-run] after the game closes: take the mod out, put back what was set aside, undo the PC changes\n");
         }
         return kExitOk;
     }
     const wstring eventName = L"Local\\sc-offline-ready-" + std::to_wstring(GetCurrentProcessId());
     HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, eventName.c_str());
-    HANDLE helper = ready ? StartHelper(command.c_str(), g, eventName) : nullptr;
+    HANDLE helper = ready ? StartHelper(command.c_str(), g, eventName, pc) : nullptr;
     if (!helper) return Fail("couldn't start the mod helper (error %lu); administrator rights refused?", GetLastError());
 
     if (!play) {   // install / uninstall: the helper does the whole job
@@ -754,6 +990,9 @@ int wmain(int argc, wchar_t** argv) {
     }
     CloseHandle(ready);
     Out("Mod:      copied into Bin64\n");
+    if (NeedsPcChanges(pc))
+        Out("PC:       %s%s%s(undone when the game closes)\n", pc.firewall ? "game network blocked, " : "",
+            pc.eacHosts ? "EAC hosts line, " : "", pc.eacRename ? "EAC renamed " : "");
     SetConsoleCtrlHandler(OnCtrl, TRUE);
 
     // 5. Play. The game runs with this window's rights, never the helper's.
@@ -774,7 +1013,7 @@ int wmain(int argc, wchar_t** argv) {
         while (GameRunning()) Sleep(2000);   // the game can hand over to a second StarCitizen.exe
     }
     CloseHandle(helper);
-    Out("Mod:      the helper removes it from Bin64 as this window closes.\n");
+    Out("Mod:      the helper removes it from Bin64 and undoes the PC changes as this window closes.\n");
     if (rc) PauseIfOwnConsole();
     return rc;
 }

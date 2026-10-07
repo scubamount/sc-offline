@@ -12,7 +12,7 @@ sc-offline.exe [play|install|uninstall|status|help] [--game <folder>] [--dry-run
 | --- | --- |
 | `play` | The default, and what a double-click does. Copies the mod in, starts the game, takes the mod out when the game closes. |
 | `install` | Copies the mod in and leaves it there, for starting the game some other way. Run `uninstall` before going online. |
-| `uninstall` | Takes the mod out and puts back anything it replaced. Refuses while the game is running. |
+| `uninstall` | Takes the mod out, puts back anything it replaced, and undoes leftover [PC changes](#pc-changes). Refuses while the game is running. |
 | `status` | Runs the checks below and changes nothing. |
 | `help` | Prints the usage. |
 
@@ -22,7 +22,7 @@ sc-offline.exe [play|install|uninstall|status|help] [--game <folder>] [--dry-run
 | `--dry-run` | Prints every step it would take, then stops. Nothing is copied, deleted or started. |
 | `--skip-eac-check` | Don't stop when Easy Anti-Cheat looks active. |
 
-Exit codes: `0` ok · `1` error · `2` Easy Anti-Cheat is active · `3` the game is running.
+Exit codes: `0` ok · `1` error · `2` Easy Anti-Cheat is active · `3` the game is running. The helper's own codes, in `launcher.log`: `5` a PC change failed.
 
 Everything the launcher prints also goes to `data\launcher.log` (rewritten each run; the helper appends to it).
 
@@ -35,9 +35,13 @@ Everything the launcher prints also goes to `data\launcher.log` (rewritten each 
    compared with `data\game-build.txt` from your last play. If it changed, a game update may have broken the mod.
 3. **Leftovers.** If the mod is still in the game folder while the game isn't running (a crash, or `install`), it
    says so and tells you to run `uninstall`.
-4. **Easy Anti-Cheat.** Whether `C:\Program Files (x86)\EasyAntiCheat_EOS\EasyAntiCheat_EOS.exe` exists (active),
+4. **PC changes left over.** If a previous run's changes (below) are still recorded in
+   `%ProgramData%\sc-offline\pc-changes.txt`, it lists them. `play` asks whether to undo them and stop,
+   or play and undo everything afterwards.
+5. **Easy Anti-Cheat.** Whether `C:\Program Files (x86)\EasyAntiCheat_EOS\EasyAntiCheat_EOS.exe` exists (active),
    only as `.exe.bak` (disabled), or not at all, and whether your hosts file blocks
-   `modules-cdn.eac-prod.on.epicgames.com`. If EAC is active, `play` and `install` stop and print the fix.
+   `modules-cdn.eac-prod.on.epicgames.com`. If EAC is active and `eac_rename = off`, `play` and `install`
+   stop and print the fix.
 
 ## What `play` does
 
@@ -54,7 +58,8 @@ Everything the launcher prints also goes to `data\launcher.log` (rewritten each 
    | `<channel>\user\client\0\default_1.xml` | the starting loadout from `data\OfflineDB`. Yours is first copied to `default_1.xml.sc-offline-backup` | your copy restored, or ours deleted if you had none |
    | `Bin64\sc-offline.installed` | a note of what was installed and when | deleted |
 
-   The helper runs as administrator only if the game folder needs it, and then Windows asks once. The game itself
+   Before copying the mod in, `play`'s helper makes the [PC changes](#pc-changes). It runs as administrator when
+   any PC change is on (the default) or the game folder needs it, and then Windows asks once. The game itself
    never runs as administrator.
 5. **Starts `StarCitizen.exe`** and waits until every `StarCitizen.exe` has exited. The helper then takes the
    mod out, even if you closed the launcher window first. Ctrl+C in the launcher window is ignored; close the
@@ -62,6 +67,25 @@ Everything the launcher prints also goes to `data\launcher.log` (rewritten each 
 
 If the PC crashes mid-game, the mod stays in the game folder. The next `play` or `status` notices; run
 `sc-offline.exe uninstall` before going online.
+
+## PC changes
+
+While you play, the helper changes three things outside the game folder and undoes them when every
+`StarCitizen.exe` has exited. Each is a switch in `sc-offline.ini`, on by default.
+
+| Key | Going in | Coming out |
+| --- | --- | --- |
+| `block_network` | Windows Firewall rules named `sc-offline: block StarCitizen.exe`, inbound and outbound, for this install's `StarCitizen.exe` only | deleted |
+| `eac_hosts` | `127.0.0.1 modules-cdn.eac-prod.on.epicgames.com # added by sc-offline…` appended to the hosts file, then `ipconfig /flushdns`. Skipped if the hosts file already blocks it | only the tagged line removed, DNS flushed |
+| `eac_rename` | `EasyAntiCheat_EOS.exe` renamed to `EasyAntiCheat_EOS.exe.bak`. Skipped if it isn't there | renamed back |
+
+- Each change is written to `%ProgramData%\sc-offline\pc-changes.txt` the moment it is made, and only recorded
+  changes are undone. A hosts line or `.bak` you made yourself is never touched.
+- If a step fails, the helper undoes what it already did and the game doesn't start.
+- After a crash the record stays. `status` lists it, `uninstall` undoes it, and `play` offers to.
+- Under Wine none of this runs; `sc-offline.sh` handles hosts there, and the firewall rule doesn't apply.
+- The firewall rule cuts the game's network for the session. It doesn't hide anything already on disk, such as
+  logs or the renamed EAC file while you play.
 
 ## `sc-offline.ini`
 
@@ -74,3 +98,6 @@ Each line is `key = value`. Lines starting with `#` are comments. An unknown key
 | `boot_map` | `PU_All` | `PU_All` loads every star system, so Travel can reach Pyro and Nyx. |
 | `start_ship` | `DRAK_Cutlass_Black` | The ship you start in. |
 | `start` | (empty) | `Daymar` starts you over Daymar, in that ship. |
+| `block_network` | `on` | Block `StarCitizen.exe` in Windows Firewall while you play. See [PC changes](#pc-changes). |
+| `eac_hosts` | `on` | Add the EAC hosts line while you play. |
+| `eac_rename` | `on` | Rename `EasyAntiCheat_EOS.exe` while you play. |

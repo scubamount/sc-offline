@@ -16,41 +16,33 @@ An offline single-player mod menu for **Star Citizen**. You can spawn ships, NPC
 
 - A copy of Star Citizen that you own.
 - Windows. Linux through Wine is experimental and untested; see [docs/linux.md](docs/linux.md).
-- Easy Anti-Cheat turned off (see [Setup](#setup)).
+- Administrator rights: Windows asks once each time you play (see [What the launcher changes](#what-the-launcher-changes)).
 
 ## Setup
 
-You only do this once.
-
-### 1. Turn off Easy Anti-Cheat
-
-The mod won't run while Easy Anti-Cheat (EAC) is active. While it's off, the game can't join online servers. [Go back online](#go-back-online) reverses these steps.
-
-1. Open PowerShell as administrator and rename the EAC executable:
-
-   ```powershell
-   ren "C:\Program Files (x86)\EasyAntiCheat_EOS\EasyAntiCheat_EOS.exe" EasyAntiCheat_EOS.exe.bak
-   ```
-
-2. Stop the RSI Launcher from downloading EAC again. Open Notepad as administrator, open `C:\Windows\System32\drivers\etc\hosts`, add this line at the bottom, and save:
-
-   ```text
-   127.0.0.1 modules-cdn.eac-prod.on.epicgames.com
-   ```
-
-3. Flush the DNS cache with `ipconfig /flushdns`.
-
-### 2. Download the mod
+### 1. Download the mod
 
 1. Download `sc-offline-<version>.zip` from the newest release on [Releases](https://github.com/scubamount/sc-offline/releases). It's about 1.4 MB.
 2. Right-click the zip, choose **Extract All**, and put the folder anywhere, for example your Desktop. Keep all the files together.
 
 Don't copy anything into your game folder. The launcher puts the mod there when you play and takes it out again afterwards.
 
+### 2. What the launcher changes
+
+The mod can't run while Easy Anti-Cheat (EAC) is on, so each time you play, the launcher's helper:
+
+1. adds a Windows Firewall rule that blocks `StarCitizen.exe`, so the game has no network while modded;
+2. adds `127.0.0.1 modules-cdn.eac-prod.on.epicgames.com` to your hosts file, so the RSI Launcher doesn't download EAC again;
+3. renames `EasyAntiCheat_EOS.exe` to `EasyAntiCheat_EOS.exe.bak`.
+
+When the game closes it undoes exactly what it changed and prints what it undid. Anything you set up yourself is left alone. If the game crashes or the PC shuts down, the next run of `sc-offline.exe` lists what is still in place and offers to undo it. Each step can be turned off in `sc-offline.ini`; see [docs/launcher.md](docs/launcher.md#pc-changes).
+
+The firewall rule stops the game reaching the network. It doesn't remove other traces on your PC, such as logs, so use the mod at your own risk.
+
 ## Play
 
 1. Close the RSI Launcher and the game.
-2. Double-click `sc-offline.exe`. It prints the game folder it found. If Windows asks for administrator rights, say yes. That prompt is for the small helper that copies the mod in and out; the game itself never runs as administrator.
+2. Double-click `sc-offline.exe`. It prints the game folder it found. Windows asks for administrator rights; say yes. That prompt is for the small helper that makes the changes above and copies the mod in and out; the game itself never runs as administrator.
 3. Once the game has loaded you in, press **M** to open the menu.
 
 | Key | Action |
@@ -73,24 +65,20 @@ What's in each menu tab: [docs/features.md](docs/features.md).
 
 ## Troubleshooting
 
-- **The menu doesn't open:** check that EAC is off and that you started the game with `sc-offline.exe`, not the RSI Launcher.
+- **The menu doesn't open:** check that you started the game with `sc-offline.exe`, not the RSI Launcher.
 - **The launcher can't find the game:** set `game =` in `sc-offline.ini`.
 - **Is everything set up?** Run `sc-offline.exe status` from a terminal. It checks the DLL, the game version, Easy Anti-Cheat and the hosts file, and changes nothing.
-- **The launcher stops with "Easy Anti-Cheat is active":** do [Setup](#setup) step 1 again; a game update can restore `EasyAntiCheat_EOS.exe`.
-- **The game crashed or the PC shut down mid-game:** run `sc-offline.exe uninstall` before you play online.
+- **The launcher stops with "Easy Anti-Cheat is active":** set `eac_rename = on` in `sc-offline.ini`, or rename the file yourself.
+- **The launcher couldn't add the firewall rule or edit hosts:** say yes to the administrator prompt; some antivirus tools lock the hosts file.
+- **The game crashed or the PC shut down mid-game:** run `sc-offline.exe uninstall` before you play online. It removes the mod and undoes the PC changes.
 - **A game update broke the mod:** that's expected until the mod is updated for the new game version.
 - **Reporting a bug:** send `data/launcher.log`, `data/mod.log`, and the game's `Game.log`.
 
 ## Go back online
 
-1. Close the game. Run `sc-offline.exe status`: it should say `Installed: no`. If not, run `sc-offline.exe uninstall`.
-2. Rename the EAC executable back, in an administrator PowerShell:
-
-   ```powershell
-   ren "C:\Program Files (x86)\EasyAntiCheat_EOS\EasyAntiCheat_EOS.exe.bak" EasyAntiCheat_EOS.exe
-   ```
-
-3. Delete the `modules-cdn.eac-prod.on.epicgames.com` line from your hosts file, then run `ipconfig /flushdns`.
+1. Close the game and wait for the launcher window to say the changes are undone.
+2. Run `sc-offline.exe status`. It should say `Installed: no` and list no leftover PC changes. If not, run `sc-offline.exe uninstall`.
+3. If you set `eac_hosts` or `eac_rename` to `off` and made those changes by hand, undo them by hand: rename `EasyAntiCheat_EOS.exe.bak` back, delete the `modules-cdn.eac-prod.on.epicgames.com` line from your hosts file, and run `ipconfig /flushdns`.
 
 ## More docs
 

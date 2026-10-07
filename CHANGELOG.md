@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0 (unreleased)
+
+- **The launcher sets up offline play itself.** Each play, its helper blocks `StarCitizen.exe` in Windows Firewall, adds the EAC hosts line and renames `EasyAntiCheat_EOS.exe`, then undoes exactly those changes when the game closes. New `sc-offline.ini` switches `block_network`, `eac_hosts`, `eac_rename` (all on). Changes are recorded in `%ProgramData%\sc-offline\pc-changes.txt`; after a crash, `status` lists them, `uninstall` undoes them and `play` offers to.
+- The manual EAC steps are gone from the README's Setup; Windows now asks for administrator rights once per play.
+
 ## 0.3.0 (2026-10-07)
 
 - **Renamed to sc-offline.** The original ChrisWareOffline project has shut down; this is now an independent project based on ChrisWareOffline 0.9.0-rc1 (GPL-3.0). Window title, menu title, `mod.log` and the launcher say sc-offline. Removed the original project's Discord links.
