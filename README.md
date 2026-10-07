@@ -25,7 +25,7 @@ Spawn ships, NPCs and buildings, travel the star systems and wear Squadron 42 ou
 > This mod may get your account banned. Use it at your own risk, and **only offline, in single player**.
 
 > [!NOTE]
-> Builds from this repository are compiled and checked by CI, but **nobody has played them in game yet**. That includes the current Latest release. If something breaks, see [Troubleshooting](#troubleshooting) and [report it](https://github.com/scubamount/sc-offline/issues).
+> **Played in game on Windows with 0.6.1** (October 2026): the launcher, the menu and its features worked. Other PCs and game patches can still behave differently; known problems are tracked in [Issues](https://github.com/scubamount/sc-offline/issues). If something breaks, see [Troubleshooting](#troubleshooting) and [report it](https://github.com/scubamount/sc-offline/issues). Linux through Wine is still untested.
 
 ## Quick start
 

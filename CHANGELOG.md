@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- README: 0.6.1 has been played in game on Windows; the "nobody has played it" note is gone. Linux through Wine is still untested.
+
 ## 0.6.1 (2026-10-07)
 
 - **Online-safe light now updates while you play** ([#22](https://github.com/scubamount/sc-offline/issues/22)). It used to freeze while **Play** was running, so it stayed green with the game open and only changed at the end. It now refreshes every 1.5 seconds and turns red as soon as the mod is copied in or `StarCitizen.exe` is running.
