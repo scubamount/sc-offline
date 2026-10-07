@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.2 (2026-10-07)
+
+- **Offer to delete this session's game logs** ([#12](https://github.com/scubamount/sc-offline/issues/12)). When the game closes, the launcher lists the `Game.log`, `logbackups` and `Crashes` files written during the session and asks "Delete these files?" then "Are you sure?"; anything but `y` keeps them. Older logs are never touched. New `sc-offline.ini` setting `clean_logs = ask | off`.
+- The leftover-changes prompt now reads a whole line, so its Enter no longer answers the next question.
+
 ## 0.4.1 (2026-10-07)
 
 - **The launcher finds the game in more places.** After `game =`, it now tries the folder it found last time (`data\game-path.txt`), where the RSI Launcher says the game is (its install entry and the paths in `%APPDATA%\rsilauncher`), more usual folders (`Game\Star Citizen\StarCitizen`, `Games\StarCitizen` and similar), a four-level search of every fixed drive, and finally a folder picker. `game =` also accepts the folder that holds `StarCitizen`.

@@ -125,6 +125,8 @@ struct Config {
     wstring game, channel = L"LIVE", bootMap = L"PU_All", startShip = L"DRAK_Cutlass_Black", start;
     // What the helper changes on the PC while you play, and undoes when the game closes.
     bool firewall = true, eacHosts = true, eacRename = true;
+    // After the game closes: offer to delete the logs the game wrote during this session.
+    bool cleanLogs = true;
 };
 
 static bool ParseOnOff(const wstring& v, bool& out) {
@@ -159,6 +161,10 @@ static bool ReadConfig(const wstring& path, Config& c) {
         else if (!_wcsicmp(k.c_str(), L"block_network") || !_wcsicmp(k.c_str(), L"eac_hosts") || !_wcsicmp(k.c_str(), L"eac_rename")) {
             bool& b = !_wcsicmp(k.c_str(), L"block_network") ? c.firewall : !_wcsicmp(k.c_str(), L"eac_hosts") ? c.eacHosts : c.eacRename;
             if (!ParseOnOff(v, b)) Out("[!] sc-offline.ini line %d: %ls must be on or off\n", lineNo, k.c_str());
+        }
+        else if (!_wcsicmp(k.c_str(), L"clean_logs")) {
+            if (!_wcsicmp(v.c_str(), L"ask")) c.cleanLogs = true;
+            else if (!ParseOnOff(v, c.cleanLogs)) Out("[!] sc-offline.ini line %d: clean_logs must be ask or off\n", lineNo);
         }
         else Out("[!] sc-offline.ini line %d: unknown key '%ls'\n", lineNo, k.c_str());
     }
@@ -209,6 +215,64 @@ static std::string Narrow(const wstring& w) {
     std::string s(WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr), '\0');
     WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), s.data(), (int)s.size(), nullptr, nullptr);
     return s;
+}
+
+
+// --- Session logs (issue #12) ---------------------------------------------------------------
+// After a modded session, the game's own logs in the channel folder record it. Offer to delete
+// the ones written during this session, list them first, and only delete on an explicit "y".
+// Older files (online play before this session) are never touched.
+
+static ULONGLONG FileTimeU64(const FILETIME& f) { return (ULONGLONG(f.dwHighDateTime) << 32) | f.dwLowDateTime; }
+
+static void SessionFilesIn(const wstring& dir, ULONGLONG since, bool recurse, std::vector<wstring>& out) {
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (!wcscmp(fd.cFileName, L".") || !wcscmp(fd.cFileName, L"..")) continue;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue;
+        const wstring p = dir + L"\\" + fd.cFileName;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { if (recurse) SessionFilesIn(p, since, true, out); continue; }
+        if (FileTimeU64(fd.ftLastWriteTime) >= since) out.push_back(p);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+}
+
+static std::vector<wstring> SessionLogs(const wstring& channelDir, ULONGLONG since) {
+    std::vector<wstring> files;
+    const wstring gameLog = channelDir + L"\\Game.log";
+    WIN32_FILE_ATTRIBUTE_DATA a;
+    if (GetFileAttributesExW(gameLog.c_str(), GetFileExInfoStandard, &a) && FileTimeU64(a.ftLastWriteTime) >= since)
+        files.push_back(gameLog);
+    SessionFilesIn(channelDir + L"\\logbackups", since, false, files);
+    SessionFilesIn(channelDir + L"\\Crashes", since, true, files);
+    return files;
+}
+
+static bool AskYes(const char* question) {
+    std::printf("%s [y/N] ", question);
+    std::fflush(stdout);
+    char line[32] = {};
+    if (!std::fgets(line, sizeof(line), stdin)) return false;
+    return line[0] == 'y' || line[0] == 'Y';
+}
+
+static void OfferToCleanLogs(const wstring& channelDir, ULONGLONG since) {
+    const std::vector<wstring> files = SessionLogs(channelDir, since);
+    if (files.empty()) { Out("Logs:     the game wrote no logs this session\n"); return; }
+    Out("\nThe game wrote these logs during this modded session:\n");
+    for (const wstring& f : files) Out("    %ls\n", f.c_str());
+    Out("Deleting them removes the record of this session from your game folder. Keep Game.log if you\n"
+        "want to report a bug. Older logs are not touched. (clean_logs = off in sc-offline.ini skips this.)\n");
+    if (!AskYes("Delete these files?")) { Out("Logs:     kept\n"); return; }
+    if (!AskYes("Are you sure? They can't be recovered.")) { Out("Logs:     kept\n"); return; }
+    int gone = 0, failed = 0;
+    for (const wstring& f : files) {
+        if (DeleteFileW(f.c_str())) ++gone;
+        else { ++failed; Out("[!] couldn't delete %ls (error %lu)\n", f.c_str(), GetLastError()); }
+    }
+    Out("Logs:     deleted %d file%s%s\n", gone, gone == 1 ? "" : "s", failed ? "; see above for the rest" : "");
 }
 
 // --- Finding the game -------------------------------------------------------------------
@@ -421,6 +485,8 @@ static wstring PickFolder() {
     if (SUCCEEDED(init)) CoUninitialize();
     return result;
 }
+
+static bool OwnsConsoleInput() { DWORD m; return GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &m) != 0; }
 
 static bool OwnsConsole() { DWORD ids[2]; return GetConsoleProcessList(ids, 2) <= 1; }
 
@@ -1158,9 +1224,7 @@ int wmain(int argc, wchar_t** argv) {
             return Fail("dinput8.dll is missing next to sc-offline.exe.\n    Extract the whole zip into one folder and run this from there.");
         if (running) return FailCode(kExitRunning, "%ls is already running. Close it first.", kGameExe);
         if (checks.pcLeftover && !dry && command == L"play") {
-            std::printf("Undo them now and stop, instead of playing? [y/N] ");
-            const int c = std::getchar();
-            if (c == 'y' || c == 'Y') { Out("[i] undoing them (same as `sc-offline.exe uninstall`)\n"); command = L"uninstall"; }
+            if (AskYes("Undo them now and stop, instead of playing?")) { Out("[i] undoing them (same as `sc-offline.exe uninstall`)\n"); command = L"uninstall"; }
             else Out("[i] playing; they are undone together with this session's changes when the game closes.\n");
         }
         const bool playHandlesEac = command == L"play" && cfg.eacRename && !OnWine();
@@ -1192,6 +1256,7 @@ int wmain(int argc, wchar_t** argv) {
         if (play) {
             Out("[dry-run] would start %ls\\%ls\n", bin.c_str(), kGameExe);
             Out("[dry-run] after the game closes: take the mod out, put back what was set aside, undo the PC changes\n");
+            if (cfg.cleanLogs) Out("[dry-run] then list this session's Game.log, logbackups and crash files and ask (twice) before deleting them\n");
         }
         return kExitOk;
     }
@@ -1232,6 +1297,8 @@ int wmain(int argc, wchar_t** argv) {
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
     int rc = kExitOk;
+    FILETIME startFt; GetSystemTimeAsFileTime(&startFt);
+    const ULONGLONG sessionStart = FileTimeU64(startFt) - 2ull * 10000000ull;   // 2 s of clock slack
     if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, bin.c_str(), &si, &pi)) {
         Out("[!] couldn't start %ls (error %lu)\n", exe.c_str(), GetLastError());
         rc = kExitError;
@@ -1241,6 +1308,8 @@ int wmain(int argc, wchar_t** argv) {
         WaitForSingleObject(pi.hProcess, INFINITE);
         CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
         while (GameRunning()) Sleep(2000);   // the game can hand over to a second StarCitizen.exe
+        if (cfg.cleanLogs && OwnsConsoleInput()) OfferToCleanLogs(ParentDir(bin), sessionStart);
+        else if (cfg.cleanLogs) Out("Logs:     not asking (no console to answer in); run from a window to be asked\n");
     }
     CloseHandle(helper);
     Out("Mod:      the helper removes it from Bin64 and undoes the PC changes as this window closes.\n");

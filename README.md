@@ -67,7 +67,7 @@ The mod can't run while Easy Anti-Cheat (EAC) is on, so each time you play, the 
 When the game closes, it undoes exactly what it changed and prints what it undid. Anything you set up yourself is left alone. If the game crashes or the PC shuts down, the next run of `sc-offline.exe` lists what is still in place and offers to undo it. Each step can be turned off in `sc-offline.ini`; see [docs/launcher.md](docs/launcher.md#pc-changes).
 
 > [!IMPORTANT]
-> The firewall rule stops the game reaching the network. It doesn't remove other traces on your PC, such as logs, so use the mod at your own risk.
+> The firewall rule stops the game reaching the network. It doesn't remove other traces on your PC by itself. When the game closes, the launcher lists the logs the game wrote during this session (`Game.log`, new files in `logbackups` and `Crashes`) and asks twice before deleting them; keep `Game.log` if you want to report a bug. Older logs are never touched. Use the mod at your own risk.
 
 ## Play
 

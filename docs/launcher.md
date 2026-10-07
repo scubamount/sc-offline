@@ -93,6 +93,14 @@ While you play, the helper changes three things outside the game folder and undo
   changes are undone. A hosts line or `.bak` you made yourself is never touched.
 - If a step fails, the helper undoes what it already did and the game doesn't start.
 - After a crash the record stays. `status` lists it, `uninstall` undoes it, and `play` offers to.
+
+### Session logs
+
+When the game closes, the launcher lists the logs the game wrote during this session: `<channel>\Game.log`,
+new files in `<channel>\logbackups`, and new files under `<channel>\Crashes`. It asks **"Delete these
+files?"** and then **"Are you sure?"**; anything but `y` both times keeps them. Files older than the session
+(for example from online play) are never touched, and neither are `data\mod.log` and `data\launcher.log`.
+Keep `Game.log` if you want to report a bug. Set `clean_logs = off` in `sc-offline.ini` to skip the question.
 - Under Wine none of this runs; `sc-offline.sh` handles hosts there, and the firewall rule doesn't apply.
 - The firewall rule cuts the game's network for the session. It doesn't hide anything already on disk, such as
   logs or the renamed EAC file while you play.
@@ -104,6 +112,7 @@ Each line is `key = value`. Lines starting with `#` are comments. An unknown key
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `game` | (found automatically) | Your Star Citizen folder. You can point at `Roberts Space Industries`, at `StarCitizen`, at the channel folder, or at the folder that holds `StarCitizen`. |
+| `clean_logs` | `ask` | After the game closes, list this session's game logs and ask (twice) before deleting them. `off` skips it. |
 | `channel` | `LIVE` | Which install to use when `game` points above it: `LIVE`, `PTU`, `EPTU`, and so on. |
 | `boot_map` | `PU_All` | `PU_All` loads every star system, so Travel can reach Pyro and Nyx. |
 | `start_ship` | `DRAK_Cutlass_Black` | The ship you start in. |
