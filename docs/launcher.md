@@ -138,6 +138,17 @@ If a step fails, the old files are put back at once. If the PC dies mid-update, 
 `sc-offline.exe` reads `applied.txt` and puts them back. `check_updates = off` turns the check off;
 `sc-offline.exe update` checks on demand.
 
+### Discord status
+
+With the Discord app open on the same PC, **Play** sets your Discord status once the game starts:
+
+- **Playing sc-offline**: `Star Citizen offline mod`, `v<version> · single player`, and the time played
+- the sc-offline logo, and two buttons other people can click: **Join the Discord** and **Get sc-offline**
+
+The launcher talks only to the Discord app on your PC (its local pipe). It sends nothing over the network, and it needs no Discord login or token. The status clears when the game closes. If Discord isn't running, nothing happens and `launcher.log` says `Discord: not running`; if Discord starts later, the launcher picks it up within 15 seconds. Under Wine or Proton the Discord pipe usually isn't reachable, so nothing is shown.
+
+To turn it off, untick **Show on Discord** in the window or set `discord_presence = off` in `sc-offline.ini`. The change applies from the next **Play**.
+
 ### Crash reports
 
 If the game wrote crash files under `<channel>\Crashes` during the session, the launcher offers a report
@@ -181,6 +192,7 @@ There is no wallet setting: your aUEC balance is kept in `data\wallet.txt` (see 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `game` | (found automatically) | Your Star Citizen folder. You can point at `Roberts Space Industries`, at `StarCitizen`, at the channel folder, or at the folder that holds `StarCitizen`. |
+| `discord_presence` | `on` | While the game runs, your Discord profile shows **Playing sc-offline** with the version, time played and two buttons (the sc-offline Discord, the download page). Your Discord friends and servers see it. Also the **Show on Discord** box in the window. See [Discord status](#discord-status). |
 | `check_updates` | `on` | Check GitHub for a newer release on `play` and `status` and offer to install it. |
 | `crash_reports` | `on` | After a crash, offer a redacted log bundle and the bug form. See [Crash reports](#crash-reports). |
 | `clean_logs` | `ask` | After the game closes, list this session's game logs and ask (twice) before deleting them. `off` skips it. |

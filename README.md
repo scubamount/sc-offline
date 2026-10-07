@@ -93,7 +93,7 @@ Double-clicking `sc-offline.exe` opens its window:
 | **Install** / **Uninstall** | `sc-offline.exe install` / `uninstall` |
 | **Open settings** / **Open logs** | open `sc-offline.ini` in Notepad / the `data` folder |
 
-The light at the top shows whether it's safe to go online. Questions (`Update now?`, `Delete these files?`) get **Yes** and **No** buttons. Every command still works from a terminal.
+While you play, your Discord profile shows **Playing sc-offline** with buttons to this Discord and the download page; untick **Show on Discord** to hide it. The light at the top shows whether it's safe to go online. Questions (`Update now?`, `Delete these files?`) get **Yes** and **No** buttons. Every command still works from a terminal.
 
 1. Close the RSI Launcher and the game.
 2. Double-click `sc-offline.exe` and click **Play**. The window shows the game folder it found. Windows asks for administrator rights; say yes. That prompt is for the small helper that makes the changes above and copies the mod in and out; the game itself never runs as administrator.

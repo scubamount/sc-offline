@@ -35,6 +35,7 @@
 #include <commctrl.h>
 #include <cctype>
 #include <cstdarg>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <cwctype>
@@ -146,6 +147,8 @@ struct Config {
     bool checkUpdates = true;
     // After a crash, offer a redacted log bundle and a prefilled bug form (issue #18).
     bool crashReports = true;
+    // Show "Playing sc-offline" on the player's Discord profile while the game runs (issue #34).
+    bool discordPresence = true;
 };
 
 static bool ParseOnOff(const wstring& v, bool& out) {
@@ -183,6 +186,9 @@ static bool ReadConfig(const wstring& path, Config& c) {
         }
         else if (!_wcsicmp(k.c_str(), L"crash_reports")) {
             if (!ParseOnOff(v, c.crashReports)) Out("[!] sc-offline.ini line %d: crash_reports must be on or off\n", lineNo);
+        }
+        else if (!_wcsicmp(k.c_str(), L"discord_presence")) {
+            if (!ParseOnOff(v, c.discordPresence)) Out("[!] sc-offline.ini line %d: discord_presence must be on or off\n", lineNo);
         }
         else if (!_wcsicmp(k.c_str(), L"check_updates")) {
             if (!ParseOnOff(v, c.checkUpdates)) Out("[!] sc-offline.ini line %d: check_updates must be on or off\n", lineNo);
@@ -651,6 +657,148 @@ static void Relaunch(const wstring& here) {
     ExitProcess(code);
 }
 
+
+// --- Discord Rich Presence (issue #34) ------------------------------------------------------
+// While the game runs, the player's Discord profile shows "Playing sc-offline" with the version,
+// the time played and two buttons (the Discord server and the download page). It talks to the
+// Discord app on this PC through its local pipe, \\.\pipe\discord-ipc-N: each frame is an int32
+// opcode, an int32 length and JSON. No SDK, no client secret, no network. Best effort: when
+// Discord isn't running (or under Wine/Proton, where the pipe usually isn't there) nothing happens
+// and play never waits on it. Discord clears the activity when the pipe closes.
+
+static const char* kDiscordAppId = "1557514943308242955";   // public; the sc-offline app's assets live there
+static const char* kDiscordInvite = "https://discord.gg/NJKeVfYCCC";
+
+struct Presence { HANDLE stop = nullptr, thread = nullptr; DWORD gamePid = 0; long long start = 0; };
+
+static bool PipeWrite(HANDLE pipe, uint32_t op, const std::string& json) {
+    std::string frame(8, '\0');
+    const uint32_t len = static_cast<uint32_t>(json.size());
+    memcpy(&frame[0], &op, 4); memcpy(&frame[4], &len, 4);
+    frame += json;
+    DWORD put = 0;
+    return WriteFile(pipe, frame.data(), static_cast<DWORD>(frame.size()), &put, nullptr) && put == frame.size();
+}
+
+// Reads one frame, giving up after timeoutMs so a stuck Discord can't hold the launcher.
+static bool PipeRead(HANDLE pipe, uint32_t& op, std::string& json, DWORD timeoutMs) {
+    const ULONGLONG until = GetTickCount64() + timeoutMs;
+    auto readN = [&](char* buf, DWORD n) {
+        DWORD have = 0;
+        while (have < n) {
+            DWORD avail = 0;
+            if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &avail, nullptr)) return false;
+            if (!avail) { if (GetTickCount64() > until) return false; Sleep(20); continue; }
+            DWORD got = 0;
+            if (!ReadFile(pipe, buf + have, std::min<DWORD>(avail, n - have), &got, nullptr) || !got) return false;
+            have += got;
+        }
+        return true;
+    };
+    char head[8];
+    if (!readN(head, 8)) return false;
+    uint32_t len = 0; memcpy(&op, head, 4); memcpy(&len, head + 4, 4);
+    if (len > 65536) return false;
+    json.assign(len, '\0');
+    return len == 0 || readN(&json[0], len);
+}
+
+static HANDLE ConnectDiscord() {
+    for (int i = 0; i < 10; ++i) {
+        const wstring name = L"\\\\.\\pipe\\discord-ipc-" + std::to_wstring(i);
+        HANDLE h = CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (h != INVALID_HANDLE_VALUE) return h;
+    }
+    return INVALID_HANDLE_VALUE;
+}
+
+// The SET_ACTIVITY command. Every value is ours (version, URLs), so nothing needs JSON escaping.
+static std::string ActivityJson(DWORD pid, long long start) {
+    char buf[1400];
+    std::snprintf(buf, sizeof(buf),
+        "{\"cmd\":\"SET_ACTIVITY\",\"nonce\":\"%lld\",\"args\":{\"pid\":%lu,\"activity\":{"
+        "\"details\":\"Star Citizen offline mod\",\"state\":\"v%s \xC2\xB7 single player\","
+        "\"timestamps\":{\"start\":%lld},"
+        "\"assets\":{\"large_image\":\"sc_offline\",\"large_text\":\"sc-offline v%s\","
+        "\"small_image\":\"sc_offline_small\",\"small_text\":\"Offline, single player\"},"
+        "\"buttons\":[{\"label\":\"Join the Discord\",\"url\":\"%s\"},"
+        "{\"label\":\"Get sc-offline\",\"url\":\"https://github.com/scubamount/sc-offline/releases/latest\"}]}}}",
+        start, (unsigned long)pid, SCO_VERSION, start, SCO_VERSION, kDiscordInvite);
+    return buf;
+}
+
+// Connects, sets the activity and holds the pipe until stop is signalled. Discord may start
+// after the game, so it tries again every 15 s; one launcher.log line says how it went.
+static DWORD WINAPI PresenceThread(void* arg) {
+    Presence& p = *static_cast<Presence*>(arg);
+    bool told = false;
+    while (true) {
+        HANDLE pipe = ConnectDiscord();
+        if (pipe != INVALID_HANDLE_VALUE) {
+            uint32_t op = 0; std::string reply;
+            const bool ready = PipeWrite(pipe, 0, std::string("{\"v\":1,\"client_id\":\"") + kDiscordAppId + "\"}") &&
+                               PipeRead(pipe, op, reply, 3000) && reply.find("\"READY\"") != std::string::npos;
+            const bool set = ready && PipeWrite(pipe, 1, ActivityJson(p.gamePid, p.start)) &&
+                             PipeRead(pipe, op, reply, 3000) && reply.find("\"ERROR\"") == std::string::npos;
+            if (set) {
+                Out("Discord:  showing \"Playing sc-offline\" on your profile (discord_presence = off hides it)\n");
+                // Hold the pipe open (closing it clears the status); drain anything Discord sends.
+                while (WaitForSingleObject(p.stop, 1000) == WAIT_TIMEOUT) {
+                    DWORD avail = 0;
+                    if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &avail, nullptr)) break;   // Discord quit
+                    if (avail && !PipeRead(pipe, op, reply, 1000)) break;
+                }
+                CloseHandle(pipe);
+                if (WaitForSingleObject(p.stop, 0) == WAIT_OBJECT_0) return 0;
+                told = true;
+                continue;   // Discord restarted: try again
+            }
+            CloseHandle(pipe);
+            if (!told) { Out("Discord:  couldn't set the status (%s)\n", ready ? "Discord refused it" : "no answer"); told = true; }
+        } else if (!told) {
+            if (g_log) { std::fprintf(g_log, "Discord:  not running; no status shown\n"); std::fflush(g_log); }
+            told = true;
+        }
+        if (WaitForSingleObject(p.stop, 15000) == WAIT_OBJECT_0) return 0;
+    }
+}
+
+static void StartPresence(Presence& p, DWORD gamePid) {
+    p.gamePid = gamePid;
+    p.start = static_cast<long long>(std::time(nullptr));
+    p.stop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (p.stop) p.thread = CreateThread(nullptr, 0, PresenceThread, &p, 0, nullptr);
+}
+
+static void StopPresence(Presence& p) {
+    if (!p.thread) return;
+    SetEvent(p.stop);
+    WaitForSingleObject(p.thread, 5000);
+    CloseHandle(p.thread); CloseHandle(p.stop);
+    p.thread = p.stop = nullptr;
+}
+
+// Sets `key = value` in sc-offline.ini: replaces the first uncommented line for the key, or appends one.
+static bool SetIniValue(const wstring& iniPath, const char* key, const char* value) {
+    std::string text;
+    ReadAll(iniPath, text);
+    const std::string line = std::string(key) + " = " + value;
+    for (size_t pos = 0; pos < text.size();) {
+        size_t nl = text.find('\n', pos); if (nl == std::string::npos) nl = text.size();
+        const size_t b = text.find_first_not_of(" \t", pos);
+        if (b < nl && !_strnicmp(text.c_str() + b, key, strlen(key))) {
+            size_t after = b + strlen(key);
+            while (after < nl && (text[after] == ' ' || text[after] == '\t')) ++after;
+            if (after < nl && text[after] == '=') {
+                size_t end = nl; if (end > pos && text[end - 1] == '\r') --end;
+                return WriteAll(iniPath, text.substr(0, pos) + line + text.substr(end));
+            }
+        }
+        pos = nl + 1;
+    }
+    if (!text.empty() && text.back() != '\n') text += "\r\n";
+    return WriteAll(iniPath, text + "\r\n# Show \"Playing sc-offline\" on your Discord profile while the game runs. on or off.\r\n" + line + "\r\n");
+}
 
 // --- Crash reports (issue #18) -------------------------------------------------------------
 // After a session in which the game crashed (new files under <channel>\Crashes), offer to bundle
@@ -1778,7 +1926,7 @@ static CheckResult SelfChecks(const wstring& here, const Config& cfg, const Game
 // and its [y/N] questions are answered by the Yes/No buttons through its stdin.
 
 enum { kIdPlay = 101, kIdStatus, kIdUpdate, kIdInstall, kIdUninstall, kIdSettings, kIdLogs, kIdYes, kIdNo,
-       kIdOutput, kIdLight, kIdLightText, kIdPrompt };
+       kIdOutput, kIdLight, kIdLightText, kIdPrompt, kIdDiscord };
 enum { kMsgOutput = WM_APP + 1, kMsgDone, kTimerLight = 1 };
 
 struct Gui {
@@ -1933,6 +2081,7 @@ static void Layout(HWND wnd) {
     int x = m; const int y = m + 46;
     const int widths[] = { 90, 80, 80, 80, 90 };
     for (int i = 0; i < 5; ++i) { MoveWindow(g.buttons[i], x, y, widths[i], bh, TRUE); x += widths[i] + 6; }
+    MoveWindow(GetDlgItem(wnd, kIdDiscord), x + 12, y + 7, 170, 20, TRUE);
     MoveWindow(GetDlgItem(wnd, kIdLogs), W - m - 100, y, 100, bh, TRUE);
     MoveWindow(GetDlgItem(wnd, kIdSettings), W - m - 100 - 6 - 110, y, 110, bh, TRUE);
     const int qy = H - m - bh;
@@ -1959,6 +2108,12 @@ static LRESULT CALLBACK GuiProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         SendMessageW(g.buttons[0], BM_SETSTYLE, BS_DEFPUSHBUTTON, TRUE);
         mk(L"BUTTON", L"Open settings", BS_PUSHBUTTON | WS_TABSTOP, kIdSettings);
         mk(L"BUTTON", L"Open logs", BS_PUSHBUTTON | WS_TABSTOP, kIdLogs);
+        {   // Discord status toggle: writes discord_presence to sc-offline.ini; the next Play uses it.
+            Config cfg;
+            FILE* saved = g_log; g_log = nullptr; ReadConfig(g.here + L"\\sc-offline.ini", cfg); g_log = saved;
+            HWND cb = mk(L"BUTTON", L"Show on Discord", BS_AUTOCHECKBOX | WS_TABSTOP, kIdDiscord);
+            SendMessageW(cb, BM_SETCHECK, cfg.discordPresence ? BST_CHECKED : BST_UNCHECKED, 0);
+        }
         g.out = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
                                 0, 0, 10, 10, wnd, (HMENU)(INT_PTR)kIdOutput, nullptr, nullptr);
         SendMessageW(g.out, WM_SETFONT, (WPARAM)g.mono, TRUE);
@@ -2014,6 +2169,14 @@ static LRESULT CALLBACK GuiProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         case kIdYes: Answer(true); return 0;
         case kIdNo: Answer(false); return 0;
         case kIdSettings: ShellExecuteW(wnd, L"open", L"notepad.exe", (L"\"" + g.here + L"\\sc-offline.ini\"").c_str(), nullptr, SW_SHOWNORMAL); return 0;
+        case kIdDiscord: {
+            const bool on = SendMessageW(GetDlgItem(wnd, kIdDiscord), BM_GETCHECK, 0, 0) == BST_CHECKED;
+            if (SetIniValue(g.here + L"\\sc-offline.ini", "discord_presence", on ? "on" : "off"))
+                AppendOutput(on ? L"\nDiscord status on: your profile shows \"Playing sc-offline\" from the next Play.\n"
+                                : L"\nDiscord status off: from the next Play, nothing is shown on Discord.\n");
+            else AppendOutput(L"\n[!] couldn't write sc-offline.ini; set discord_presence there by hand.\n");
+            return 0;
+        }
         case kIdLogs: { const wstring d = g.here + L"\\data"; CreateDirectoryW(d.c_str(), nullptr);
                         ShellExecuteW(wnd, L"open", d.c_str(), nullptr, nullptr, SW_SHOWNORMAL); return 0; }
         }
@@ -2311,9 +2474,12 @@ int wmain(int argc, wchar_t** argv) {
     } else {
         if (!checks.gameBuild.empty()) WriteAll(data + L"\\game-build.txt", checks.gameBuild + "\n");
         Out("\nPlaying. When the game closes, the mod is removed from Bin64.\n");
+        Presence presence;
+        if (cfg.discordPresence) StartPresence(presence, pi.dwProcessId);
         WaitForSingleObject(pi.hProcess, INFINITE);
         CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
         while (GameRunning()) Sleep(2000);   // the game can hand over to a second StarCitizen.exe
+        StopPresence(presence);
         if (cfg.crashReports && OwnsConsoleInput()) OfferCrashReport(here, ParentDir(bin), sessionStart, checks.gameBuild);
         if (cfg.cleanLogs && OwnsConsoleInput()) OfferToCleanLogs(ParentDir(bin), sessionStart);
         else if (cfg.cleanLogs) Out("Logs:     not asking (no console to answer in); run from a window to be asked\n");

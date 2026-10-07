@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Discord status** ([#34](https://github.com/scubamount/sc-offline/issues/34)). While the game runs, your Discord profile shows **Playing sc-offline** with the version, time played and buttons to the sc-offline Discord and download page. It talks only to the Discord app on your PC. Turn it off with the **Show on Discord** box in the window or `discord_presence = off`.
 - Project activity (releases, merged PRs, issues opened or closed) now posts to the project's Discord channel ([#30](https://github.com/scubamount/sc-offline/issues/30)).
 - Docs and `sc-offline.ini`: `start_ship` only applies with `start = Daymar`, the wallet lives in `data\wallet.txt`, and a new **Not available offline** list in `docs/features.md` covers ASOP, the vehicle manager and character creation ([#26](https://github.com/scubamount/sc-offline/issues/26)).
 - README: 0.6.1 has been played in game on Windows; the "nobody has played it" note is gone. Linux through Wine is still untested.
