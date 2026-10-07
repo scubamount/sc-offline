@@ -143,6 +143,7 @@ static void OnMainThreadTick() {
     ProcessOutfits();
     TeleportTick(now);
     ProcessTravel(now);
+    ProcessRegistryProbe();
 }
 
 static HHOOK g_msgHook = nullptr;

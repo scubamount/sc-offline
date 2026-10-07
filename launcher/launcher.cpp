@@ -113,7 +113,7 @@ static int FailCode(int code, const char* fmt, ...) {
 
 // sc-offline.ini: `key = value` lines; a line starting with '#' is a comment. Unknown keys are reported, not ignored.
 struct Config {
-    wstring game, channel = L"LIVE", bootMap = L"PU_All", startShip = L"DRAK_Cutlass_Black", start;
+    wstring game, channel = L"LIVE", bootMap = L"PU_All", startShip = L"DRAK_Cutlass_Black", start, registryProbe;
 };
 
 static bool ReadConfig(const wstring& path, Config& c) {
@@ -139,6 +139,7 @@ static bool ReadConfig(const wstring& path, Config& c) {
         else if (!_wcsicmp(k.c_str(), L"boot_map"))   c.bootMap = v;
         else if (!_wcsicmp(k.c_str(), L"start_ship")) c.startShip = v;
         else if (!_wcsicmp(k.c_str(), L"start"))      c.start = v;
+        else if (!_wcsicmp(k.c_str(), L"registry_probe")) c.registryProbe = v;
         else Out("[!] sc-offline.ini line %d: unknown key '%ls'\n", lineNo, k.c_str());
     }
     return true;
@@ -714,6 +715,7 @@ int wmain(int argc, wchar_t** argv) {
         SetVar(L"SC_OFFLINE_START", cfg.start);
         SetVar(L"SC_OFFLINE_START_SHIP", cfg.startShip);
         SetVar(L"SC_USER", g.userDir);
+        SetVar(L"SC_OFFLINE_REGISTRY_PROBE", cfg.registryProbe);
         if (dry)
             Out("[dry-run] would set SC_OFFLINE_BOOT_MAP=%ls SC_OFFLINE_START_SHIP=%ls SC_OFFLINE_START=%ls\n"
                 "          SC_OFFLINE_MOD_LOG, _SPAWN_FILE, _SHIPS_FILE under %ls; SC_USER=%ls\n",

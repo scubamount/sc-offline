@@ -11,6 +11,7 @@ void ProcessShipMenu(DWORD now);
 // enemyWing also spawns the Vanduul AI wing next to it (the "Bengal + Vanduul wing" row).
 bool Menu_EnemySideAvailable();
 void RefreshEnemySide();   // game thread only: caches the enemy-side lookup
+void ProcessRegistryProbe();   // game thread; no-op unless SC_OFFLINE_REGISTRY_PROBE=1
 void Menu_RequestSpawnClass(const char* cls, float heightAboveMe, bool sitInPilotSeat, bool flightReady, bool enemyWing);
 const char* SpawnEntityNearPlayer(const char* entityClass, const double offset[3], uint64_t& id);
 uintptr_t EntityComponent(uintptr_t entity, const char* type);

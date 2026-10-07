@@ -74,3 +74,4 @@ Each line is `key = value`. Lines starting with `#` are comments. An unknown key
 | `boot_map` | `PU_All` | `PU_All` loads every star system, so Travel can reach Pyro and Nyx. |
 | `start_ship` | `DRAK_Cutlass_Black` | The ship you start in. |
 | `start` | (empty) | `Daymar` starts you over Daymar, in that ship. |
+| `registry_probe` | (off) | Test only. `1` writes `data/registry-dump.txt`, every entity class the game knows, 15 s after you spawn. |

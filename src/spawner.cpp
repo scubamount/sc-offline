@@ -337,6 +337,128 @@ static int VehicleSize(uintptr_t entityClass) {
     return rec ? static_cast<int>(Rd<uint32_t>(rec + 0x10)) : 0;
 }
 
+// ---- Registry probe (opt-in: registry_probe = 1 in sc-offline.ini -> SC_OFFLINE_REGISTRY_PROBE=1) ----
+// Test build for listing entity classes from the player's own game instead of data/*.txt.
+// Runs once on the game thread after the player has spawned. It learns how to read a class's
+// name from two known classes, walks the registry's class map (same layout as hooks.cpp
+// FindClassGuids), round-trips every name through the name lookup (vfn+0x20), and writes
+// data/registry-dump.txt: one "name<TAB>vehicleSize" line per class. Changes nothing in game.
+
+static const char* const kProbeKnown[] = {
+    "DRAK_Cutlass_Black", "AEGS_Gladius", "ANVL_Arrow", "AEGS_Avenger_Titan", "MISC_Prospector", "RSI_Aurora_MR",
+};
+
+enum class NameVia { None, Field, FieldIndirect, VSlot10 };
+static NameVia g_nameVia = NameVia::None;
+static size_t  g_nameOff = 0;
+
+static bool SafeStrEq(const char* p, const char* want) {
+    __try { return p && !IsBadReadPtr(p, 1) && strcmp(p, want) == 0; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+static const char* ClassNameVia(uintptr_t cls, NameVia via, size_t off) {
+    __try {
+        switch (via) {
+        case NameVia::Field:         return Rd<const char*>(cls + off);
+        case NameVia::FieldIndirect: { const uintptr_t p = Rd<uintptr_t>(cls + off); return p ? Rd<const char*>(p) : nullptr; }
+        case NameVia::VSlot10:       return VCall<const char*>(cls, 0x10);
+        default:                     return nullptr;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+
+// Find one way to read a name that works for both classes.
+static bool CalibrateName(uintptr_t a, const char* na, uintptr_t b, const char* nb) {
+    for (size_t off = 0x08; off < 0x200; off += 8)
+        for (NameVia via : { NameVia::Field, NameVia::FieldIndirect })
+            if (SafeStrEq(ClassNameVia(a, via, off), na) && SafeStrEq(ClassNameVia(b, via, off), nb)) {
+                g_nameVia = via; g_nameOff = off; return true;
+            }
+    if (SafeStrEq(ClassNameVia(a, NameVia::VSlot10, 0), na) && SafeStrEq(ClassNameVia(b, NameVia::VSlot10, 0), nb)) {
+        g_nameVia = NameVia::VSlot10; return true;
+    }
+    return false;
+}
+
+static int SafeVehicleSize(uintptr_t cls) {
+    __try { return VehicleSize(cls); } __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+}
+
+static uintptr_t SafeLookup(uintptr_t registry, const char* name) {
+    __try { return VCall<uintptr_t>(registry, 0x20, name); } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+static void RunRegistryProbe(uintptr_t registry) {
+    uintptr_t known[2] = {}; const char* knownName[2] = {};
+    int k = 0;
+    for (const char* n : kProbeKnown)
+        if (k < 2) { const uintptr_t c = SafeLookup(registry, n); if (c) { known[k] = c; knownName[k++] = n; } }
+    if (k < 2) { Log("[probe] fewer than 2 known classes resolve; stopping"); return; }
+    if (!CalibrateName(known[0], knownName[0], known[1], knownName[1])) {
+        Log("[probe] no name field in the first 0x200 bytes and vtable+0x10 doesn't return it; stopping");
+        return;
+    }
+    Log("[probe] class name via %s at +0x%zX (calibrated on %s, %s)",
+        g_nameVia == NameVia::Field ? "char* field" : g_nameVia == NameVia::FieldIndirect ? "indirect field" : "vtable slot",
+        g_nameVia == NameVia::VSlot10 ? size_t(0x10) : g_nameOff, knownName[0], knownName[1]);
+
+    char path[MAX_PATH];
+    if (!ModLogSibling(path, sizeof(path), "registry-dump.txt")) { Log("[probe] no output path (SC_OFFLINE_MOD_LOG unset)"); return; }
+    FILE* f = _fsopen(path, "w", _SH_DENYWR);
+    if (!f) { Log("[probe] can't write %s", path); return; }
+
+    int total = 0, named = 0, roundTrip = 0, vehicles = 0, faults = 0;
+    uintptr_t stack[256]; int sp = 0;
+    const uintptr_t head = Rd<uintptr_t>(registry + 0x48);
+    const uintptr_t root = Rd<uintptr_t>(head + 0x08);
+    if (root && !Rd<uint8_t>(root + 0x19)) stack[sp++] = root;
+    while (sp && total < 500000) {
+        const uintptr_t n = stack[--sp];
+        const uintptr_t cls = Rd<uintptr_t>(n + 0x30);
+        ++total;
+        const char* name = ClassNameVia(cls, g_nameVia, g_nameOff);
+        char copy[256] = {};
+        __try { if (name) strncpy_s(copy, name, _TRUNCATE); } __except (EXCEPTION_EXECUTE_HANDLER) { copy[0] = 0; ++faults; }
+        if (copy[0]) {
+            ++named;
+            if (SafeLookup(registry, copy) == cls) ++roundTrip;
+            const int vs = SafeVehicleSize(cls);
+            if (vs > 0) ++vehicles;
+            if (vs < 0) ++faults;
+            fprintf(f, "%s\t%d\n", copy, vs);
+        }
+        for (size_t off : { size_t(0x00), size_t(0x10) }) {
+            const uintptr_t c = Rd<uintptr_t>(n + off);
+            if (c && !Rd<uint8_t>(c + 0x19) && sp < 256) stack[sp++] = c;
+        }
+    }
+    fclose(f);
+    Log("[probe] %d classes, %d named, %d round-trip through the name lookup, %d vehicles (size > 0), %d faults -> %s",
+        total, named, roundTrip, vehicles, faults, path);
+}
+
+void ProcessRegistryProbe() {
+    static int state = 0;   // 0 = not checked, 1 = waiting, 2 = done
+    static DWORD readyAt = 0;
+    if (state == 2) return;
+    if (state == 0) {
+        char v[8] = {};
+        const DWORD n = GetEnvironmentVariableA("SC_OFFLINE_REGISTRY_PROBE", v, sizeof(v));
+        if (!n || n >= sizeof(v) || v[0] != '1') { state = 2; return; }
+        Log("[probe] registry probe on; runs 15 s after you spawn");
+        state = 1;
+    }
+    if (!g_sp.ok || !g_tp.entitySystem || !*g_tp.entitySystem || !LocalPlayerEntityId()) return;
+    const DWORD now = GetTickCount();
+    if (!readyAt) { readyAt = now + 15000; return; }
+    if (static_cast<LONG>(now - readyAt) < 0) return;
+    state = 2;
+    uintptr_t registry = 0;
+    __try { registry = ClassRegistry(); } __except (EXCEPTION_EXECUTE_HANDLER) { registry = 0; }
+    if (!registry) { Log("[probe] no class registry"); return; }
+    __try { RunRegistryProbe(registry); } __except (EXCEPTION_EXECUTE_HANDLER) { Log("[probe] fault while walking the registry"); }
+}
+
 // The Vanduul wing that the "Bengal + Vanduul wing" row spawns alongside its Bengal.
 static const char* const kEnemySideClasses[] = {
     "VNCL_Blade_PU_AI_VAN", "VNCL_Scythe_PU_AI_VAN", "VNCL_Glaive_PU_AI_VAN",
