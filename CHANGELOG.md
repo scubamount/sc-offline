@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.0 (2026-10-07)
+
+- **The launcher updates itself** ([#14](https://github.com/scubamount/sc-offline/issues/14)). On `play` and `status` it checks GitHub's latest full release (3-second timeout, never blocks play) and asks before installing. It downloads the release zip, checks it against GitHub's SHA-256 digest, swaps the program files with a journal in `data\update\applied.txt` (rolled back on failure, or on the next run after a crash), keeps `sc-offline.ini` and your saves, appends new ini settings commented out, and restarts itself. New command `sc-offline.exe update`, new setting `check_updates = on | off`.
+
 ## 0.4.2 (2026-10-07)
 
 - **Offer to delete this session's game logs** ([#12](https://github.com/scubamount/sc-offline/issues/12)). When the game closes, the launcher lists the `Game.log`, `logbackups` and `Crashes` files written during the session and asks "Delete these files?" then "Are you sure?"; anything but `y` keeps them. Older logs are never touched. New `sc-offline.ini` setting `clean_logs = ask | off`.

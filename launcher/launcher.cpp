@@ -31,6 +31,7 @@
 #include <shlwapi.h>
 #include <shobjidl.h>
 #include <tlhelp32.h>
+#include <winhttp.h>
 #include <cctype>
 #include <cstdarg>
 #include <cstdio>
@@ -47,6 +48,7 @@
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "winhttp.lib")
 
 using std::wstring;
 
@@ -127,6 +129,8 @@ struct Config {
     bool firewall = true, eacHosts = true, eacRename = true;
     // After the game closes: offer to delete the logs the game wrote during this session.
     bool cleanLogs = true;
+    // Check GitHub for a newer sc-offline release on play/status (issue #14).
+    bool checkUpdates = true;
 };
 
 static bool ParseOnOff(const wstring& v, bool& out) {
@@ -161,6 +165,9 @@ static bool ReadConfig(const wstring& path, Config& c) {
         else if (!_wcsicmp(k.c_str(), L"block_network") || !_wcsicmp(k.c_str(), L"eac_hosts") || !_wcsicmp(k.c_str(), L"eac_rename")) {
             bool& b = !_wcsicmp(k.c_str(), L"block_network") ? c.firewall : !_wcsicmp(k.c_str(), L"eac_hosts") ? c.eacHosts : c.eacRename;
             if (!ParseOnOff(v, b)) Out("[!] sc-offline.ini line %d: %ls must be on or off\n", lineNo, k.c_str());
+        }
+        else if (!_wcsicmp(k.c_str(), L"check_updates")) {
+            if (!ParseOnOff(v, c.checkUpdates)) Out("[!] sc-offline.ini line %d: check_updates must be on or off\n", lineNo);
         }
         else if (!_wcsicmp(k.c_str(), L"clean_logs")) {
             if (!_wcsicmp(v.c_str(), L"ask")) c.cleanLogs = true;
@@ -217,6 +224,392 @@ static std::string Narrow(const wstring& w) {
     return s;
 }
 
+
+
+static std::string Sha256(const std::string& bytes) {
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    BCRYPT_HASH_HANDLE h = nullptr;
+    unsigned char digest[32];
+    std::string hex;
+    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) != 0) return hex;
+    if (BCryptCreateHash(alg, &h, nullptr, 0, nullptr, 0, 0) == 0 &&
+        BCryptHashData(h, (PUCHAR)bytes.data(), static_cast<ULONG>(bytes.size()), 0) == 0 &&
+        BCryptFinishHash(h, digest, sizeof(digest), 0) == 0) {
+        char two[3];
+        for (unsigned char c : digest) { std::snprintf(two, sizeof(two), "%02x", c); hex += two; }
+    }
+    if (h) BCryptDestroyHash(h);
+    BCryptCloseAlgorithmProvider(alg, 0);
+    return hex;
+}
+
+// --- Self-update (issue #14) ---------------------------------------------------------------
+// Ask GitHub for the latest full release; if it is newer, offer to download the release zip,
+// check it against the SHA-256 digest GitHub publishes for the asset, and swap the files in.
+// The swap is journaled in data\update\applied.txt before each step, so a crash rolls back on
+// the next run. Files the player owns are never replaced: sc-offline.ini is kept (new keys are
+// appended to it, commented out), and anything in data\ that the release doesn't ship (wallet,
+// saved places, bookmarks, logs) is left alone because only shipped paths are written.
+
+static const wchar_t* kReleasesApi = L"https://api.github.com/repos/scubamount/sc-offline/releases/latest";
+
+static bool HttpGet(const wstring& url, std::string& body, DWORD timeoutMs, size_t cap) {
+    body.clear();
+    URL_COMPONENTS u{}; u.dwStructSize = sizeof(u);
+    wchar_t host[256] = {}, path[2048] = {};
+    u.lpszHostName = host; u.dwHostNameLength = ARRAYSIZE(host);
+    u.lpszUrlPath = path; u.dwUrlPathLength = ARRAYSIZE(path);
+    wchar_t extra[2048] = {}; u.lpszExtraInfo = extra; u.dwExtraInfoLength = ARRAYSIZE(extra);
+    if (!WinHttpCrackUrl(url.c_str(), 0, 0, &u) || u.nScheme != INTERNET_SCHEME_HTTPS) return false;
+    const wstring agent = L"sc-offline/" + wstring(SCO_VERSION, SCO_VERSION + strlen(SCO_VERSION));
+    HINTERNET s = WinHttpOpen(agent.c_str(), WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!s) return false;
+    WinHttpSetTimeouts(s, (int)timeoutMs, (int)timeoutMs, (int)timeoutMs, (int)timeoutMs);
+    bool ok = false;
+    HINTERNET c = WinHttpConnect(s, host, u.nPort, 0);
+    HINTERNET r = c ? WinHttpOpenRequest(c, L"GET", (wstring(path) + extra).c_str(), nullptr, WINHTTP_NO_REFERER,
+                                         WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE) : nullptr;
+    if (r && WinHttpSendRequest(r, L"Accept: application/vnd.github+json\r\n", (DWORD)-1L, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+        WinHttpReceiveResponse(r, nullptr)) {
+        DWORD status = 0, len = sizeof(status);
+        WinHttpQueryHeaders(r, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status, &len, WINHTTP_NO_HEADER_INDEX);
+        if (status == 200) {
+            ok = true;
+            char buf[65536];
+            for (;;) {
+                DWORD got = 0;
+                if (!WinHttpReadData(r, buf, sizeof(buf), &got)) { ok = false; break; }
+                if (!got) break;
+                body.append(buf, got);
+                if (body.size() > cap) { ok = false; break; }
+            }
+        }
+    }
+    if (r) WinHttpCloseHandle(r);
+    if (c) WinHttpCloseHandle(c);
+    WinHttpCloseHandle(s);
+    return ok;
+}
+
+// The value of `key` directly inside the JSON object that starts at j[from] ('{'): a string is
+// unescaped, any other value (true, 12, null) is returned as its raw token. Nested objects and
+// arrays are skipped, so an asset's uploader can't shadow the asset's own fields.
+static bool JsonKey(const std::string& j, size_t from, const char* key, std::string& out, size_t* valueAt = nullptr) {
+    int depth = 0;
+    for (size_t i = from; i < j.size(); ++i) {
+        const char ch = j[i];
+        if (ch == '"') {
+            size_t e = i + 1; std::string str;
+            for (; e < j.size() && j[e] != '"'; ++e) {
+                if (j[e] == '\\' && e + 1 < j.size()) { ++e; str += j[e] == 'n' ? '\n' : j[e]; } else str += j[e];
+            }
+            size_t k = e + 1; while (k < j.size() && isspace((unsigned char)j[k])) ++k;
+            if (depth == 1 && k < j.size() && j[k] == ':' && str == key) {
+                ++k; while (k < j.size() && isspace((unsigned char)j[k])) ++k;
+                if (valueAt) *valueAt = k;
+                if (k < j.size() && j[k] == '"') {
+                    out.clear();
+                    for (size_t v = k + 1; v < j.size() && j[v] != '"'; ++v) {
+                        if (j[v] == '\\' && v + 1 < j.size()) ++v;
+                        out += j[v];
+                    }
+                } else {
+                    size_t v = k; while (v < j.size() && j[v] != ',' && j[v] != '}' && !isspace((unsigned char)j[v])) ++v;
+                    out = j.substr(k, v - k);
+                }
+                return true;
+            }
+            i = e;
+        } else if (ch == '{' || ch == '[') ++depth;
+        else if (ch == '}' || ch == ']') { if (--depth <= 0) return false; }
+    }
+    return false;
+}
+
+// "v0.4.2" / "0.4.2" -> {0,4,2,0}. False on anything that isn't 1-4 dot-separated numbers
+// (a "-rc" suffix included), so an unreadable tag is never offered.
+static bool ParseVersion(std::string v, int out[4]) {
+    if (!v.empty() && (v[0] == 'v' || v[0] == 'V')) v.erase(0, 1);
+    int n = 0; out[0] = out[1] = out[2] = out[3] = 0;
+    size_t i = 0;
+    while (i < v.size()) {
+        if (n == 4 || !isdigit((unsigned char)v[i])) return false;
+        long x = 0;
+        while (i < v.size() && isdigit((unsigned char)v[i])) { x = x * 10 + (v[i] - '0'); if (x > 100000) return false; ++i; }
+        out[n++] = (int)x;
+        if (i < v.size()) { if (v[i] != '.' || i + 1 == v.size()) return false; ++i; }
+    }
+    return n > 0;
+}
+
+static bool IsNewerVersion(const std::string& latest, const std::string& current) {
+    int a[4], b[4];
+    if (!ParseVersion(latest, a) || !ParseVersion(current, b)) return false;
+    for (int i = 0; i < 4; ++i) if (a[i] != b[i]) return a[i] > b[i];
+    return false;
+}
+
+struct UpdateInfo { std::string tag, zipName, zipUrl, sha256; };
+
+// What GitHub says the latest release is. Empty tag when there's nothing newer to offer.
+static UpdateInfo CheckLatest(DWORD timeoutMs, std::string* why) {
+    UpdateInfo u;
+    std::string body;
+    if (!HttpGet(kReleasesApi, body, timeoutMs, 1u << 20)) { if (why) *why = "couldn't reach GitHub"; return u; }
+    const size_t top = body.find('{');
+    std::string tag, pre, draft;
+    if (top == std::string::npos || !JsonKey(body, top, "tag_name", tag)) { if (why) *why = "unexpected reply from GitHub"; return u; }
+    JsonKey(body, top, "prerelease", pre); JsonKey(body, top, "draft", draft);
+    if (pre == "true" || draft == "true") { if (why) *why = "latest release is a pre-release"; return u; }
+    if (!IsNewerVersion(tag, SCO_VERSION)) { if (why) *why = "up to date (latest " + tag + ")"; return u; }
+    const std::string want = "sc-offline-" + tag + ".zip";
+    size_t at = 0;
+    if (!JsonKey(body, top, "assets", pre, &at) || at >= body.size() || body[at] != '[') { if (why) *why = "release has no assets"; return u; }
+    // Walk the assets array object by object.
+    for (size_t i = at + 1; i < body.size();) {
+        while (i < body.size() && (isspace((unsigned char)body[i]) || body[i] == ',')) ++i;
+        if (i >= body.size() || body[i] != '{') break;
+        std::string name, url, digest;
+        JsonKey(body, i, "name", name);
+        if (name == want && JsonKey(body, i, "browser_download_url", url) && JsonKey(body, i, "digest", digest) &&
+            !digest.compare(0, 7, "sha256:") && digest.size() == 7 + 64) {
+            u.tag = tag; u.zipName = name; u.zipUrl = url; u.sha256 = digest.substr(7);
+            for (char& c : u.sha256) c = (char)tolower((unsigned char)c);
+            return u;
+        }
+        // skip this object
+        int depth = 0; bool str = false;
+        for (; i < body.size(); ++i) {
+            const char c = body[i];
+            if (str) { if (c == '\\') ++i; else if (c == '"') str = false; continue; }
+            if (c == '"') str = true;
+            else if (c == '{' || c == '[') ++depth;
+            else if (c == '}' || c == ']') { if (--depth == 0) { ++i; break; } }
+        }
+    }
+    if (why) *why = tag + " has no " + want + " with a SHA-256 digest";
+    return u;
+}
+
+static std::vector<wstring> FilesUnder(const wstring& root, const wstring& rel = L"") {
+    std::vector<wstring> out;
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((root + (rel.empty() ? L"" : L"\\" + rel) + L"\\*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return out;
+    do {
+        if (!wcscmp(fd.cFileName, L".") || !wcscmp(fd.cFileName, L"..")) continue;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue;
+        const wstring r = rel.empty() ? wstring(fd.cFileName) : rel + L"\\" + fd.cFileName;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { auto sub = FilesUnder(root, r); out.insert(out.end(), sub.begin(), sub.end()); }
+        else out.push_back(r);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    return out;
+}
+
+static void RemoveTree(const wstring& dir) {
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (!wcscmp(fd.cFileName, L".") || !wcscmp(fd.cFileName, L"..")) continue;
+            const wstring p = dir + L"\\" + fd.cFileName;
+            if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && !(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) RemoveTree(p);
+            else { SetFileAttributesW(p.c_str(), FILE_ATTRIBUTE_NORMAL); DeleteFileW(p.c_str()); }
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    RemoveDirectoryW(dir.c_str());
+}
+
+static bool RunWait(const wstring& exe, wstring cmd, const wstring& cwd, DWORD& code) {
+    STARTUPINFOW si{}; si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, cwd.c_str(), &si, &pi)) return false;
+    WaitForSingleObject(pi.hProcess, 120000);
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    return true;
+}
+
+static wstring Wide(const std::string& s) {
+    wstring w(s.size(), L'\0');
+    w.resize(MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), w.data(), (int)w.size()));
+    return w;
+}
+
+// Paths (relative to the launcher folder) an update must never replace.
+static bool PlayerOwned(const wstring& rel) {
+    static const wchar_t* kKeep[] = { L"sc-offline.ini", L"data\\wallet.txt", L"data\\spawn.txt", L"data\\bookmarks.txt",
+        L"data\\locations_found.txt", L"data\\game-path.txt", L"data\\game-build.txt", L"data\\mod.log",
+        L"data\\launcher.log", L"data\\registry-dump.txt" };
+    for (const wchar_t* k : kKeep) if (!_wcsicmp(rel.c_str(), k)) return true;
+    return !_wcsnicmp(rel.c_str(), L"data\\update\\", 12);
+}
+
+static wstring UpdateDir(const wstring& here) { return here + L"\\data\\update"; }
+static wstring Journal(const wstring& here) { return UpdateDir(here) + L"\\applied.txt"; }
+
+static bool JournalLine(const wstring& here, const std::string& line) {
+    HANDLE f = CreateFileW(Journal(here).c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_FLAG_WRITE_THROUGH, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    const std::string l = line + "\n";
+    DWORD put = 0;
+    const bool ok = WriteFile(f, l.data(), (DWORD)l.size(), &put, nullptr) && put == l.size();
+    FlushFileBuffers(f);
+    CloseHandle(f);
+    return ok;
+}
+
+// Undo an unfinished swap from its journal: "R <rel>" = the old file was moved to <rel>.update-old,
+// "N <rel>" = a new file was created where none was. Processed newest first.
+static void RollBackUpdate(const wstring& here) {
+    std::string j;
+    if (!ReadAll(Journal(here), j)) return;
+    std::vector<std::string> lines;
+    for (size_t p = 0; p < j.size();) { size_t n = j.find('\n', p); if (n == std::string::npos) n = j.size(); lines.push_back(j.substr(p, n - p)); p = n + 1; }
+    for (auto it = lines.rbegin(); it != lines.rend(); ++it) {
+        if (it->size() < 3) continue;
+        const wstring path = here + L"\\" + Wide(it->substr(2));
+        if ((*it)[0] == 'N') DeleteFileW(path.c_str());
+        else if ((*it)[0] == 'R' && IsFile(path + L".update-old")) {
+            if (IsFile(path) && !DeleteFileW(path.c_str())) MoveFileExW(path.c_str(), (path + L".update-failed").c_str(), MOVEFILE_REPLACE_EXISTING);
+            MoveFileExW((path + L".update-old").c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING);
+        }
+    }
+}
+
+// Run at every start: finish (clean up) or roll back whatever a previous update left.
+static void SettlePreviousUpdate(const wstring& here) {
+    std::string j;
+    if (!ReadAll(Journal(here), j)) return;
+    const bool done = j.size() >= 5 && j.compare(j.size() - 5, 5, "done\n") == 0;
+    if (!done) {
+        Out("[!] a previous update didn't finish; putting the old files back\n");
+        RollBackUpdate(here);
+    }
+    bool leftover = false;
+    for (size_t p = 0; p < j.size();) {
+        size_t n = j.find('\n', p); if (n == std::string::npos) n = j.size();
+        const std::string line = j.substr(p, n - p); p = n + 1;
+        if (line.size() > 2 && line[0] == 'R') {
+            const wstring old = here + L"\\" + Wide(line.substr(2)) + L".update-old";
+            if (IsFile(old) && !DeleteFileW(old.c_str())) leftover = true;   // the old exe can still be locked for a moment
+        }
+    }
+    if (!leftover) RemoveTree(UpdateDir(here));
+}
+
+// Keys the new sc-offline.ini has that the player's doesn't: appended commented out, with defaults.
+static void MergeIni(const wstring& here, const wstring& newIni, const std::string& tag) {
+    std::string mine, theirs;
+    if (!ReadAll(here + L"\\sc-offline.ini", mine) || !ReadAll(newIni, theirs)) return;
+    auto keys = [](const std::string& t) {
+        std::vector<std::pair<std::string, std::string>> out;
+        for (size_t p = 0; p < t.size();) {
+            size_t n = t.find('\n', p); if (n == std::string::npos) n = t.size();
+            std::string l = t.substr(p, n - p); p = n + 1;
+            while (!l.empty() && (l.back() == '\r' || l.back() == ' ')) l.pop_back();
+            size_t b = l.find_first_not_of(" \t#"); if (b == std::string::npos) continue;
+            const size_t eq = l.find('=', b); if (eq == std::string::npos) continue;
+            std::string k = l.substr(b, eq - b); while (!k.empty() && isspace((unsigned char)k.back())) k.pop_back();
+            if (k.empty() || k.find(' ') != std::string::npos) continue;
+            out.push_back({ k, l.substr(b) });
+        }
+        return out;
+    };
+    const auto mineKeys = keys(mine);
+    std::string add;
+    for (const auto& kv : keys(theirs)) {
+        bool have = false;
+        for (const auto& m : mineKeys) if (!_stricmp(m.first.c_str(), kv.first.c_str())) { have = true; break; }
+        if (!have) { add += "# " + kv.second + "\r\n"; Out("[i] sc-offline.ini: new setting %s (added commented out; the default applies)\n", kv.first.c_str()); }
+    }
+    if (add.empty()) return;
+    if (!mine.empty() && mine.back() != '\n') mine += "\r\n";
+    WriteAll(here + L"\\sc-offline.ini", mine + "\r\n# New in " + tag + ":\r\n" + add);
+}
+
+// Download, verify, swap. Returns true when the new version is in place.
+static bool ApplyUpdate(const wstring& here, const UpdateInfo& u) {
+    const wstring dir = UpdateDir(here);
+    RemoveTree(dir);
+    CreateDirectoryW(dir.c_str(), nullptr);
+    Out("[i] downloading %s ...\n", u.zipName.c_str());
+    std::string zip;
+    if (!HttpGet(Wide(u.zipUrl), zip, 60000, 256u << 20)) { Out("[!] download failed; nothing changed\n"); RemoveTree(dir); return false; }
+    const std::string got = Sha256(zip);
+    if (got != u.sha256) {
+        Out("[!] the download doesn't match GitHub's SHA-256 (got %s, expected %s); nothing changed\n", got.c_str(), u.sha256.c_str());
+        RemoveTree(dir); return false;
+    }
+    Out("[+] SHA-256 matches GitHub's digest\n");
+    const wstring zipPath = dir + L"\\" + Wide(u.zipName), ex = dir + L"\\new";
+    CreateDirectoryW(ex.c_str(), nullptr);
+    if (!WriteAll(zipPath, zip)) { Out("[!] couldn't save the download; nothing changed\n"); RemoveTree(dir); return false; }
+    wchar_t sys[MAX_PATH]; GetSystemDirectoryW(sys, MAX_PATH);
+    const wstring tar = wstring(sys) + L"\\tar.exe";
+    DWORD code = 1;
+    if (!IsFile(tar) || !RunWait(tar, L"\"" + tar + L"\" -xf \"" + zipPath + L"\" -C \"" + ex + L"\"", ex, code) || code) {
+        Out("[!] couldn't unpack the zip (Windows' tar.exe %s); nothing changed.\n"
+            "    Update by hand: %s\n", IsFile(tar) ? "failed" : "is missing", "https://github.com/scubamount/sc-offline/releases/latest");
+        RemoveTree(dir); return false;
+    }
+    const wstring pkg = ex + L"\\" + Wide(u.zipName.substr(0, u.zipName.size() - 4));
+    if (!IsFile(pkg + L"\\sc-offline.exe") || !IsFile(pkg + L"\\dinput8.dll")) {
+        Out("[!] the zip doesn't hold sc-offline.exe and dinput8.dll where expected; nothing changed\n");
+        RemoveTree(dir); return false;
+    }
+    // Swap, journaling each step before it happens.
+    const std::vector<wstring> files = FilesUnder(pkg);
+    int replaced = 0, added = 0;
+    bool ok = true;
+    for (const wstring& rel : files) {
+        if (PlayerOwned(rel)) continue;
+        const wstring dst = here + L"\\" + rel, src = pkg + L"\\" + rel;
+        const size_t cut = rel.find_last_of(L'\\');
+        if (cut != wstring::npos) SHCreateDirectoryExW(nullptr, (here + L"\\" + rel.substr(0, cut)).c_str(), nullptr);
+        if (IsFile(dst)) {
+            if (!JournalLine(here, "R " + Narrow(rel)) || !MoveFileExW(dst.c_str(), (dst + L".update-old").c_str(), MOVEFILE_REPLACE_EXISTING)) {
+                Out("[!] couldn't move %ls aside (error %lu)\n", rel.c_str(), GetLastError()); ok = false; break;
+            }
+            ++replaced;
+        } else {
+            if (!JournalLine(here, "N " + Narrow(rel))) { ok = false; break; }
+            ++added;
+        }
+        if (!CopyFileW(src.c_str(), dst.c_str(), FALSE)) { Out("[!] couldn't write %ls (error %lu)\n", rel.c_str(), GetLastError()); ok = false; break; }
+    }
+    if (!ok) {
+        Out("[!] update failed; putting the old files back\n");
+        RollBackUpdate(here);
+        RemoveTree(dir);
+        return false;
+    }
+    if (IsFile(pkg + L"\\sc-offline.ini")) MergeIni(here, pkg + L"\\sc-offline.ini", u.tag);
+    JournalLine(here, "done");
+    Out("[+] updated to %s: %d files replaced, %d added; your saves and sc-offline.ini were kept\n", u.tag.c_str(), replaced, added);
+    return true;
+}
+
+// Starts the new launcher with the same arguments and waits for it, so a double-clicked window
+// stays open; this process then exits with its code. (While this old exe waits, its .update-old
+// copy is locked, so the cleanup of data\update finishes on the run after.)
+static void Relaunch(const wstring& here) {
+    const wstring exe = here + L"\\sc-offline.exe";
+    wstring cmd = GetCommandLineW();
+    STARTUPINFOW si{}; si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, here.c_str(), &si, &pi)) {
+        Out("[!] couldn't start the new launcher (error %lu); run sc-offline.exe again\n", GetLastError());
+        PauseIfOwnConsole();
+        ExitProcess(kExitError);
+    }
+    WaitForSingleObject(pi.hProcess, INFINITE);   // keep this console open for the new launcher
+    DWORD code = 0; GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    ExitProcess(code);
+}
 
 // --- Session logs (issue #12) ---------------------------------------------------------------
 // After a modded session, the game's own logs in the channel folder record it. Offer to delete
@@ -532,22 +925,6 @@ static wstring ParentDir(const wstring& p) {
     return s == wstring::npos ? p : p.substr(0, s);
 }
 
-static std::string Sha256(const std::string& bytes) {
-    BCRYPT_ALG_HANDLE alg = nullptr;
-    BCRYPT_HASH_HANDLE h = nullptr;
-    unsigned char digest[32];
-    std::string hex;
-    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) != 0) return hex;
-    if (BCryptCreateHash(alg, &h, nullptr, 0, nullptr, 0, 0) == 0 &&
-        BCryptHashData(h, (PUCHAR)bytes.data(), static_cast<ULONG>(bytes.size()), 0) == 0 &&
-        BCryptFinishHash(h, digest, sizeof(digest), 0) == 0) {
-        char two[3];
-        for (unsigned char c : digest) { std::snprintf(two, sizeof(two), "%02x", c); hex += two; }
-    }
-    if (h) BCryptDestroyHash(h);
-    BCryptCloseAlgorithmProvider(alg, 0);
-    return hex;
-}
 
 // The original author's prebuilt dinput8.dll (once at the repository root, removed in 0.3.0).
 // Still recognized so status/uninstall can identify and remove an old install.
@@ -1128,6 +1505,7 @@ static const char* kUsage =
     "  install    copy the mod in and leave it there; run `uninstall` before going online\n"
     "  uninstall  take the mod out and restore anything it replaced\n"
     "  status     check the setup and report; changes nothing\n"
+    "  update     check GitHub for a newer sc-offline and offer to install it (saves and ini kept)\n"
     "  help       show this\n"
     "\n"
     "  --game <folder>   your StarCitizen, LIVE or Bin64 folder (else sc-offline.ini, else searched)\n"
@@ -1150,7 +1528,7 @@ int wmain(int argc, wchar_t** argv) {
         } else if (!_wcsicmp(a, L"--dry-run")) dry = true;
         else if (!_wcsicmp(a, L"--skip-eac-check")) skipEac = true;
         else if (!sawCommand && (!_wcsicmp(a, L"play") || !_wcsicmp(a, L"install") || !_wcsicmp(a, L"uninstall") ||
-                                 !_wcsicmp(a, L"status") || !_wcsicmp(a, L"help"))) {
+                                 !_wcsicmp(a, L"status") || !_wcsicmp(a, L"update") || !_wcsicmp(a, L"help"))) {
             command = a; sawCommand = true;
         } else if (!_wcsicmp(a, L"--help") || !_wcsicmp(a, L"-h") || !_wcsicmp(a, L"/?")) {
             command = L"help"; sawCommand = true;
@@ -1169,8 +1547,35 @@ int wmain(int argc, wchar_t** argv) {
     OpenLog(data, false, header.c_str());
     Out("sc-offline launcher %s%s\n\n", SCO_VERSION, dry ? " - dry run, nothing is changed" : "");
 
+    if (!dry) SettlePreviousUpdate(here);
     Config cfg;
     if (!ReadConfig(here + L"\\sc-offline.ini", cfg)) Out("[i] no sc-offline.ini next to this exe; using defaults\n");
+
+    // 0. Updates (issue #14). Never blocks play: no network, a timeout or any odd reply is just skipped.
+    if (command == L"update" || (cfg.checkUpdates && !dry && (command == L"play" || command == L"status"))) {
+        const bool explicitUpdate = command == L"update";
+        std::string why;
+        const UpdateInfo u = CheckLatest(explicitUpdate ? 15000 : 3000, &why);
+        if (u.tag.empty()) {
+            if (explicitUpdate) { Out("Update:   %s\n", why.c_str()); return why.rfind("up to date", 0) == 0 ? kExitOk : kExitError; }
+        } else {
+            Out("Update:   sc-offline %s is available (you have %s)\n", u.tag.c_str(), SCO_VERSION);
+            if (command == L"status") Out("          run `sc-offline.exe update` to install it\n");
+            else if (dry) Out("[dry-run] would download %s, check its SHA-256 and replace the program files\n", u.zipName.c_str());
+            else if (GameRunning()) Out("[!] close the game before updating\n");
+            else if (!OwnsConsoleInput()) Out("          (not asking: no console to answer in)\n");
+            else if (AskYes("Update now? Your saves and sc-offline.ini are kept.")) {
+                if (ApplyUpdate(here, u)) {
+                    Out("[i] starting the new version\n\n");
+                    if (g_log) { std::fclose(g_log); g_log = nullptr; }
+                    Relaunch(here);
+                }
+                if (explicitUpdate) return Fail("update failed; your current version is unchanged");
+            } else Out("[i] not updating\n");
+        }
+        if (explicitUpdate) return kExitOk;
+        Out("\n");
+    }
 
     // 1. Find the game.
     wstring bin;

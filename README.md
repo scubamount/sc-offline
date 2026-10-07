@@ -93,10 +93,18 @@ What's in each menu tab: [docs/features.md](docs/features.md).
 
 ## Update
 
+The launcher checks for a newer release each time you play (it gives up after 3 seconds if you're offline) and asks before changing anything. Say `y` and it downloads the release zip, checks it against the SHA-256 that GitHub publishes, replaces the program files, keeps your saves (`wallet.txt`, saved places, bookmarks) and your `sc-offline.ini`, and restarts itself. If anything goes wrong, it puts the old files back.
+
+To check on demand, run `sc-offline.exe update`. To turn the check off, set `check_updates = off` in `sc-offline.ini`.
+
+<details>
+<summary><b>Updating by hand</b></summary>
+
 1. Close the game.
-2. To keep your money and saved places, copy `wallet.txt`, `spawn.txt`, `bookmarks.txt` and `locations_found.txt` out of the old `data` folder. Copy `sc-offline.ini` too if you changed it.
+2. Copy `wallet.txt`, `spawn.txt`, `bookmarks.txt` and `locations_found.txt` out of the old `data` folder, and `sc-offline.ini` if you changed it.
 3. Delete the old folder, then extract the new zip.
 4. Put those files back in the new folder.
+</details>
 
 ## Troubleshooting
 

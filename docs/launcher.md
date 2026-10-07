@@ -5,7 +5,7 @@ The launcher starts the game with the mod and takes the mod out again when the g
 ## Commands
 
 ```text
-sc-offline.exe [play|install|uninstall|status|help] [--game <folder>] [--dry-run] [--skip-eac-check]
+sc-offline.exe [play|install|uninstall|status|update|help] [--game <folder>] [--dry-run] [--skip-eac-check]
 ```
 
 | Command | What it does |
@@ -14,6 +14,7 @@ sc-offline.exe [play|install|uninstall|status|help] [--game <folder>] [--dry-run
 | `install` | Copies the mod in and leaves it there, for starting the game some other way. Run `uninstall` before going online. |
 | `uninstall` | Takes the mod out, puts back anything it replaced, and undoes leftover [PC changes](#pc-changes). Refuses while the game is running. |
 | `status` | Runs the checks below and changes nothing. |
+| `update` | Checks GitHub for a newer sc-offline and offers to install it; see [Updates](#updates). |
 | `help` | Prints the usage. |
 
 | Option | Meaning |
@@ -94,6 +95,29 @@ While you play, the helper changes three things outside the game folder and undo
 - If a step fails, the helper undoes what it already did and the game doesn't start.
 - After a crash the record stays. `status` lists it, `uninstall` undoes it, and `play` offers to.
 
+### Updates
+
+On `play` and `status` the launcher asks GitHub for the latest full release of `scubamount/sc-offline`
+(3-second timeout; no network just skips it). Pre-releases, drafts, older versions and tags that aren't plain
+numbers are never offered. If a newer one exists, `play` asks **"Update now?"** and `status` tells you to run
+`sc-offline.exe update`.
+
+An update:
+1. downloads `sc-offline-<tag>.zip` into `data\update\` and checks its SHA-256 against the `digest` GitHub
+   publishes for that asset. A mismatch or a missing digest stops it with nothing changed;
+2. unpacks it with Windows' own `tar.exe` and checks that `sc-offline.exe` and `dinput8.dll` are in it;
+3. replaces every shipped file except `sc-offline.ini` and the player files in `data\` (`wallet.txt`,
+   `spawn.txt`, `bookmarks.txt`, `locations_found.txt`, `game-path.txt`, `game-build.txt`, the logs).
+   Each replaced file is first renamed to `<name>.update-old`, and the step is written to
+   `data\update\applied.txt` before it happens;
+4. appends settings that are new in the release's `sc-offline.ini` to yours, commented out, so their
+   defaults apply;
+5. starts the new launcher with the same arguments.
+
+If a step fails, the old files are put back at once. If the PC dies mid-update, the next run of
+`sc-offline.exe` reads `applied.txt` and puts them back. `check_updates = off` turns the check off;
+`sc-offline.exe update` checks on demand.
+
 ### Session logs
 
 When the game closes, the launcher lists the logs the game wrote during this session: `<channel>\Game.log`,
@@ -112,6 +136,7 @@ Each line is `key = value`. Lines starting with `#` are comments. An unknown key
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `game` | (found automatically) | Your Star Citizen folder. You can point at `Roberts Space Industries`, at `StarCitizen`, at the channel folder, or at the folder that holds `StarCitizen`. |
+| `check_updates` | `on` | Check GitHub for a newer release on `play` and `status` and offer to install it. |
 | `clean_logs` | `ask` | After the game closes, list this session's game logs and ask (twice) before deleting them. `off` skips it. |
 | `channel` | `LIVE` | Which install to use when `game` points above it: `LIVE`, `PTU`, `EPTU`, and so on. |
 | `boot_map` | `PU_All` | `PU_All` loads every star system, so Travel can reach Pyro and Nyx. |
