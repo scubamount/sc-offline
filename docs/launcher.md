@@ -30,6 +30,7 @@ Everything the launcher prints also goes to `data\launcher.log` (rewritten each 
 
 ## The window
 
+A 1160×640 window (resizable, minimum 900×460) with a SCUBAMOUNT watermark at the top right.
 A double-click (no arguments, the exe's own console) opens a window instead of the console run. Each button
 runs `sc-offline.exe <command>` as a hidden child with `SC_OFFLINE_GUI=1`, so the window and the CLI share one
 code path. The child's output streams into the box, and its `[y/N]` questions are answered with the

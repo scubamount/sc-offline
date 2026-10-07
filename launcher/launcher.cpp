@@ -1789,7 +1789,7 @@ struct Gui {
     std::wstring running;        // command being run, "" when idle
     int state = 0;               // 0 grey (unknown / game running), 1 green, 2 red
     bool hasLeftovers = false;
-    HFONT font = nullptr, mono = nullptr;
+    HFONT font = nullptr, mono = nullptr, mark = nullptr;
     HBRUSH brushes[3] = {};
     wstring here;
 };
@@ -1929,7 +1929,7 @@ static void Layout(HWND wnd) {
     RECT r; GetClientRect(wnd, &r);
     const int W = r.right, H = r.bottom, m = 12, bh = 34;
     MoveWindow(g.light, m, m, 18, 18, TRUE);
-    MoveWindow(g.lightText, m + 28, m - 2, W - 2 * m - 28, 40, TRUE);
+    MoveWindow(g.lightText, m + 28, m - 2, W - 2 * m - 28 - 190, 40, TRUE);   // 190: the watermark
     int x = m; const int y = m + 46;
     const int widths[] = { 90, 80, 80, 80, 90 };
     for (int i = 0; i < 5; ++i) { MoveWindow(g.buttons[i], x, y, widths[i], bh, TRUE); x += widths[i] + 6; }
@@ -1978,8 +1978,23 @@ static LRESULT CALLBACK GuiProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         RefreshLight();
         return 0;
     }
-    case WM_SIZE: Layout(wnd); return 0;
-    case WM_GETMINMAXINFO: ((MINMAXINFO*)lp)->ptMinTrackSize = { 720, 420 }; return 0;
+    case WM_SIZE: Layout(wnd); InvalidateRect(wnd, nullptr, TRUE); return 0;
+    case WM_PAINT: {
+        // SCUBAMOUNT watermark, top right, in a grey just darker than the background.
+        PAINTSTRUCT ps; HDC dc = BeginPaint(wnd, &ps);
+        if (!g.mark) g.mark = CreateFontW(-26, 0, 0, 0, FW_HEAVY, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, VARIABLE_PITCH | FF_SWISS, L"Segoe UI");
+        RECT r; GetClientRect(wnd, &r); r.right -= 12; r.top = 6; r.bottom = 44;
+        HGDIOBJ old = SelectObject(dc, g.mark);
+        SetBkMode(dc, TRANSPARENT);
+        const COLORREF bg = GetSysColor(COLOR_BTNFACE);
+        SetTextColor(dc, RGB(GetRValue(bg) * 4 / 5, GetGValue(bg) * 4 / 5, GetBValue(bg) * 4 / 5));
+        SetTextCharacterExtra(dc, 3);
+        DrawTextW(dc, L"SCUBAMOUNT", -1, &r, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        SelectObject(dc, old);
+        EndPaint(wnd, &ps);
+        return 0;
+    }
+    case WM_GETMINMAXINFO: ((MINMAXINFO*)lp)->ptMinTrackSize = { 900, 460 }; return 0;
     // Refresh during a command too (issue #22): `play` runs for the whole session, and the light must
     // turn as soon as the mod is copied in and the game starts, not only when play returns.
     case WM_TIMER: RefreshLight(); return 0;
@@ -2048,7 +2063,7 @@ static int RunGui() {
     wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
     RegisterClassW(&wc);
     const wstring title = L"sc-offline " + Wide(SCO_VERSION) + L" - Star Citizen offline mod";
-    HWND wnd = CreateWindowExW(0, L"sc-offline", title.c_str(), WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 820, 560,
+    HWND wnd = CreateWindowExW(0, L"sc-offline", title.c_str(), WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1160, 640,
                                nullptr, nullptr, wc.hInstance, nullptr);
     if (!wnd) return kExitError;
     ShowWindow(wnd, SW_SHOWNORMAL);
