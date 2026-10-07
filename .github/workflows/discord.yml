@@ -1,0 +1,98 @@
+name: discord
+
+# Posts project activity to the project's Discord channel (issue #30):
+# releases, merged PRs, and issues opened or closed.
+#
+# The webhook URL lives only in the DISCORD_WEBHOOK_URL Actions secret. Untrusted text
+# (titles, labels, bodies) reaches the payload only through env vars and `jq --arg`, never
+# through `${{ }}` inside a shell script, and `allowed_mentions` is empty so nothing pings.
+# PRs from forks get no secrets on `pull_request`, so they don't post; there is deliberately
+# no `pull_request_target` here.
+
+on:
+  release:
+    types: [published]
+  pull_request:
+    types: [closed]
+  issues:
+    types: [opened, closed]
+
+permissions: {}
+
+jobs:
+  post:
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'pull_request' || github.event.pull_request.merged == true
+    permissions:
+      contents: read   # checkout, for the release's CHANGELOG section
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'release'
+        with:
+          persist-credentials: false
+          sparse-checkout: CHANGELOG.md
+          sparse-checkout-cone-mode: false
+
+      - name: Build the embed
+        env:
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          REPO: ${{ github.repository }}
+          REL_TAG: ${{ github.event.release.tag_name }}
+          REL_URL: ${{ github.event.release.html_url }}
+          REL_PRE: ${{ github.event.release.prerelease }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_USER: ${{ github.event.pull_request.user.login }}
+          IS_TITLE: ${{ github.event.issue.title }}
+          IS_NUM: ${{ github.event.issue.number }}
+          IS_URL: ${{ github.event.issue.html_url }}
+          IS_USER: ${{ github.event.issue.user.login }}
+          IS_REASON: ${{ github.event.issue.state_reason }}
+          IS_LABELS: ${{ join(github.event.issue.labels.*.name, ', ') }}
+        run: |
+          set -eu
+          case "$EVENT" in
+            release)
+              ver="${REL_TAG#v}"
+              # The CHANGELOG section for this version: from "## <ver>" to the next "## ".
+              notes=$(awk -v v="$ver" '
+                $0 ~ "^## " { if (on) exit; if (index($0, "## " v " ") == 1 || $0 == "## " v) { on = 1; next } }
+                on { print }' CHANGELOG.md 2>/dev/null || true)
+              [ -n "$notes" ] || notes="See the release page."
+              kind=$([ "$REL_PRE" = "true" ] && echo "Pre-release" || echo "Release")
+              zip="https://github.com/$REPO/releases/download/$REL_TAG/sc-offline-$REL_TAG.zip"
+              jq -n --arg t "$kind $REL_TAG" --arg u "$REL_URL" --arg d "$notes" --arg z "$zip" '{
+                title: ($t | .[0:256]), url: $u, color: 3447003,
+                description: ($d | if length > 3500 then .[0:3500] + "\n…" else . end),
+                fields: [{name: "Download", value: ("[sc-offline zip](" + $z + ")")}]}' > embed.json
+              ;;
+            pull_request)
+              jq -n --arg t "Merged #$PR_NUM: $PR_TITLE" --arg u "$PR_URL" --arg a "$PR_USER" '{
+                title: ($t | .[0:256]), url: $u, color: 10181046, footer: {text: ("by " + $a)}}' > embed.json
+              ;;
+            issues)
+              if [ "$ACTION" = "opened" ]; then verb="New issue"; color=15105570
+              elif [ "$IS_REASON" = "not_planned" ]; then verb="Closed (not planned)"; color=9807270
+              else verb="Fixed"; color=5763719; fi
+              jq -n --arg t "$verb #$IS_NUM: $IS_TITLE" --arg u "$IS_URL" --arg a "$IS_USER" --arg l "$IS_LABELS" --argjson c "$color" '{
+                title: ($t | .[0:256]), url: $u, color: $c,
+                footer: {text: (("by " + $a) + (if $l != "" then " · " + $l else "" end))}}' > embed.json
+              ;;
+          esac
+          jq '{username: "sc-offline", allowed_mentions: {parse: []}, embeds: [.]}' embed.json > payload.json
+          jq -c . payload.json
+
+      - name: Post to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          set -eu
+          if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
+            echo "::warning::DISCORD_WEBHOOK_URL isn't set; nothing posted"
+            exit 0
+          fi
+          curl -fsS --retry 3 --retry-all-errors --max-time 20 -o /dev/null \
+            -H 'Content-Type: application/json' --data @payload.json "$DISCORD_WEBHOOK_URL"
+          echo "posted"
