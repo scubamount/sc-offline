@@ -38,7 +38,7 @@ The launcher puts the mod into your game folder while you play and takes it out 
 
 ## What you need
 
-| | |
+| Requirement | Details |
 | --- | --- |
 | **Game** | A copy of Star Citizen that you own |
 | **OS** | Windows. Linux through Wine is experimental and untested; see [docs/linux.md](docs/linux.md) |
@@ -88,7 +88,7 @@ What's in each menu tab: [docs/features.md](docs/features.md).
 
 <p align="center">
   <img src="images/screenshot.webp" alt="A Vanduul holding a gun on a desert planet, with a line of Vanduul and a large ship behind it" width="85%">
-  <br><sub>Spawned Vanduul on a desert moon.</sub>
+  <br><sub>In-game: spawned Vanduul and a ship.</sub>
 </p>
 
 ## Update
