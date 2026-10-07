@@ -25,6 +25,7 @@ Everything the menu reads is plain text in `data/`. Most files explain their own
 | `locations_found.txt` | The results of the Travel scan |
 | `mod.log` | What the mod did this session |
 | `launcher.log` | What `sc-offline.exe` did on its last run (written by the launcher) |
+| `game-path.txt` | The game folder the launcher found last time; delete it to make it search again |
 | `game-build.txt` | The game version from your last play, for the launcher's update check |
 | `menu_background.png` / `.jpg` | Your menu background image, if you add one |
 

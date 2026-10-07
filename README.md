@@ -82,7 +82,7 @@ When the game closes, it undoes exactly what it changed and prints what it undid
 | <kbd>F7</kbd> | Save your position |
 | <kbd>F8</kbd> | Teleport back to the saved position |
 
-The launcher searches every drive for `Roberts Space Industries\StarCitizen`. If it can't find your install, set `game =` in `sc-offline.ini`. The same file also chooses your start ship, the boot map and the channel (`LIVE`, `PTU`, and so on); see [docs/launcher.md](docs/launcher.md).
+The launcher finds your install by itself: it asks the RSI Launcher where the game is, checks the usual folders, then searches your drives, and if all that fails it lets you pick the folder. It remembers the answer for next time. To force a folder, set `game =` in `sc-offline.ini`. The same file also chooses your start ship, the boot map and the channel (`LIVE`, `PTU`, and so on); see [docs/launcher.md](docs/launcher.md).
 
 What's in each menu tab: [docs/features.md](docs/features.md).
 
@@ -107,9 +107,9 @@ Check that you started the game with `sc-offline.exe`, not the RSI Launcher.
 </details>
 
 <details>
-<summary><b>The launcher can't find the game</b></summary>
+<summary><b>The launcher can't find the game, or picks the wrong one</b></summary>
 
-Set `game =` in `sc-offline.ini`.
+Set `game =` in `sc-offline.ini` to your `StarCitizen` folder (for example `game = E:\Game\Star Citizen\StarCitizen`), or delete `data\game-path.txt` to make it search again.
 </details>
 
 <details>

@@ -5,7 +5,8 @@
 //
 // play (the default, also what a double-click does):
 //   1. find the game's Bin64 folder: --game <path>, else `game =` in sc-offline.ini, else the
-//      usual Roberts Space Industries folders on every fixed drive (Wine's C: and Z: included);
+//      folder remembered from the last run, what the RSI Launcher recorded, the usual folders on
+//      every fixed drive, a bounded drive search, and finally a folder picker (see DetectBin64);
 //   2. self-checks: which dinput8.dll this is, whether the game updated, leftovers, Easy Anti-Cheat;
 //   3. set the SC_OFFLINE_* variables the mod reads, pointing at data\ next to this exe;
 //   4. start a helper (this exe again, `--helper`, no window) that copies dinput8.dll into Bin64
@@ -28,7 +29,9 @@
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shlwapi.h>
+#include <shobjidl.h>
 #include <tlhelp32.h>
+#include <cctype>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -42,6 +45,8 @@
 #pragma comment(lib, "bcrypt.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "shlwapi.lib")
+#pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "ole32.lib")
 
 using std::wstring;
 
@@ -160,8 +165,8 @@ static bool ReadConfig(const wstring& path, Config& c) {
     return true;
 }
 
-// Accepts the Bin64 folder itself, the channel folder (LIVE), the StarCitizen folder, or the
-// Roberts Space Industries folder. Returns Bin64, or empty when no StarCitizen.exe is there.
+// Accepts the Bin64 folder itself, the channel folder (LIVE), the StarCitizen folder, the
+// Roberts Space Industries folder, or a library folder holding "Star Citizen\StarCitizen". Returns Bin64, or empty when no StarCitizen.exe is there.
 static wstring ToBin64(wstring p, const wstring& channel) {
     p = StripSlashes(Trim(p));
     if (p.empty()) return L"";
@@ -170,29 +175,266 @@ static wstring ToBin64(wstring p, const wstring& channel) {
         p + L"\\Bin64",
         p + L"\\" + channel + L"\\Bin64",
         p + L"\\StarCitizen\\" + channel + L"\\Bin64",
+        p + L"\\Star Citizen\\" + channel + L"\\Bin64",
+        p + L"\\Star Citizen\\StarCitizen\\" + channel + L"\\Bin64",
+        p + L"\\Roberts Space Industries\\StarCitizen\\" + channel + L"\\Bin64",
     };
     for (const wstring& t : tries)
         if (IsFile(t + L"\\" + kGameExe)) return t;
     return L"";
 }
 
-static std::vector<wstring> DetectBin64(const wstring& channel) {
-    static const wchar_t* kBases[] = {
-        L"Program Files\\Roberts Space Industries",   // the RSI Launcher's default, also under Wine
-        L"Roberts Space Industries",
-        L"Games\\Roberts Space Industries",
-        L"Program Files (x86)\\Roberts Space Industries",
+static bool ReadAll(const wstring& path, std::string& out) {
+    out.clear();
+    HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_EXISTING, 0, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    char buf[65536]; DWORD got = 0;
+    while (ReadFile(f, buf, sizeof(buf), &got, nullptr) && got) out.append(buf, got);
+    CloseHandle(f);
+    return true;
+}
+
+static bool WriteAll(const wstring& path, const std::string& text) {
+    HANDLE f = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    DWORD put = 0;
+    const bool ok = WriteFile(f, text.data(), static_cast<DWORD>(text.size()), &put, nullptr) && put == text.size();
+    CloseHandle(f);
+    return ok;
+}
+
+static std::string Narrow(const wstring& w) {
+    if (w.empty()) return "";
+    std::string s(WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), s.data(), (int)s.size(), nullptr, nullptr);
+    return s;
+}
+
+// --- Finding the game -------------------------------------------------------------------
+// Tried in order, first hit wins: --game, `game =` in sc-offline.ini, the folder remembered
+// from the last run (data\game-path.txt), what the RSI Launcher itself recorded (its uninstall
+// entry and the paths in %APPDATA%\rsilauncher), the usual folders on every fixed drive, a
+// bounded search of every fixed drive, and finally a folder picker. Every candidate is only
+// accepted when <channel>\Bin64\StarCitizen.exe exists, so a stale or wrong path is skipped.
+
+struct Found { wstring bin; const char* how; };
+
+static bool SamePath(const wstring& a, const wstring& b) { return !_wcsicmp(a.c_str(), b.c_str()); }
+
+static void AddFound(std::vector<Found>& out, const wstring& bin, const char* how) {
+    if (bin.empty()) return;
+    for (const Found& f : out) if (SamePath(f.bin, bin)) return;
+    out.push_back({ bin, how });
+}
+
+// A path the RSI Launcher wrote may point anywhere inside the install (the library folder,
+// StarCitizen, LIVE, Bin64 or a file). Walk up a few levels and take the first that resolves.
+static wstring ResolveUpward(wstring p, const wstring& channel) {
+    p = StripSlashes(p);
+    for (int up = 0; up < 6 && p.size() > 3; ++up) {
+        const wstring bin = ToBin64(p, channel);
+        if (!bin.empty()) return bin;
+        const size_t cut = p.find_last_of(L"\\/");
+        if (cut == wstring::npos || cut < 2) break;
+        p.resize(cut);
+    }
+    return L"";
+}
+
+static wstring RememberedPathFile(const wstring& here) { return here + L"\\data\\game-path.txt"; }
+
+static void FromRemembered(const wstring& here, const wstring& channel, std::vector<Found>& out) {
+    std::string bytes;
+    if (!ReadAll(RememberedPathFile(here), bytes)) return;
+    wstring w(bytes.size(), L'\0');
+    w.resize(MultiByteToWideChar(CP_UTF8, 0, bytes.data(), (int)bytes.size(), w.data(), (int)w.size()));
+    AddFound(out, ToBin64(Trim(w), channel), "remembered from your last run");
+}
+
+// HKLM/HKCU ...\Uninstall\*: the RSI Launcher's InstallLocation is usually
+// <library>\RSI Launcher, and the game sits beside it in <library>\StarCitizen.
+static void FromUninstallKeys(const wstring& channel, std::vector<Found>& out) {
+    static const struct { HKEY root; const wchar_t* path; } kKeys[] = {
+        { HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall" },
+        { HKEY_LOCAL_MACHINE, L"SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall" },
+        { HKEY_CURRENT_USER,  L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall" },
     };
-    std::vector<wstring> found;
+    for (const auto& k : kKeys) {
+        HKEY h = nullptr;
+        if (RegOpenKeyExW(k.root, k.path, 0, KEY_READ, &h) != ERROR_SUCCESS) continue;
+        wchar_t sub[256];
+        for (DWORD i = 0;; ++i) {
+            DWORD n = ARRAYSIZE(sub);
+            if (RegEnumKeyExW(h, i, sub, &n, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS) break;
+            wchar_t name[256] = {}, loc[MAX_PATH * 2] = {};
+            DWORD cb = sizeof(name);
+            if (RegGetValueW(h, sub, L"DisplayName", RRF_RT_REG_SZ, nullptr, name, &cb) != ERROR_SUCCESS) continue;
+            if (!StrStrIW(name, L"RSI Launcher") && !StrStrIW(name, L"Star Citizen")) continue;
+            cb = sizeof(loc);
+            if (RegGetValueW(h, sub, L"InstallLocation", RRF_RT_REG_SZ, nullptr, loc, &cb) != ERROR_SUCCESS) continue;
+            const wstring l = StripSlashes(Trim(loc));
+            if (l.empty()) continue;
+            wstring bin = ToBin64(l, channel);
+            if (bin.empty()) {
+                const size_t cut = l.find_last_of(L"\\/");
+                if (cut != wstring::npos) bin = ToBin64(l.substr(0, cut), channel);
+            }
+            AddFound(out, bin, "from the RSI Launcher's install entry");
+        }
+        RegCloseKey(h);
+    }
+}
+
+// The RSI Launcher keeps its settings and logs in %APPDATA%\rsilauncher. Rather than depend on
+// their exact format, pull every drive-letter path out of them and keep the ones that resolve.
+static void PathsInText(const std::string& text, const wstring& channel, std::vector<Found>& out) {
+    int tried = 0;
+    for (size_t i = 0; i + 3 < text.size() && tried < 400; ++i) {
+        const char c = text[i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) || text[i + 1] != ':' ||
+            (text[i + 2] != '\\' && text[i + 2] != '/') || (i && std::isalnum((unsigned char)text[i - 1])))
+            continue;
+        size_t e = i + 2;
+        while (e < text.size() && text[e] != '"' && text[e] != '\'' && text[e] != '\n' && text[e] != '\r' &&
+               text[e] != ',' && text[e] != ')' && text[e] != '>' && text[e] != '<' && text[e] != '|' && e - i < 400)
+            ++e;
+        std::string p = text.substr(i, e - i);
+        std::string clean;   // JSON escapes "\\" and some logs use "/"
+        for (size_t k = 0; k < p.size(); ++k) {
+            if (p[k] == '/') { clean += '\\'; continue; }
+            if (p[k] == '\\' && k + 1 < p.size() && p[k + 1] == '\\') ++k;
+            clean += p[k];
+        }
+        while (!clean.empty() && (clean.back() == ' ' || clean.back() == '.')) clean.pop_back();
+        i = e; ++tried;
+        wstring w(clean.size(), L'\0');
+        w.resize(MultiByteToWideChar(CP_UTF8, 0, clean.data(), (int)clean.size(), w.data(), (int)w.size()));
+        AddFound(out, ResolveUpward(w, channel), "from the RSI Launcher's settings or logs");
+    }
+}
+
+static void FromRsiLauncherFiles(const wstring& channel, std::vector<Found>& out) {
+    wchar_t appdata[MAX_PATH];
+    if (!GetEnvironmentVariableW(L"APPDATA", appdata, ARRAYSIZE(appdata))) return;
+    const wstring base = wstring(appdata) + L"\\rsilauncher";
+    const wchar_t* kGlobs[] = { L"\\*.json", L"\\logs\\*.log", L"\\*.log" };
+    for (const wchar_t* g : kGlobs) {
+        const wstring pattern = base + g;
+        const wstring dir = pattern.substr(0, pattern.find_last_of(L'\\'));
+        WIN32_FIND_DATAW fd;
+        HANDLE f = FindFirstFileW(pattern.c_str(), &fd);
+        if (f == INVALID_HANDLE_VALUE) continue;
+        do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+            if (fd.nFileSizeHigh || fd.nFileSizeLow > 8u * 1024 * 1024) continue;   // skip huge logs
+            std::string text;
+            if (ReadAll(dir + L"\\" + fd.cFileName, text)) PathsInText(text, channel, out);
+        } while (FindNextFileW(f, &fd));
+        FindClose(f);
+    }
+}
+
+static std::vector<wstring> FixedDrives() {
+    std::vector<wstring> roots;
     const DWORD drives = GetLogicalDrives();
     for (int d = 0; d < 26; ++d) {
         if (!(drives & (1u << d))) continue;
         const wstring root = wstring(1, wchar_t(L'A' + d)) + L":\\";
-        if (GetDriveTypeW(root.c_str()) != DRIVE_FIXED) continue;   // never spin up a disc or a network share
-        for (const wchar_t* b : kBases) {
-            const wstring bin = ToBin64(root + b, channel);
-            if (!bin.empty()) found.push_back(bin);
+        if (GetDriveTypeW(root.c_str()) == DRIVE_FIXED) roots.push_back(root);   // never a disc or network share
+    }
+    return roots;
+}
+
+static void FromUsualFolders(const wstring& channel, std::vector<Found>& out) {
+    static const wchar_t* kBases[] = {
+        L"Program Files\\Roberts Space Industries",   // the RSI Launcher's default, also under Wine
+        L"Roberts Space Industries",
+        L"Games\\Roberts Space Industries",
+        L"Game\\Roberts Space Industries",
+        L"Program Files (x86)\\Roberts Space Industries",
+        L"StarCitizen",
+        L"Star Citizen",
+        L"Games\\StarCitizen",
+        L"Games\\Star Citizen",
+        L"Game\\StarCitizen",
+        L"Game\\Star Citizen",
+    };
+    for (const wstring& root : FixedDrives())
+        for (const wchar_t* b : kBases) AddFound(out, ToBin64(root + b, channel), "in a usual install folder");
+}
+
+// Breadth-first over every fixed drive, a few folders deep, skipping system folders and
+// links. Bounded by depth and by the number of folders looked at, so it finishes in seconds.
+static void FromDriveSearch(const wstring& channel, std::vector<Found>& out) {
+    static const wchar_t* kSkip[] = { L"Windows", L"$Recycle.Bin", L"System Volume Information", L"Recovery",
+                                      L"PerfLogs", L"$WinREAgent", L"AppData", L"node_modules", L"WindowsApps",
+                                      L"Microsoft", L"WinSxS", L".git" };
+    const int kMaxDepth = 4;
+    int budget = 40000;
+    for (const wstring& root : FixedDrives()) {
+        std::vector<std::pair<wstring, int>> queue{ { StripSlashes(root), 0 } };
+        for (size_t qi = 0; qi < queue.size() && budget > 0; ++qi) {
+            const wstring dir = queue[qi].first; const int depth = queue[qi].second;
+            if (depth && IsFile(dir + L"\\" + channel + L"\\Bin64\\" + kGameExe)) {
+                AddFound(out, dir + L"\\" + channel + L"\\Bin64", "by searching your drives");
+                continue;
+            }
+            if (depth >= kMaxDepth) continue;
+            WIN32_FIND_DATAW fd;
+            HANDLE f = FindFirstFileExW((dir + L"\\*").c_str(), FindExInfoBasic, &fd, FindExSearchLimitToDirectories,
+                                        nullptr, FIND_FIRST_EX_LARGE_FETCH);
+            if (f == INVALID_HANDLE_VALUE) continue;
+            do {
+                if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+                    continue;
+                if (fd.cFileName[0] == L'.' && (!fd.cFileName[1] || (fd.cFileName[1] == L'.' && !fd.cFileName[2]))) continue;
+                bool skip = false;
+                for (const wchar_t* k : kSkip) if (!_wcsicmp(fd.cFileName, k)) { skip = true; break; }
+                if (skip) continue;
+                --budget;
+                queue.push_back({ dir + L"\\" + fd.cFileName, depth + 1 });
+            } while (FindNextFileW(f, &fd) && budget > 0);
+            FindClose(f);
         }
+    }
+}
+
+// Last resort when double-clicked: a folder picker. Returns empty if cancelled or unavailable.
+static wstring PickFolder() {
+    wstring result;
+    const HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    IFileOpenDialog* dlg = nullptr;
+    if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) {
+        DWORD opts = 0;
+        dlg->GetOptions(&opts);
+        dlg->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+        dlg->SetTitle(L"sc-offline: pick your StarCitizen folder (the one with LIVE in it)");
+        IShellItem* item = nullptr;
+        if (SUCCEEDED(dlg->Show(GetConsoleWindow())) && SUCCEEDED(dlg->GetResult(&item))) {
+            PWSTR path = nullptr;
+            if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) { result = path; CoTaskMemFree(path); }
+            item->Release();
+        }
+        dlg->Release();
+    }
+    if (SUCCEEDED(init)) CoUninitialize();
+    return result;
+}
+
+static bool OwnsConsole() { DWORD ids[2]; return GetConsoleProcessList(ids, 2) <= 1; }
+
+// Automatic detection, cheapest and most reliable first. The drive search only runs when
+// nothing cheaper found the game.
+static std::vector<Found> DetectBin64(const wstring& here, const wstring& channel) {
+    std::vector<Found> found;
+    FromRemembered(here, channel, found);
+    FromUninstallKeys(channel, found);
+    FromRsiLauncherFiles(channel, found);
+    FromUsualFolders(channel, found);
+    if (found.empty()) {
+        Out("[i] searching your drives for StarCitizen\\%ls\\Bin64 (a few seconds)...\n", channel.c_str());
+        FromDriveSearch(channel, found);
     }
     return found;
 }
@@ -222,33 +464,6 @@ static bool CanWriteTo(const wstring& dir) {
 static wstring ParentDir(const wstring& p) {
     const size_t s = p.find_last_of(L"\\/");
     return s == wstring::npos ? p : p.substr(0, s);
-}
-
-static bool ReadAll(const wstring& path, std::string& out) {
-    out.clear();
-    HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                           nullptr, OPEN_EXISTING, 0, nullptr);
-    if (f == INVALID_HANDLE_VALUE) return false;
-    char buf[65536]; DWORD got = 0;
-    while (ReadFile(f, buf, sizeof(buf), &got, nullptr) && got) out.append(buf, got);
-    CloseHandle(f);
-    return true;
-}
-
-static bool WriteAll(const wstring& path, const std::string& text) {
-    HANDLE f = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
-    if (f == INVALID_HANDLE_VALUE) return false;
-    DWORD put = 0;
-    const bool ok = WriteFile(f, text.data(), static_cast<DWORD>(text.size()), &put, nullptr) && put == text.size();
-    CloseHandle(f);
-    return ok;
-}
-
-static std::string Narrow(const wstring& w) {
-    if (w.empty()) return "";
-    std::string s(WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), s.data(), (int)s.size(), nullptr, nullptr);
-    return s;
 }
 
 static std::string Sha256(const std::string& bytes) {
@@ -900,13 +1115,28 @@ int wmain(int argc, wchar_t** argv) {
         bin = ToBin64(cfg.game, cfg.channel);
         if (bin.empty()) return Fail("no %ls under game = %ls in sc-offline.ini (channel %ls)", kGameExe, cfg.game.c_str(), cfg.channel.c_str());
     } else {
-        const std::vector<wstring> found = DetectBin64(cfg.channel);
-        if (found.empty())
+        const std::vector<Found> found = DetectBin64(here, cfg.channel);
+        if (!found.empty()) {
+            bin = found.front().bin;
+            Out("[i] found the game %s\n", found.front().how);
+            for (size_t i = 1; i < found.size(); ++i)
+                Out("[i] also found %ls (set game = in sc-offline.ini to use it)\n", found[i].bin.c_str());
+        } else if (OwnsConsole()) {
+            Out("[i] couldn't find Star Citizen (%ls) by itself. Pick your StarCitizen folder in the window that opens.\n",
+                cfg.channel.c_str());
+            const wstring picked = PickFolder();
+            bin = picked.empty() ? L"" : ToBin64(picked, cfg.channel);
+            if (bin.empty())
+                return Fail("no %ls under %ls (channel %ls). Open sc-offline.ini and set\n"
+                            "    game = <your StarCitizen folder>", kGameExe,
+                            picked.empty() ? L"(nothing picked)" : picked.c_str(), cfg.channel.c_str());
+        } else {
             return Fail("couldn't find Star Citizen (%ls). Open sc-offline.ini and set\n"
-                        "    game = <your StarCitizen folder>", cfg.channel.c_str());
-        bin = found.front();
-        for (size_t i = 1; i < found.size(); ++i)
-            Out("[i] also found %ls (set game = in sc-offline.ini to use it)\n", found[i].c_str());
+                        "    game = <your StarCitizen folder>\n"
+                        "or pass --game <folder>", cfg.channel.c_str());
+        }
+        // Remember it, so the next run skips the search. game = and --game always win over this.
+        if (!dry) WriteAll(RememberedPathFile(here), Narrow(bin) + "\n");
     }
     Out("Folder:   %ls\n", bin.c_str());
     const GamePaths g(bin);

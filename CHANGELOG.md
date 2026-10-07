@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1 (2026-10-07)
+
+- **The launcher finds the game in more places.** After `game =`, it now tries the folder it found last time (`data\game-path.txt`), where the RSI Launcher says the game is (its install entry and the paths in `%APPDATA%\rsilauncher`), more usual folders (`Game\Star Citizen\StarCitizen`, `Games\StarCitizen` and similar), a four-level search of every fixed drive, and finally a folder picker. `game =` also accepts the folder that holds `StarCitizen`.
+
 ## 0.4.0 (2026-10-07)
 
 - **The launcher sets up offline play itself.** Each play, its helper blocks `StarCitizen.exe` in Windows Firewall, adds the EAC hosts line and renames `EasyAntiCheat_EOS.exe`, then undoes exactly those changes when the game closes. New `sc-offline.ini` switches `block_network`, `eac_hosts`, `eac_rename` (all on). Changes are recorded in `%ProgramData%\sc-offline\pc-changes.txt`; after a crash, `status` lists them, `uninstall` undoes them and `play` offers to.

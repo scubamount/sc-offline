@@ -45,9 +45,19 @@ Everything the launcher prints also goes to `data\launcher.log` (rewritten each 
 
 ## What `play` does
 
-1. **Finds the game's `Bin64` folder**: `--game`, else `game =` in `sc-offline.ini`, else
-   `Roberts Space Industries\StarCitizen\<channel>\Bin64` on every fixed drive. If it finds more than one
-   install, it uses the first and lists the others.
+1. **Finds the game's `Bin64` folder.** It tries these in order and takes the first that has
+   `<channel>\Bin64\StarCitizen.exe`:
+   1. `--game`, then `game =` in `sc-offline.ini`;
+   2. the folder it found last time (`data\game-path.txt`);
+   3. where the RSI Launcher says the game is: its Windows install entry, and paths in its settings and
+      logs under `%APPDATA%\rsilauncher`;
+   4. the usual folders on every fixed drive (`Program Files\Roberts Space Industries`, `Games\…`,
+      `Game\Star Citizen\…` and similar);
+   5. a search of every fixed drive, four folders deep (a few seconds; skips system folders);
+   6. if you double-clicked it, a folder picker.
+
+   If it finds more than one install, it uses the first and lists the others. It remembers what it found in
+   `data\game-path.txt`; `game =` and `--game` always win over that file.
 2. **Runs the checks** above.
 3. **Sets the environment variables** the mod reads (see [data-files.md](data-files.md#environment-variables)).
 4. **Starts a helper**, a second copy of `sc-offline.exe` with no window, that changes the game folder:
@@ -93,7 +103,7 @@ Each line is `key = value`. Lines starting with `#` are comments. An unknown key
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `game` | (search all drives) | Your Star Citizen folder. You can point at `Roberts Space Industries`, at `StarCitizen`, or at the channel folder. |
+| `game` | (found automatically) | Your Star Citizen folder. You can point at `Roberts Space Industries`, at `StarCitizen`, at the channel folder, or at the folder that holds `StarCitizen`. |
 | `channel` | `LIVE` | Which install to use when `game` points above it: `LIVE`, `PTU`, `EPTU`, and so on. |
 | `boot_map` | `PU_All` | `PU_All` loads every star system, so Travel can reach Pyro and Nyx. |
 | `start_ship` | `DRAK_Cutlass_Black` | The ship you start in. |

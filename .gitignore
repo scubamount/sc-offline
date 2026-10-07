@@ -23,6 +23,7 @@ data/list_first.txt
 data/ui_notify_off.txt
 # written by sc-offline.exe
 data/launcher.log
+data/game-path.txt
 data/game-build.txt
 
 # your own menu background image (not part of the project)
