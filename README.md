@@ -73,6 +73,11 @@ When the game closes, it undoes exactly what it changed and prints what it undid
 
 Double-clicking `sc-offline.exe` opens its window:
 
+<p align="center">
+  <img src="images/launcher.png" alt="The sc-offline window: a green light saying it's safe to go online, buttons for Play, Status, Update, Install, Uninstall, Open settings and Open logs, and the output of Status" width="85%">
+  <br><sub>The launcher after clicking <b>Status</b> (captured under Wine, hence the <code>Wine:</code> line).</sub>
+</p>
+
 | Button | Does the same as |
 | --- | --- |
 | **Play** | `sc-offline.exe play`: add the mod, start the game, take the mod out when it closes |

@@ -1819,7 +1819,7 @@ static void RefreshLight() {
     g.hasLeftovers = !left.empty();
     const bool gameUp = GameRunning();
     if (gameUp) {
-        g.state = 2; text = L"NOT safe to go online: Star Citizen is running with the mod. When it closes, sc-offline takes the mod out and undoes its PC changes.";
+        g.state = 2; text = L"NOT safe to go online: Star Citizen is running. When it closes, sc-offline takes the mod out and undoes its PC changes.";
     } else if (!left.empty()) {
         g.state = 2; text = L"NOT safe to go online yet. Click Uninstall to undo: ";
         for (size_t i = 0; i < left.size(); ++i) text += (i ? L"; " : L"") + left[i];
@@ -1954,7 +1954,7 @@ static LRESULT CALLBACK GuiProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         };
         g.light = mk(L"STATIC", L"", SS_NOTIFY, kIdLight);
         g.lightText = mk(L"STATIC", L"", 0, kIdLightText);
-        const wchar_t* names[] = { L"\u25B6  Play", L"Status", L"Update", L"Install", L"Uninstall" };
+        const wchar_t* names[] = { L"Play", L"Status", L"Update", L"Install", L"Uninstall" };
         for (int i = 0; i < 5; ++i) g.buttons[i] = mk(L"BUTTON", names[i], BS_PUSHBUTTON | WS_TABSTOP, kIdPlay + i);
         SendMessageW(g.buttons[0], BM_SETSTYLE, BS_DEFPUSHBUTTON, TRUE);
         mk(L"BUTTON", L"Open settings", BS_PUSHBUTTON | WS_TABSTOP, kIdSettings);
@@ -1988,7 +1988,6 @@ static LRESULT CALLBACK GuiProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         SetBkMode(dc, TRANSPARENT);
         const COLORREF bg = GetSysColor(COLOR_BTNFACE);
         SetTextColor(dc, RGB(GetRValue(bg) * 4 / 5, GetGValue(bg) * 4 / 5, GetBValue(bg) * 4 / 5));
-        SetTextCharacterExtra(dc, 3);
         DrawTextW(dc, L"SCUBAMOUNT", -1, &r, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         SelectObject(dc, old);
         EndPaint(wnd, &ps);
@@ -2089,6 +2088,7 @@ static const char* kUsage =
     "  --dry-run         print every step, change nothing, start nothing\n"
     "  --skip-eac-check  don't stop when Easy Anti-Cheat looks active\n"
     "  --console         double-clicked: run `play` in this console instead of opening the window\n"
+    "  --window          open the window (from a terminal, or under Wine/Proton)\n"
     "\n"
     "exit codes: 0 ok, 1 error, 2 Easy Anti-Cheat active, 3 the game is running\n";
 
@@ -2098,6 +2098,8 @@ int wmain(int argc, wchar_t** argv) {
     // Double-clicked with no arguments: the window (issue #20). From a terminal, or with any
     // argument, the CLI runs exactly as before. `sc-offline.exe --console` forces the console run.
     if (argc == 1 && !GuiChild() && OwnsConsole() && !OnWine()) { FreeConsole(); return RunGui(); }
+    // `--window` opens it from a terminal or under Wine/Proton too.
+    if (argc == 2 && !_wcsicmp(argv[1], L"--window") && !GuiChild()) return RunGui();
     if (GuiChild()) { std::setvbuf(stdout, nullptr, _IONBF, 0); SetConsoleOutputCP(CP_UTF8); }
     if (argc == 4 && !_wcsicmp(argv[1], L"--delete-logs"))
         return DeleteSessionLogs(argv[2], _wcstoui64(argv[3], nullptr, 10));
@@ -2136,6 +2138,7 @@ int wmain(int argc, wchar_t** argv) {
 
     const wstring here = ExeDir();
     const wstring data = here + L"\\data";
+    CreateDirectoryW(data.c_str(), nullptr);   // a fresh unzip may not have it yet
     std::string header = "sc-offline.exe";
     for (int i = 1; i < argc; ++i) header += " " + Narrow(argv[i]);
     OpenLog(data, false, header.c_str());

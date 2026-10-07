@@ -4,6 +4,8 @@
 
 - **Online-safe light now updates while you play** ([#22](https://github.com/scubamount/sc-offline/issues/22)). It used to freeze while **Play** was running, so it stayed green with the game open and only changed at the end. It now refreshes every 1.5 seconds and turns red as soon as the mod is copied in or `StarCitizen.exe` is running.
 - **Wider window** (1160 px instead of 820 px), so log lines wrap less, and a **SCUBAMOUNT** watermark.
+- `--window` opens the window from a terminal or under Wine/Proton.
+- The `data` folder is created on first run, so a fresh unzip no longer warns that the folder can't be written.
 
 ## 0.6.0 (2026-10-07)
 

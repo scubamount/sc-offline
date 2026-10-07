@@ -22,6 +22,7 @@ sc-offline.exe [play|install|uninstall|status|update|help] [--game <folder>] [--
 | `--game <folder>` | Your `Roberts Space Industries`, `StarCitizen`, channel or `Bin64` folder. Overrides `game =` in `sc-offline.ini`. |
 | `--dry-run` | Prints every step it would take, then stops. Nothing is copied, deleted or started. |
 | `--skip-eac-check` | Don't stop when Easy Anti-Cheat looks active. |
+| `--window` | Open the window from a terminal, or under Wine/Proton. |
 | `--console` | Double-clicked: run `play` in the console instead of opening the window. |
 
 Exit codes: `0` ok · `1` error · `2` Easy Anti-Cheat is active · `3` the game is running. The helper's own codes, in `launcher.log`: `5` a PC change failed.
