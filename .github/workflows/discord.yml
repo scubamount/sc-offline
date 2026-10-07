@@ -41,18 +41,38 @@ jobs:
           REL_TAG: ${{ github.event.release.tag_name }}
           REL_URL: ${{ github.event.release.html_url }}
           REL_PRE: ${{ github.event.release.prerelease }}
+          REL_AT: ${{ github.event.release.published_at }}
+          REL_USER: ${{ github.event.release.author.login }}
+          REL_AVATAR: ${{ github.event.release.author.avatar_url }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_NUM: ${{ github.event.pull_request.number }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           PR_USER: ${{ github.event.pull_request.user.login }}
+          PR_AVATAR: ${{ github.event.pull_request.user.avatar_url }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_ADD: ${{ github.event.pull_request.additions }}
+          PR_DEL: ${{ github.event.pull_request.deletions }}
+          PR_FILES: ${{ github.event.pull_request.changed_files }}
+          PR_COMMITS: ${{ github.event.pull_request.commits }}
+          PR_MERGER: ${{ github.event.pull_request.merged_by.login }}
+          PR_AT: ${{ github.event.pull_request.merged_at }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ', ') }}
           IS_TITLE: ${{ github.event.issue.title }}
           IS_NUM: ${{ github.event.issue.number }}
           IS_URL: ${{ github.event.issue.html_url }}
           IS_USER: ${{ github.event.issue.user.login }}
+          IS_AVATAR: ${{ github.event.issue.user.avatar_url }}
+          IS_BODY: ${{ github.event.issue.body }}
+          IS_COMMENTS: ${{ github.event.issue.comments }}
+          IS_CLOSER: ${{ github.event.sender.login }}
+          IS_CLOSER_AVATAR: ${{ github.event.sender.avatar_url }}
+          IS_AT: ${{ github.event.issue.updated_at }}
           IS_REASON: ${{ github.event.issue.state_reason }}
           IS_LABELS: ${{ join(github.event.issue.labels.*.name, ', ') }}
         run: |
           set -eu
+          # A body excerpt: HTML comments (PR/issue templates) and blank runs dropped, first 700 chars.
+          excerpt() { printf '%s' "$1" | tr -d '\r' | perl -0pe 's/<!--.*?-->//gs; s/\n{3,}/\n\n/g; s/^\s+|\s+$//g'; }
           case "$EVENT" in
             release)
               ver="${REL_TAG#v}"
@@ -63,22 +83,50 @@ jobs:
               [ -n "$notes" ] || notes="See the release page."
               kind=$([ "$REL_PRE" = "true" ] && echo "Pre-release" || echo "Release")
               zip="https://github.com/$REPO/releases/download/$REL_TAG/sc-offline-$REL_TAG.zip"
-              jq -n --arg t "$kind $REL_TAG" --arg u "$REL_URL" --arg d "$notes" --arg z "$zip" '{
-                title: ($t | .[0:256]), url: $u, color: 3447003,
+              jq -n --arg t "sc-offline $REL_TAG" --arg u "$REL_URL" --arg d "$notes" --arg z "$zip" \
+                    --arg k "$kind" --arg at "$REL_AT" --arg a "$REL_USER" --arg av "$REL_AVATAR" '{
+                title: ($t | .[0:256]), url: $u, color: 3066993, timestamp: $at,
+                author: {name: ($k + " published by " + $a), icon_url: $av},
                 description: ($d | if length > 3500 then .[0:3500] + "\n…" else . end),
-                fields: [{name: "Download", value: ("[sc-offline zip](" + $z + ")")}]}' > embed.json
+                fields: [
+                  {name: "Download", value: ("[sc-offline-" + ($t | sub("^sc-offline "; "")) + ".zip](" + $z + ")"), inline: true},
+                  {name: "Channel", value: $k, inline: true},
+                  {name: "Update", value: "Run `sc-offline.exe update`, or press **Update** in the window.", inline: false}],
+                footer: {text: "sc-offline · Star Citizen offline mod"}}' > embed.json
               ;;
             pull_request)
-              jq -n --arg t "Merged #$PR_NUM: $PR_TITLE" --arg u "$PR_URL" --arg a "$PR_USER" '{
-                title: ($t | .[0:256]), url: $u, color: 10181046, footer: {text: ("by " + $a)}}' > embed.json
+              body=$(excerpt "${PR_BODY:-}"); [ -n "$body" ] || body="_No description._"
+              jq -n --arg t "Merged #$PR_NUM: $PR_TITLE" --arg u "$PR_URL" --arg a "$PR_USER" --arg av "$PR_AVATAR" \
+                    --arg d "$body" --arg add "$PR_ADD" --arg del "$PR_DEL" --arg f "$PR_FILES" --arg c "$PR_COMMITS" \
+                    --arg m "$PR_MERGER" --arg at "$PR_AT" --arg l "$PR_LABELS" '{
+                title: ($t | .[0:256]), url: $u, color: 10181046, timestamp: $at,
+                author: {name: ("Pull request by " + $a), icon_url: $av},
+                description: ($d | if length > 700 then .[0:700] + "…" else . end),
+                fields: ([
+                  {name: "Changes", value: ("+" + $add + " / −" + $del + " in " + $f + " files"), inline: true},
+                  {name: "Commits", value: $c, inline: true},
+                  {name: "Merged by", value: $m, inline: true}]
+                  + (if $l != "" then [{name: "Labels", value: $l, inline: false}] else [] end)),
+                footer: {text: "sc-offline · lands in the next release"}}' > embed.json
               ;;
             issues)
-              if [ "$ACTION" = "opened" ]; then verb="New issue"; color=15105570
-              elif [ "$IS_REASON" = "not_planned" ]; then verb="Closed (not planned)"; color=9807270
-              else verb="Fixed"; color=5763719; fi
-              jq -n --arg t "$verb #$IS_NUM: $IS_TITLE" --arg u "$IS_URL" --arg a "$IS_USER" --arg l "$IS_LABELS" --argjson c "$color" '{
-                title: ($t | .[0:256]), url: $u, color: $c,
-                footer: {text: (("by " + $a) + (if $l != "" then " · " + $l else "" end))}}' > embed.json
+              if [ "$ACTION" = "opened" ]; then verb="New issue"; color=15105570; state="Open"
+              elif [ "$IS_REASON" = "not_planned" ]; then verb="Closed (not planned)"; color=9807270; state="Closed: not planned"
+              else verb="Fixed"; color=5763719; state="Closed: fixed"; fi
+              body=$(excerpt "${IS_BODY:-}"); [ -n "$body" ] || body="_No description._"
+              if [ "$ACTION" = "opened" ]; then who="Opened by $IS_USER"; av="$IS_AVATAR"
+              else who="Closed by $IS_CLOSER"; av="$IS_CLOSER_AVATAR"; fi
+              jq -n --arg t "$verb #$IS_NUM: $IS_TITLE" --arg u "$IS_URL" --arg w "$who" --arg av "$av" \
+                    --arg d "$body" --arg l "$IS_LABELS" --arg s "$state" --arg n "$IS_COMMENTS" --arg at "$IS_AT" \
+                    --argjson c "$color" '{
+                title: ($t | .[0:256]), url: $u, color: $c, timestamp: $at,
+                author: {name: $w, icon_url: $av},
+                description: ($d | if length > 700 then .[0:700] + "…" else . end),
+                fields: ([
+                  {name: "Status", value: $s, inline: true},
+                  {name: "Comments", value: $n, inline: true}]
+                  + (if $l != "" then [{name: "Labels", value: $l, inline: true}] else [] end)),
+                footer: {text: "sc-offline · Star Citizen offline mod"}}' > embed.json
               ;;
           esac
           jq '{username: "sc-offline", allowed_mentions: {parse: []}, embeds: [.]}' embed.json > payload.json

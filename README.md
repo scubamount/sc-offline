@@ -1,5 +1,11 @@
 <div align="center">
 
+<a href="https://discord.gg/NJKeVfYCCC"><img src="https://img.shields.io/badge/JOIN%20THE%20DISCORD-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Join the sc-offline Discord" height="64"></a>
+
+## [👉 Join the Discord 👈](https://discord.gg/NJKeVfYCCC)
+
+**Release news, help with setup, bug reports and builds before they ship: [discord.gg/NJKeVfYCCC](https://discord.gg/NJKeVfYCCC)**
+
 <img src="images/banner.webp" alt="sc-offline — Star Citizen offline mod: single-player mod menu with ships, NPCs, build mode, travel and Squadron 42 outfits" width="100%">
 
 # sc-offline
@@ -13,6 +19,7 @@ Spawn ships, NPCs and buildings, travel the star systems and wear Squadron 42 ou
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-f0851f?style=flat-square)](LICENSE)
 
 [**Download**](https://github.com/scubamount/sc-offline/releases/latest) ·
+[**Discord**](https://discord.gg/NJKeVfYCCC) ·
 [Setup](#setup) ·
 [Play](#play) ·
 [Troubleshooting](#troubleshooting) ·
