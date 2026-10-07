@@ -1817,8 +1817,9 @@ static void RefreshLight() {
         if (Field(pc, "eac") == "renamed") left.push_back(L"EasyAntiCheat_EOS.exe renamed to .bak");
     }
     g.hasLeftovers = !left.empty();
-    if (GameRunning()) {
-        g.state = 0; text = L"Star Citizen is running. When it closes, sc-offline takes the mod out and undoes its PC changes.";
+    const bool gameUp = GameRunning();
+    if (gameUp) {
+        g.state = 2; text = L"NOT safe to go online: Star Citizen is running with the mod. When it closes, sc-offline takes the mod out and undoes its PC changes.";
     } else if (!left.empty()) {
         g.state = 2; text = L"NOT safe to go online yet. Click Uninstall to undo: ";
         for (size_t i = 0; i < left.size(); ++i) text += (i ? L"; " : L"") + left[i];
@@ -1830,7 +1831,6 @@ static void RefreshLight() {
     SetWindowTextW(g.lightText, text.c_str());
     InvalidateRect(g.light, nullptr, TRUE);
     const bool idle = g.running.empty();
-    const bool gameUp = g.state == 0 && GameRunning();
     for (int i = 0; i < 5; ++i) {
         bool on = idle && !gameUp;
         if (i == 4) on = on && g.hasLeftovers;   // Uninstall: only with something to undo
@@ -1974,13 +1974,15 @@ static LRESULT CALLBACK GuiProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
             L"Install    add the mod and leave it (Uninstall before going online)\r\n"
             L"Uninstall  take the mod out and undo the PC changes\r\n\r\n"
             L"The light above tells you whether it is safe to go back online.\r\n").c_str());
-        SetTimer(wnd, kTimerLight, 3000, nullptr);
+        SetTimer(wnd, kTimerLight, 1500, nullptr);
         RefreshLight();
         return 0;
     }
     case WM_SIZE: Layout(wnd); return 0;
     case WM_GETMINMAXINFO: ((MINMAXINFO*)lp)->ptMinTrackSize = { 720, 420 }; return 0;
-    case WM_TIMER: if (g.running.empty()) RefreshLight(); return 0;
+    // Refresh during a command too (issue #22): `play` runs for the whole session, and the light must
+    // turn as soon as the mod is copied in and the game starts, not only when play returns.
+    case WM_TIMER: RefreshLight(); return 0;
     case WM_CTLCOLORSTATIC:
         if ((HWND)lp == g.light) {
             static const COLORREF c[3] = { RGB(150, 150, 150), RGB(40, 170, 70), RGB(210, 50, 50) };

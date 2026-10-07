@@ -37,10 +37,10 @@ code path. The child's output streams into the box, and its `[y/N]` questions ar
 
 The light uses only cheap checks: the game folder from `game =` or `data\game-path.txt`, the
 `sc-offline.installed` marker or sc-offline's `dinput8.dll` in Bin64, and `%ProgramData%\sc-offline\pc-changes.txt`.
-It refreshes every 3 seconds and after every command:
+It refreshes every 1.5 seconds, including while **Play** is running, and after every command:
 - **green**: nothing of the mod is in Bin64 and no PC changes are left;
-- **red**: lists what is left. **Uninstall** is enabled only in this state;
-- **grey**: the game is running, or the game folder isn't known yet.
+- **red**: the game is running, or it lists what is left. **Uninstall** is enabled only when something is left and the game is closed;
+- **grey**: the game folder isn't known yet.
 
 After **Update** applies a new version, the window restarts itself. Under Wine, or with any argument, the
 console run is unchanged.
