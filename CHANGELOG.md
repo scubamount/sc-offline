@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 (2026-10-07)
+
+- **Firewall also blocks the RSI Launcher and CIG's `CrashHandler.exe`** while you play ([#17](https://github.com/scubamount/sc-offline/issues/17)), recorded and removed with the existing rule. `sc-offline.exe` stays online for updates.
+- **Crash reports** ([#18](https://github.com/scubamount/sc-offline/issues/18)): after a crash, offer a zip of the logs in `data\crash-reports` with the RSI handle, GEID/account numbers and Windows user name redacted, and a prefilled bug form. Nothing is uploaded; `.dmp` files are left out. New setting `crash_reports = on | off`.
+- **Administrator rights only where needed** ([#16](https://github.com/scubamount/sc-offline/issues/16)): self-update of a protected folder and deleting protected session logs now ask Windows once, for that step only. The launcher and the game still run with normal rights. Warns when `data` can't be written.
+
 ## 0.5.0 (2026-10-07)
 
 - **The launcher updates itself** ([#14](https://github.com/scubamount/sc-offline/issues/14)). On `play` and `status` it checks GitHub's latest full release (3-second timeout, never blocks play) and asks before installing. It downloads the release zip, checks it against GitHub's SHA-256 digest, swaps the program files with a journal in `data\update\applied.txt` (rolled back on failure, or on the next run after a crash), keeps `sc-offline.ini` and your saves, appends new ini settings commented out, and restarts itself. New command `sc-offline.exe update`, new setting `check_updates = on | off`.

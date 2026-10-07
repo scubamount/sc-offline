@@ -86,7 +86,7 @@ While you play, the helper changes three things outside the game folder and undo
 
 | Key | Going in | Coming out |
 | --- | --- | --- |
-| `block_network` | Windows Firewall rules named `sc-offline: block StarCitizen.exe`, inbound and outbound, for this install's `StarCitizen.exe` only | deleted |
+| `block_network` | Windows Firewall rules, inbound and outbound: `sc-offline: block StarCitizen.exe` (this install's exe only), `sc-offline: block RSI Launcher.exe` (found from its install entry, beside the game library, or the default folder) and `sc-offline: block CrashHandler.exe` (`<channel>\Tools\Public\CrashHandler.exe`, CIG's crash reporter). A rule is only added if its exe exists. `sc-offline.exe` itself stays online for updates. | deleted |
 | `eac_hosts` | `127.0.0.1 modules-cdn.eac-prod.on.epicgames.com # added by sc-offline…` appended to the hosts file, then `ipconfig /flushdns`. Skipped if the hosts file already blocks it | only the tagged line removed, DNS flushed |
 | `eac_rename` | `EasyAntiCheat_EOS.exe` renamed to `EasyAntiCheat_EOS.exe.bak`. Skipped if it isn't there | renamed back |
 
@@ -118,6 +118,29 @@ If a step fails, the old files are put back at once. If the PC dies mid-update, 
 `sc-offline.exe` reads `applied.txt` and puts them back. `check_updates = off` turns the check off;
 `sc-offline.exe update` checks on demand.
 
+### Crash reports
+
+If the game wrote crash files under `<channel>\Crashes` during the session, the launcher offers a report
+before the log cleanup. A **y** zips `mod.log`, `launcher.log`, `Game.log` and the crash folder's text
+files into `data\crash-reports\sc-offline-crash-<time>.zip`. In the copies (never the originals), your RSI
+handle becomes `<handle>`, GEID and account numbers become `<id>`, and your Windows user name in paths
+becomes `<user>`. Memory dumps (`.dmp`) are left out because they can't be redacted. It can then open the bug
+form with the version, game build and platform filled in, and an Explorer window on the zip. **Nothing is
+uploaded**: you attach the zip and read it first. `crash_reports = off` turns this off.
+
+### Administrator rights
+
+The launcher never runs as administrator, and neither does the game. Windows asks once, only for the step
+that needs it:
+- the helper, when the firewall, EAC or a protected game folder is involved (see [PC changes](#pc-changes));
+- deleting session logs that a protected game folder won't let you delete. The elevated run works out this
+  session's files again by itself;
+- updating a mod folder only administrators can write, e.g. under Program Files. The elevated run asks GitHub
+  again and applies only the version you were shown, then the new launcher starts with normal rights.
+
+If the mod folder's `data` can't be written, the mod can't save your wallet or places, and the launcher tells
+you to move the folder (for example to your Desktop).
+
 ### Session logs
 
 When the game closes, the launcher lists the logs the game wrote during this session: `<channel>\Game.log`,
@@ -137,11 +160,12 @@ Each line is `key = value`. Lines starting with `#` are comments. An unknown key
 | --- | --- | --- |
 | `game` | (found automatically) | Your Star Citizen folder. You can point at `Roberts Space Industries`, at `StarCitizen`, at the channel folder, or at the folder that holds `StarCitizen`. |
 | `check_updates` | `on` | Check GitHub for a newer release on `play` and `status` and offer to install it. |
+| `crash_reports` | `on` | After a crash, offer a redacted log bundle and the bug form. See [Crash reports](#crash-reports). |
 | `clean_logs` | `ask` | After the game closes, list this session's game logs and ask (twice) before deleting them. `off` skips it. |
 | `channel` | `LIVE` | Which install to use when `game` points above it: `LIVE`, `PTU`, `EPTU`, and so on. |
 | `boot_map` | `PU_All` | `PU_All` loads every star system, so Travel can reach Pyro and Nyx. |
 | `start_ship` | `DRAK_Cutlass_Black` | The ship you start in. |
 | `start` | (empty) | `Daymar` starts you over Daymar, in that ship. |
-| `block_network` | `on` | Block `StarCitizen.exe` in Windows Firewall while you play. See [PC changes](#pc-changes). |
+| `block_network` | `on` | Block `StarCitizen.exe`, the RSI Launcher and the game's `CrashHandler.exe` in Windows Firewall while you play. See [PC changes](#pc-changes). |
 | `eac_hosts` | `on` | Add the EAC hosts line while you play. |
 | `eac_rename` | `on` | Rename `EasyAntiCheat_EOS.exe` while you play. |

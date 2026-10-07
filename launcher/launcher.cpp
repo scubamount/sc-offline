@@ -39,6 +39,7 @@
 #include <cwctype>
 #include <share.h>
 #include <ctime>
+#include <algorithm>
 #include <string>
 #include <vector>
 #include "../src/version.h"
@@ -131,6 +132,8 @@ struct Config {
     bool cleanLogs = true;
     // Check GitHub for a newer sc-offline release on play/status (issue #14).
     bool checkUpdates = true;
+    // After a crash, offer a redacted log bundle and a prefilled bug form (issue #18).
+    bool crashReports = true;
 };
 
 static bool ParseOnOff(const wstring& v, bool& out) {
@@ -165,6 +168,9 @@ static bool ReadConfig(const wstring& path, Config& c) {
         else if (!_wcsicmp(k.c_str(), L"block_network") || !_wcsicmp(k.c_str(), L"eac_hosts") || !_wcsicmp(k.c_str(), L"eac_rename")) {
             bool& b = !_wcsicmp(k.c_str(), L"block_network") ? c.firewall : !_wcsicmp(k.c_str(), L"eac_hosts") ? c.eacHosts : c.eacRename;
             if (!ParseOnOff(v, b)) Out("[!] sc-offline.ini line %d: %ls must be on or off\n", lineNo, k.c_str());
+        }
+        else if (!_wcsicmp(k.c_str(), L"crash_reports")) {
+            if (!ParseOnOff(v, c.crashReports)) Out("[!] sc-offline.ini line %d: crash_reports must be on or off\n", lineNo);
         }
         else if (!_wcsicmp(k.c_str(), L"check_updates")) {
             if (!ParseOnOff(v, c.checkUpdates)) Out("[!] sc-offline.ini line %d: check_updates must be on or off\n", lineNo);
@@ -447,6 +453,8 @@ static bool PlayerOwned(const wstring& rel) {
     return !_wcsnicmp(rel.c_str(), L"data\\update\\", 12);
 }
 
+static bool CanWriteTo(const wstring& dir);
+
 static wstring UpdateDir(const wstring& here) { return here + L"\\data\\update"; }
 static wstring Journal(const wstring& here) { return UpdateDir(here) + L"\\applied.txt"; }
 
@@ -531,6 +539,26 @@ static void MergeIni(const wstring& here, const wstring& newIni, const std::stri
 }
 
 // Download, verify, swap. Returns true when the new version is in place.
+static bool ApplyUpdate(const wstring& here, const UpdateInfo& u);
+
+// Issue #16: a mod folder only administrators can write (e.g. under Program Files). Run
+// `sc-offline.exe --elevated-update` once elevated; it checks, verifies and swaps but never starts
+// the game or relaunches, so the new launcher (and the game) still start with normal rights.
+static bool ApplyUpdateMaybeElevated(const wstring& here, const UpdateInfo& u) {
+    if (CanWriteTo(here) && CanWriteTo(here + L"\\data")) return ApplyUpdate(here, u);
+    Out("[i] this folder needs administrator rights to update; Windows will ask once.\n"
+        "    (Only the update runs as administrator; the game never does.)\n");
+    wchar_t self[MAX_PATH * 2]; GetModuleFileNameW(nullptr, self, ARRAYSIZE(self));
+    const wstring args = L"--elevated-update " + Wide(u.tag);
+    SHELLEXECUTEINFOW sei{}; sei.cbSize = sizeof(sei); sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+    sei.lpVerb = L"runas"; sei.lpFile = self; sei.lpParameters = args.c_str(); sei.lpDirectory = here.c_str(); sei.nShow = SW_SHOWNORMAL;
+    if (!ShellExecuteExW(&sei) || !sei.hProcess) { Out("[!] administrator rights refused; nothing changed\n"); return false; }
+    WaitForSingleObject(sei.hProcess, INFINITE);
+    DWORD code = 1; GetExitCodeProcess(sei.hProcess, &code); CloseHandle(sei.hProcess);
+    if (code) { Out("[!] the update failed (exit %lu); see data\\launcher.log. Your current version is unchanged.\n", code); return false; }
+    return true;
+}
+
 static bool ApplyUpdate(const wstring& here, const UpdateInfo& u) {
     const wstring dir = UpdateDir(here);
     RemoveTree(dir);
@@ -611,6 +639,87 @@ static void Relaunch(const wstring& here) {
     ExitProcess(code);
 }
 
+
+// --- Crash reports (issue #18) -------------------------------------------------------------
+// After a session in which the game crashed (new files under <channel>\Crashes), offer to bundle
+// the logs into data\crash-reports\*.zip with the RSI handle, account numbers and Windows user
+// name redacted, then open a prefilled bug form. Nothing is uploaded: the player attaches the zip.
+// Minidumps (.dmp) are raw memory and can't be redacted, so they are left out.
+
+// "Handle[Name]" -> "Name". Every bracketed value after these keys is redacted as well.
+static const char* kRedactKeys[] = { "Handle", "Nickname", "GEID", "PlayerGEID", "AccountId", "Account", "accountId", "playerGEID" };
+
+static std::vector<std::string> HandlesIn(const std::string& text) {
+    std::vector<std::string> found;
+    for (const char* key : { "Handle[", "Nickname[", "nickname=\"", "handle=\"" }) {
+        const char close = key[strlen(key) - 1] == '[' ? ']' : '"';
+        for (size_t p = text.find(key); p != std::string::npos; p = text.find(key, p + 1)) {
+            const size_t a = p + strlen(key), b = text.find(close, a);
+            if (b == std::string::npos || b == a || b - a > 64) continue;
+            const std::string h = text.substr(a, b - a);
+            bool plain = true;
+            for (char c : h) if (!(isalnum((unsigned char)c) || c == '_' || c == '-')) plain = false;
+            if (plain && h.size() >= 3 && std::find(found.begin(), found.end(), h) == found.end()) found.push_back(h);
+        }
+    }
+    return found;
+}
+
+static void ReplaceAllNoCase(std::string& t, const std::string& what, const std::string& with) {
+    if (what.empty()) return;
+    std::string low = t, w = what;
+    for (char& c : low) c = (char)tolower((unsigned char)c);
+    for (char& c : w) c = (char)tolower((unsigned char)c);
+    std::string out; size_t from = 0;
+    for (size_t p = low.find(w); p != std::string::npos; p = low.find(w, p + w.size())) {
+        out.append(t, from, p - from); out += with; from = p + w.size();
+    }
+    out.append(t, from, std::string::npos);
+    t.swap(out);
+}
+
+// Redacts one file's text. handles: every RSI handle seen in any bundled file; user: Windows user name.
+static std::string Redact(std::string t, const std::vector<std::string>& handles, const std::string& user) {
+    for (const char* key : kRedactKeys) {
+        const std::string k = std::string(key) + "[";
+        for (size_t p = t.find(k); p != std::string::npos; p = t.find(k, p + 1)) {
+            const size_t a = p + k.size(), b = t.find(']', a);
+            if (b == std::string::npos || b - a > 80) continue;
+            const bool numeric = !strcmp(key, "Handle") || !strcmp(key, "Nickname") ? false : true;
+            t.replace(a, b - a, numeric ? "<id>" : "<handle>");
+        }
+    }
+    // "geid 200012345", "accountId=9876543", "playerGEID: 1": a key, up to 2 separators, then digits.
+    std::string low = t;
+    for (char& c : low) c = (char)tolower((unsigned char)c);
+    for (const char* key : { "geid", "accountid", "account_id", "playerid" }) {
+        const size_t kl = strlen(key);
+        for (size_t p = low.find(key); p != std::string::npos; p = low.find(key, p + kl)) {
+            if (p && isalnum((unsigned char)low[p - 1]) && low[p - 1] != 'r') continue;   // "playergeid" ok, "xgeid" no
+            size_t a = p + kl, seps = 0;
+            while (a < low.size() && seps < 3 && (low[a] == ' ' || low[a] == '=' || low[a] == ':' || low[a] == '"' || low[a] == '[')) { ++a; ++seps; }
+            size_t b = a; while (b < low.size() && isdigit((unsigned char)low[b])) ++b;
+            if (b - a < 3) continue;
+            t.replace(a, b - a, "<id>"); low.replace(a, b - a, "<id>");
+        }
+    }
+    for (const std::string& h : handles) ReplaceAllNoCase(t, h, "<handle>");
+    if (user.size() >= 2) {
+        for (const char* sep : { "\\Users\\", "/Users/", "\\\\Users\\\\", "/home/" })
+            ReplaceAllNoCase(t, std::string(sep) + user, std::string(sep) + "<user>");
+    }
+    return t;
+}
+
+static std::string UrlEncode(const std::string& s) {
+    std::string o; char b[4];
+    for (unsigned char c : s) {
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') o += (char)c;
+        else { std::snprintf(b, sizeof(b), "%%%02X", c); o += b; }
+    }
+    return o;
+}
+
 // --- Session logs (issue #12) ---------------------------------------------------------------
 // After a modded session, the game's own logs in the channel folder record it. Offer to delete
 // the ones written during this session, list them first, and only delete on an explicit "y".
@@ -660,13 +769,40 @@ static void OfferToCleanLogs(const wstring& channelDir, ULONGLONG since) {
         "want to report a bug. Older logs are not touched. (clean_logs = off in sc-offline.ini skips this.)\n");
     if (!AskYes("Delete these files?")) { Out("Logs:     kept\n"); return; }
     if (!AskYes("Are you sure? They can't be recovered.")) { Out("Logs:     kept\n"); return; }
-    int gone = 0, failed = 0;
+    int gone = 0, failed = 0, denied = 0;
     for (const wstring& f : files) {
         if (DeleteFileW(f.c_str())) ++gone;
+        else if (GetLastError() == ERROR_ACCESS_DENIED) ++denied;
         else { ++failed; Out("[!] couldn't delete %ls (error %lu)\n", f.c_str(), GetLastError()); }
+    }
+    if (denied) {
+        // Issue #16: the game folder needs administrator rights. One UAC prompt; the elevated run
+        // works out this session's files again itself (DeleteSessionLogs), it isn't handed a list.
+        Out("[i] %d file%s need administrator rights to delete; Windows will ask once.\n", denied, denied == 1 ? "" : "s");
+        wchar_t self[MAX_PATH * 2]; GetModuleFileNameW(nullptr, self, ARRAYSIZE(self));
+        const wstring args = L"--delete-logs \"" + channelDir + L"\" " + std::to_wstring(since);
+        SHELLEXECUTEINFOW sei{}; sei.cbSize = sizeof(sei); sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+        sei.lpVerb = L"runas"; sei.lpFile = self; sei.lpParameters = args.c_str(); sei.nShow = SW_HIDE;
+        DWORD code = 1;
+        if (ShellExecuteExW(&sei) && sei.hProcess) {
+            WaitForSingleObject(sei.hProcess, 60000); GetExitCodeProcess(sei.hProcess, &code); CloseHandle(sei.hProcess);
+        }
+        const size_t left = SessionLogs(channelDir, since).size();
+        if (code == 0 && left == 0) gone += denied;
+        else { failed += (int)left; Out("[!] %zu file%s still there (administrator rights refused?)\n", left, left == 1 ? "" : "s"); }
     }
     Out("Logs:     deleted %d file%s%s\n", gone, gone == 1 ? "" : "s", failed ? "; see above for the rest" : "");
 }
+
+// --delete-logs <channel folder> <since>: the elevated half of OfferToCleanLogs. Only acts on a
+// real channel folder (Bin64\StarCitizen.exe inside) and only on this session's files there.
+static int DeleteSessionLogs(const wstring& channelDir, ULONGLONG since) {
+    if (!IsFile(channelDir + L"\\Bin64\\" + kGameExe) || since == 0) return 4;
+    int failed = 0;
+    for (const wstring& f : SessionLogs(channelDir, since)) if (!DeleteFileW(f.c_str())) ++failed;
+    return failed ? 3 : 0;
+}
+
 
 // --- Finding the game -------------------------------------------------------------------
 // Tried in order, first hit wins: --game, `game =` in sc-offline.ini, the folder remembered
@@ -1161,6 +1297,76 @@ static bool HostsBlocksEac() {
     return false;
 }
 
+static bool IsTextReport(const wstring& f) {
+    const size_t dot = f.find_last_of(L'.');
+    if (dot == wstring::npos) return false;
+    const wstring ext = f.substr(dot);
+    for (const wchar_t* e : { L".log", L".txt", L".json", L".xml", L".cfg", L".ini" }) if (!_wcsicmp(ext.c_str(), e)) return true;
+    return false;
+}
+
+static void OfferCrashReport(const wstring& here, const wstring& channelDir, ULONGLONG since, const std::string& gameBuild) {
+    std::vector<wstring> crash;
+    SessionFilesIn(channelDir + L"\\Crashes", since, true, crash);
+    if (crash.empty()) return;
+    int dumps = 0;
+    for (const wstring& f : crash) if (!IsTextReport(f)) ++dumps;
+    Out("\n[!] the game crashed this session (%zu file%s in %ls\\Crashes).\n", crash.size(), crash.size() == 1 ? "" : "s", channelDir.c_str());
+    Out("    A crash report zips mod.log, launcher.log, Game.log and the crash text files into data\\crash-reports,\n"
+        "    with your RSI handle, account numbers and Windows user name replaced. Nothing is sent: you attach\n"
+        "    the zip to the bug form yourself.%s\n", dumps ? " Memory dumps (.dmp) are left out; they can't be redacted." : "");
+    if (!AskYes("Make a crash report?")) { Out("Crash:    no report made\n"); return; }
+
+    struct Item { wstring src; wstring name; };
+    std::vector<Item> items = { { here + L"\\data\\mod.log", L"mod.log" }, { here + L"\\data\\launcher.log", L"launcher.log" },
+                                { channelDir + L"\\Game.log", L"Game.log" } };
+    const wstring crashRoot = channelDir + L"\\Crashes\\";
+    for (const wstring& f : crash) {
+        if (!IsTextReport(f)) continue;
+        wstring rel = f.substr(crashRoot.size());
+        for (wchar_t& c : rel) if (c == L'\\') c = L'_';
+        items.push_back({ f, L"Crashes_" + rel });
+    }
+    std::vector<std::string> texts(items.size());
+    std::vector<std::string> handles;
+    for (size_t i = 0; i < items.size(); ++i) {
+        if (!ReadAll(items[i].src, texts[i])) continue;
+        if (texts[i].size() > (16u << 20)) texts[i].erase(0, texts[i].size() - (16u << 20));   // keep the tail of huge logs
+        for (const std::string& h : HandlesIn(texts[i])) if (std::find(handles.begin(), handles.end(), h) == handles.end()) handles.push_back(h);
+    }
+    const std::string user = Narrow(EnvOr(L"USERNAME", L""));
+
+    SYSTEMTIME t; GetLocalTime(&t);
+    wchar_t stamp[32]; swprintf(stamp, 32, L"%04u%02u%02u-%02u%02u%02u", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+    const wstring dir = here + L"\\data\\crash-reports", stage = dir + L"\\tmp-" + stamp;
+    const wstring zip = dir + L"\\sc-offline-crash-" + stamp + L".zip";
+    SHCreateDirectoryExW(nullptr, stage.c_str(), nullptr);
+    int put = 0;
+    for (size_t i = 0; i < items.size(); ++i) {
+        if (texts[i].empty()) continue;
+        if (WriteAll(stage + L"\\" + items[i].name, Redact(texts[i], handles, user))) ++put;
+    }
+    WriteAll(stage + L"\\README.txt", std::string("sc-offline ") + SCO_VERSION + " crash report\r\nGame: " + gameBuild +
+             "\r\nRedacted: RSI handle -> <handle>, account/GEID numbers -> <id>, Windows user name -> <user>.\r\n");
+    wchar_t sys[MAX_PATH]; GetSystemDirectoryW(sys, MAX_PATH);
+    const wstring tar = wstring(sys) + L"\\tar.exe";
+    DWORD code = 1;
+    const bool zipped = IsFile(tar) && RunWait(tar, L"\"" + tar + L"\" -a -cf \"" + zip + L"\" -C \"" + stage + L"\" .", stage, code) && code == 0;
+    if (zipped) RemoveTree(stage);
+    const wstring made = zipped ? zip : stage;
+    Out("Crash:    report saved: %ls (%d file%s%s)\n", made.c_str(), put, put == 1 ? "" : "s",
+        zipped ? "" : "; tar.exe failed, so it is a folder - zip it yourself");
+    Out("          Look through it before you share it: the redaction covers handle, IDs and user name only.\n");
+    if (!AskYes("Open the bug form in your browser (you attach the zip there)?")) return;
+    const std::string url = "https://github.com/scubamount/sc-offline/issues/new?template=bug.yml&title=" +
+        UrlEncode("Crash: ") + "&version=" + UrlEncode(SCO_VERSION) + "&game=" + UrlEncode(gameBuild) +
+        "&os=" + UrlEncode(OnWine() ? "Linux (Wine/Proton)" : "Windows");
+    ShellExecuteW(nullptr, L"open", Wide(url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    const wstring sel = L"/select,\"" + made + L"\"";
+    ShellExecuteW(nullptr, L"open", L"explorer.exe", sel.c_str(), nullptr, SW_SHOWNORMAL);
+}
+
+
 // --- what the helper changes on the PC while you play ------------------------------------------
 // Three switches in sc-offline.ini, all on by default, all undone when the game closes:
 //   block_network  a Windows Firewall rule that blocks StarCitizen.exe (this install only), in and out;
@@ -1173,6 +1379,10 @@ static bool HostsBlocksEac() {
 static const char*    kEacHost      = "modules-cdn.eac-prod.on.epicgames.com";
 static const char*    kHostsTag     = "# added by sc-offline, removed when the game closes";
 static const wchar_t* kFirewallRule = L"sc-offline: block StarCitizen.exe";
+// Issue #17: while you play, also block the RSI Launcher and CIG's crash uploader, so neither
+// reports a modded session. sc-offline.exe itself stays online (self-update, #14).
+static const wchar_t* kLauncherRule = L"sc-offline: block RSI Launcher.exe";
+static const wchar_t* kCrashRule    = L"sc-offline: block CrashHandler.exe";
 
 struct PcWanted { bool firewall = false, eacHosts = false, eacRename = false; };
 
@@ -1195,22 +1405,63 @@ static int RunTool(const wstring& exe, const wstring& args) {
 
 static wstring System32(const wchar_t* tool) { return EnvOr(L"SystemRoot", L"C:\\Windows") + L"\\System32\\" + tool; }
 
-static bool FirewallRuleExists() {
-    return RunTool(System32(L"netsh.exe"), L"advfirewall firewall show rule name=\"" + wstring(kFirewallRule) + L"\"") == 0;
+static bool FirewallRuleExists(const wchar_t* rule) {
+    return RunTool(System32(L"netsh.exe"), L"advfirewall firewall show rule name=\"" + wstring(rule) + L"\"") == 0;
 }
 
-static bool AddFirewallRule(const wstring& gameExe) {
+static bool AddFirewallRule(const wchar_t* rule, const wstring& exe) {
     for (const wchar_t* dir : { L"out", L"in" }) {
-        const wstring args = L"advfirewall firewall add rule name=\"" + wstring(kFirewallRule) + L"\" dir=" + dir +
-                             L" action=block enable=yes profile=any program=\"" + gameExe + L"\"";
+        const wstring args = L"advfirewall firewall add rule name=\"" + wstring(rule) + L"\" dir=" + dir +
+                             L" action=block enable=yes profile=any program=\"" + exe + L"\"";
         if (RunTool(System32(L"netsh.exe"), args) != 0) return false;
     }
     return true;
 }
 
-static bool DeleteFirewallRule() {
-    return RunTool(System32(L"netsh.exe"), L"advfirewall firewall delete rule name=\"" + wstring(kFirewallRule) + L"\"") == 0;
+static bool DeleteFirewallRule(const wchar_t* rule) {
+    return RunTool(System32(L"netsh.exe"), L"advfirewall firewall delete rule name=\"" + wstring(rule) + L"\"") == 0;
 }
+
+// RSI Launcher.exe: its uninstall entry first, then beside the game library, then the default folder.
+static wstring RsiLauncherExe(const wstring& bin) {
+    static const struct { HKEY root; const wchar_t* path; } kKeys[] = {
+        { HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall" },
+        { HKEY_LOCAL_MACHINE, L"SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall" },
+        { HKEY_CURRENT_USER,  L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall" },
+    };
+    for (const auto& k : kKeys) {
+        HKEY h = nullptr;
+        if (RegOpenKeyExW(k.root, k.path, 0, KEY_READ, &h) != ERROR_SUCCESS) continue;
+        wchar_t sub[256];
+        for (DWORD i = 0;; ++i) {
+            DWORD n = ARRAYSIZE(sub);
+            if (RegEnumKeyExW(h, i, sub, &n, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS) break;
+            wchar_t name[256] = {}, loc[MAX_PATH * 2] = {};
+            DWORD cb = sizeof(name);
+            if (RegGetValueW(h, sub, L"DisplayName", RRF_RT_REG_SZ, nullptr, name, &cb) != ERROR_SUCCESS) continue;
+            if (!StrStrIW(name, L"RSI Launcher")) continue;
+            cb = sizeof(loc);
+            if (RegGetValueW(h, sub, L"InstallLocation", RRF_RT_REG_SZ, nullptr, loc, &cb) != ERROR_SUCCESS) continue;
+            const wstring exe = StripSlashes(Trim(loc)) + L"\\RSI Launcher.exe";
+            if (IsFile(exe)) { RegCloseKey(h); return exe; }
+        }
+        RegCloseKey(h);
+    }
+    // <library>\StarCitizen\<channel>\Bin64 -> <library>\RSI Launcher
+    const wstring beside = ParentDir(ParentDir(ParentDir(bin))) + L"\\RSI Launcher\\RSI Launcher.exe";
+    if (IsFile(beside)) return beside;
+    const wstring def = EnvOr(L"ProgramFiles", L"C:\\Program Files") + L"\\Roberts Space Industries\\RSI Launcher\\RSI Launcher.exe";
+    return IsFile(def) ? def : L"";
+}
+
+// <channel>\Tools\Public\CrashHandler.exe, CIG's crash reporter.
+static wstring CrashHandlerExe(const wstring& bin) {
+    const wstring exe = ParentDir(bin) + L"\\Tools\\Public\\CrashHandler.exe";
+    return IsFile(exe) ? exe : L"";
+}
+
+struct FwRule { const char* key; const wchar_t* name; };
+static const FwRule kFwRules[] = { { "firewall", kFirewallRule }, { "fw_launcher", kLauncherRule }, { "fw_crash", kCrashRule } };
 
 // Appends the EAC line, tagged so it can be found again. Keeps the file's line endings.
 static bool AddHostsLine() {
@@ -1246,7 +1497,8 @@ static std::string PcChangesLeft() {
 }
 
 static void DescribePcChanges(const std::string& rec) {
-    if (Field(rec, "firewall") == "added") Out("          - firewall rule \"%ls\"\n", kFirewallRule);
+    for (const FwRule& r : kFwRules)
+        if (Field(rec, r.key) == "added") Out("          - firewall rule \"%ls\"\n", r.name);
     if (Field(rec, "hosts") == "added")    Out("          - hosts line for %s\n", kEacHost);
     if (Field(rec, "eac") == "renamed")    Out("          - EasyAntiCheat_EOS.exe renamed to .bak\n");
 }
@@ -1256,9 +1508,11 @@ static int UndoPcChanges(bool dry) {
     const std::string rec = PcChangesLeft();
     if (rec.empty()) return 0;
     int rc = 0;
-    if (Field(rec, "firewall") == "added" && Step(dry, "remove the firewall rule \"%ls\"", kFirewallRule) &&
-        !DeleteFirewallRule() && FirewallRuleExists()) {
-        Out("[!] couldn't remove the firewall rule; remove \"%ls\" in Windows Defender Firewall\n", kFirewallRule); rc = 5;
+    for (const FwRule& r : kFwRules) {
+        if (Field(rec, r.key) == "added" && Step(dry, "remove the firewall rule \"%ls\"", r.name) &&
+            !DeleteFirewallRule(r.name) && FirewallRuleExists(r.name)) {
+            Out("[!] couldn't remove the firewall rule; remove \"%ls\" in Windows Defender Firewall\n", r.name); rc = 5;
+        }
     }
     if (Field(rec, "hosts") == "added" && Step(dry, "remove sc-offline's line from the hosts file")) {
         if (RemoveHostsLine()) FlushDns();
@@ -1292,10 +1546,16 @@ static int ApplyPcChanges(const PcWanted& w, const wstring& gameExe, bool dry) {
     }
 
     if (w.firewall) {
-        if (Field(rec, "firewall") == "added" && !dry && FirewallRuleExists()) Out("[i] firewall rule already in place\n");
-        else if (Step(dry, "add a firewall rule blocking %ls", gameExe.c_str())) {
-            if (!AddFirewallRule(gameExe)) { Out("[!] couldn't add the firewall rule (netsh failed)\n"); DeleteFirewallRule(); return 5; }
-            record("firewall", "added");
+        const wstring bin = ParentDir(gameExe);
+        const wstring exes[] = { gameExe, RsiLauncherExe(bin), CrashHandlerExe(bin) };
+        for (size_t i = 0; i < ARRAYSIZE(kFwRules); ++i) {
+            const FwRule& r = kFwRules[i];
+            if (exes[i].empty()) { if (i == 1) Out("[i] RSI Launcher.exe not found; not blocking it\n"); continue; }
+            if (Field(rec, r.key) == "added" && !dry && FirewallRuleExists(r.name)) Out("[i] firewall rule \"%ls\" already in place\n", r.name);
+            else if (Step(dry, "add a firewall rule blocking %ls", exes[i].c_str())) {
+                if (!AddFirewallRule(r.name, exes[i])) { Out("[!] couldn't add the firewall rule (netsh failed)\n"); DeleteFirewallRule(r.name); return 5; }
+                record(r.key, "added");
+            }
         }
     }
     if (w.eacHosts) {
@@ -1470,7 +1730,7 @@ static CheckResult SelfChecks(const wstring& here, const Config& cfg, const Game
         DescribePcChanges(pcLeft);
         if (!GameRunning()) Out("    Run `sc-offline.exe uninstall` to undo them before going online.\n");
     }
-    if (!OnWine()) Out("Network:  %s\n", cfg.firewall ? "blocked for StarCitizen.exe while you play (block_network)"
+    if (!OnWine()) Out("Network:  %s\n", cfg.firewall ? "blocked for StarCitizen.exe, RSI Launcher.exe and CrashHandler.exe while you play (block_network)"
                                                        : "NOT blocked (block_network = off)");
 
     // 5. Easy Anti-Cheat.
@@ -1517,6 +1777,17 @@ static const char* kUsage =
 int wmain(int argc, wchar_t** argv) {
     if (argc == 7 && !_wcsicmp(argv[1], L"--helper"))
         return Helper(argv[2], argv[3], wcstoul(argv[4], nullptr, 10), argv[5], argv[6]);
+    if (argc == 4 && !_wcsicmp(argv[1], L"--delete-logs"))
+        return DeleteSessionLogs(argv[2], _wcstoui64(argv[3], nullptr, 10));
+    if (argc == 3 && !_wcsicmp(argv[1], L"--elevated-update")) {
+        // The elevated half of ApplyUpdateMaybeElevated: re-asks GitHub itself (never trusts a URL from
+        // the command line) and only applies the tag the unelevated launcher showed the player.
+        const wstring here = ExeDir();
+        OpenLog(here + L"\\data", true, "elevated update");
+        const UpdateInfo u = CheckLatest(15000, nullptr);
+        if (u.tag.empty() || Wide(u.tag) != argv[2]) { Out("[!] GitHub's latest release changed; run update again\n"); return kExitError; }
+        return ApplyUpdate(here, u) ? kExitOk : kExitError;
+    }
 
     wstring command = L"play", gameArg;
     bool dry = false, skipEac = false, sawCommand = false;
@@ -1547,6 +1818,9 @@ int wmain(int argc, wchar_t** argv) {
     OpenLog(data, false, header.c_str());
     Out("sc-offline launcher %s%s\n\n", SCO_VERSION, dry ? " - dry run, nothing is changed" : "");
 
+    if (!CanWriteTo(data))
+        Out("[!] this folder (%ls) can't be written without administrator rights, so the mod can't save\n"
+            "    your wallet or places. Move the sc-offline folder out of Program Files, e.g. to your Desktop.\n", here.c_str());
     if (!dry) SettlePreviousUpdate(here);
     Config cfg;
     if (!ReadConfig(here + L"\\sc-offline.ini", cfg)) Out("[i] no sc-offline.ini next to this exe; using defaults\n");
@@ -1565,7 +1839,7 @@ int wmain(int argc, wchar_t** argv) {
             else if (GameRunning()) Out("[!] close the game before updating\n");
             else if (!OwnsConsoleInput()) Out("          (not asking: no console to answer in)\n");
             else if (AskYes("Update now? Your saves and sc-offline.ini are kept.")) {
-                if (ApplyUpdate(here, u)) {
+                if (ApplyUpdateMaybeElevated(here, u)) {
                     Out("[i] starting the new version\n\n");
                     if (g_log) { std::fclose(g_log); g_log = nullptr; }
                     Relaunch(here);
@@ -1691,7 +1965,7 @@ int wmain(int argc, wchar_t** argv) {
     CloseHandle(ready);
     Out("Mod:      copied into Bin64\n");
     if (NeedsPcChanges(pc))
-        Out("PC:       %s%s%s(undone when the game closes)\n", pc.firewall ? "game network blocked, " : "",
+        Out("PC:       %s%s%s(undone when the game closes)\n", pc.firewall ? "game, RSI Launcher and CrashHandler network blocked, " : "",
             pc.eacHosts ? "EAC hosts line, " : "", pc.eacRename ? "EAC renamed " : "");
     SetConsoleCtrlHandler(OnCtrl, TRUE);
 
@@ -1713,6 +1987,7 @@ int wmain(int argc, wchar_t** argv) {
         WaitForSingleObject(pi.hProcess, INFINITE);
         CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
         while (GameRunning()) Sleep(2000);   // the game can hand over to a second StarCitizen.exe
+        if (cfg.crashReports && OwnsConsoleInput()) OfferCrashReport(here, ParentDir(bin), sessionStart, checks.gameBuild);
         if (cfg.cleanLogs && OwnsConsoleInput()) OfferToCleanLogs(ParentDir(bin), sessionStart);
         else if (cfg.cleanLogs) Out("Logs:     not asking (no console to answer in); run from a window to be asked\n");
     }
