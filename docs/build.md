@@ -27,9 +27,17 @@ This runs in a few seconds. It parses every `src/*.cpp` and `launcher/*.cpp` fil
 
 [`.github/workflows/build.yml`](../.github/workflows/build.yml) runs on pushes to `main`, on pull requests, and on `v*` tags:
 
-1. `check` runs `tools/check.sh` on Linux.
+1. `check` runs `tools/check.sh` and the release manifest tests (`python3 tools/test_release_manifest.py`) on Linux.
 2. `build` runs MSVC Release x64 on Windows and uploads `dinput8-release`.
-3. `release` runs on tags only. It publishes `sc-offline-<tag>.zip` and a standalone `dinput8.dll`, with notes generated from the commits. The zip contains the launcher, the DLL, `sc-offline.ini`, `sc-offline.sh`, `data/`, `docs/`, the README, the CHANGELOG and the LICENSE.
+3. `release` runs on tags only. It publishes `sc-offline-<tag>.zip` and a standalone `dinput8.dll`, with notes generated from the commits. The zip contains the launcher, the DLL, `sc-offline.ini`, `sc-offline.sh`, `data/`, `docs/`, the README, the CHANGELOG, the LICENSE and `manifest.json`.
+
+### `manifest.json`
+
+`tools/release-manifest.py write` lists every file in the release folder with its SHA-256 and size, plus the version, the tag and the commit. The launcher's self-update uses it to decide which files it may copy; see [Updates](launcher.md#updates). The release job then unzips the finished zip and runs `tools/release-manifest.py check` on it, so a zip that doesn't match its own manifest is never uploaded.
+
+**Bump `SCO_VERSION` in `src/version.h` before tagging.** The manifest's version comes from the tag, and `write` fails the release when the tag (without the `v`) differs from `SCO_VERSION`. A launcher refuses an update whose manifest version differs from the release tag, so a mismatch would break every update to that release.
+
+To try it locally on any folder: `python3 tools/release-manifest.py write <folder> --tag v<version>`, then `python3 tools/release-manifest.py check <folder>`.
 
 Every action is pinned to a commit SHA. The workflow defaults to `contents: read`, and only the `release` job gets `contents: write`.
 

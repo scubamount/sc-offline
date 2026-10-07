@@ -32,6 +32,9 @@ jobs:
       - name: tools/check.sh
         run: tools/check.sh
 
+      - name: Release manifest tests
+        run: python3 tools/test_release_manifest.py
+
   build:
     needs: check
     # Pinned: the project builds with the v145 toolset, which this image carries (VS 2026).
@@ -79,9 +82,13 @@ jobs:
           path: built
 
       # The player download: everything to play, in one folder, with the DLL CI just built.
+      # manifest.json (#31) lists every other file in the folder with its SHA-256; the launcher's
+      # self-update copies only listed files whose hash matches. Writing it fails when the tag
+      # doesn't equal SCO_VERSION in src/version.h. The zip is re-read and checked before upload.
       - name: Package sc-offline-<tag>.zip
         env:
           TAG: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
         run: |
           set -eu
           pkg="sc-offline-$TAG"
@@ -91,8 +98,11 @@ jobs:
           git ls-files -z docs | xargs -0 -r cp --parents -t "stage/$pkg/"
           git ls-files -z data | xargs -0 cp --parents -t "stage/$pkg/"
           chmod +x "stage/$pkg/sc-offline.sh"
-          (cd stage && zip -qr "../$pkg.zip" "$pkg")
+          python3 tools/release-manifest.py write "stage/$pkg" --tag "$TAG" --commit "$SHA" --version-h src/version.h
+          (cd stage && zip -qrX "../$pkg.zip" "$pkg")
           unzip -l "$pkg.zip" | tail -1
+          mkdir roundtrip && unzip -q "$pkg.zip" -d roundtrip
+          python3 tools/release-manifest.py check "roundtrip/$pkg"
           echo "ZIP=$pkg.zip" >> "$GITHUB_ENV"
 
       - name: Create Release
