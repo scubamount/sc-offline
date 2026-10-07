@@ -4,8 +4,6 @@
 
 ## [👉 Join the Discord 👈](https://discord.gg/NJKeVfYCCC)
 
-**Release news, help with setup, bug reports and builds before they ship: [discord.gg/NJKeVfYCCC](https://discord.gg/NJKeVfYCCC)**
-
 <img src="images/banner.webp" alt="sc-offline — Star Citizen offline mod: single-player mod menu with ships, NPCs, build mode, travel and Squadron 42 outfits" width="100%">
 
 # sc-offline
