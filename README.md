@@ -191,6 +191,16 @@ That's expected until the mod is updated for the new game version.
 | [Build](docs/build.md) | Building from source, checks, CI and releases |
 | [Changelog](CHANGELOG.md) | What changed in each release |
 
+## Star history
+
+<a href="https://www.star-history.com/#scubamount/sc-offline&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=scubamount/sc-offline&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=scubamount/sc-offline&type=Date" />
+    <img alt="sc-offline GitHub stars over time" src="https://api.star-history.com/svg?repos=scubamount/sc-offline&type=Date" width="600" />
+  </picture>
+</a>
+
 ## Credits
 
 sc-offline is **based on ChrisWareOffline 0.9.0-rc1** by Chris Ware and cloudyyrust (GPL-3.0). The original project has been shut down and its repository removed; this repository is maintained independently and is not endorsed by its authors.
