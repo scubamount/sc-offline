@@ -302,6 +302,8 @@ static bool HttpGet(const wstring& url, std::string& body, DWORD timeoutMs, size
     const wstring agent = L"sc-offline/" + wstring(SCO_VERSION, SCO_VERSION + strlen(SCO_VERSION));
     HINTERNET s = WinHttpOpen(agent.c_str(), WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!s) return false;
+    // Each timeout covers one step (resolve, connect, send, one read), so a long download that keeps
+    // moving never times out; only a stall does.
     WinHttpSetTimeouts(s, (int)timeoutMs, (int)timeoutMs, (int)timeoutMs, (int)timeoutMs);
     bool ok = false;
     HINTERNET c = WinHttpConnect(s, host, u.nPort, 0);
@@ -380,7 +382,7 @@ static bool ParseVersion(std::string v, int out[4]) {
     return n > 0;
 }
 
-struct UpdateInfo { std::string tag, zipName, zipUrl, sha256; };
+struct UpdateInfo { std::string tag, zipName, zipUrl, sha256; unsigned long long size = 0; };
 
 // Skips the JSON object or array starting at j[i]; returns the index just past it.
 static size_t SkipJsonValue(const std::string& j, size_t i) {
@@ -409,6 +411,9 @@ static bool ReleaseAsset(const std::string& body, size_t top, UpdateInfo& u, std
         if (name == want && JsonKey(body, i, "browser_download_url", url) && JsonKey(body, i, "digest", digest) &&
             !digest.compare(0, 7, "sha256:") && digest.size() == 7 + 64) {
             u.tag = tag; u.zipName = name; u.zipUrl = url; u.sha256 = digest.substr(7);
+            std::string size;
+            if (JsonKey(body, i, "size", size) && !size.empty() && size.size() < 16 && size.find_first_not_of("0123456789") == std::string::npos)
+                u.size = std::stoull(size);
             for (char& c : u.sha256) c = (char)tolower((unsigned char)c);
             return true;
         }
@@ -849,12 +854,23 @@ static bool StageUpdate(const wstring& here, const UpdateInfo& u) {
     const wstring root = StageRoot(here);
     RemoveTree(root + L"\\staged"); RemoveTree(root + L"\\new");
     CreateDirectoryW(root.c_str(), nullptr);
+    // D3: room for the zip, the unpacked copy and the staged copy, plus the files being replaced.
+    ULARGE_INTEGER freeBytes{};
+    const unsigned long long need = (u.size ? u.size : (64ull << 20)) * 6 + (32ull << 20);
+    if (GetDiskFreeSpaceExW(root.c_str(), &freeBytes, nullptr, nullptr) && freeBytes.QuadPart < need) {
+        Out("[!] not enough free disk space for the update (%llu MB free, %llu MB needed); nothing changed\n",
+            freeBytes.QuadPart >> 20, need >> 20);
+        return false;
+    }
     Out("[i] downloading %s ...\n", u.zipName.c_str());
     std::string zip;
-    if (!HttpGet(Wide(u.zipUrl), zip, 60000, 256u << 20)) { Out("[!] download failed; nothing changed\n"); return false; }
-    const std::string got = Sha256(zip);
-    if (got != u.sha256) {
-        Out("[!] the download doesn't match GitHub's SHA-256 (got %s, expected %s); nothing changed\n", got.c_str(), u.sha256.c_str());
+    // D3: the timeout is per read (a stalled download), not for the whole file; one retry.
+    bool got = HttpGet(Wide(u.zipUrl), zip, 30000, 256u << 20);
+    if (!got) { Out("[i] the download stalled or failed; trying once more\n"); got = HttpGet(Wide(u.zipUrl), zip, 30000, 256u << 20); }
+    if (!got) { Out("[!] download failed; nothing changed\n"); return false; }
+    const std::string digest = Sha256(zip);
+    if (digest != u.sha256) {
+        Out("[!] the download doesn't match GitHub's SHA-256 (got %s, expected %s); nothing changed\n", digest.c_str(), u.sha256.c_str());
         return false;
     }
     Out("[+] SHA-256 matches GitHub's digest\n");
