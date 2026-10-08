@@ -6,12 +6,15 @@
 #include <d3d11.h>
 #include <wincodec.h>
 #include <vector>
+#include <shellapi.h>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include "spawner.h"
 #include "cvars.h"
 #include "build.h"
+#define IMGUI_DEFINE_MATH_OPERATORS
 #include "third_party/imgui/imgui.h"
 #include "third_party/imgui/imgui_impl_win32.h"
 #include "third_party/imgui/imgui_impl_dx11.h"
@@ -19,6 +22,7 @@
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "windowscodecs.lib")
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "shell32.lib")
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -30,7 +34,7 @@ static IDXGISwapChain*         g_swap;
 static ID3D11RenderTargetView* g_rtv;
 static UINT                    g_resizeW, g_resizeH;
 
-constexpr int kMenuW = 600, kMenuH = 900;
+constexpr int kMenuW = 820, kMenuH = 740;
 
 static void CreateRenderTarget() {
     ID3D11Texture2D* back = nullptr;
@@ -88,6 +92,7 @@ static bool OurProcessHasFocus() {
 }
 
 static bool g_clipped = false;
+static double g_openSince = -10.0;
 
 static void KeepCursorInMenu() {
     if (GetForegroundWindow() != g_wnd) {
@@ -108,6 +113,7 @@ static void ShowMenu(bool show) {
         SetForegroundWindow(g_wnd);
         SetCursorPos(r.left + 60 + kMenuW / 2, r.top + 60 + kMenuH / 2);
         KeepCursorInMenu();
+        g_openSince = ImGui::GetTime();
     } else {
         ClipCursor(nullptr);
         g_clipped = false;
@@ -135,114 +141,208 @@ static bool MatchesFilter(const char* name, const char* filter) {
     return true;
 }
 
-// =============================================================================================
-// Look: dark Tegridy green. Soil-green behind everything, leaf green only on things you click,
-// tractor yellow for warnings. An optional background image sits under a
-// green wash so text stays readable.
-// =============================================================================================
-
 static ImVec4 Hex(uint32_t rgb, float a = 1.0f) {
     return ImVec4(((rgb >> 16) & 0xFF) / 255.0f, ((rgb >> 8) & 0xFF) / 255.0f, (rgb & 0xFF) / 255.0f, a);
 }
 
-static const ImVec4 kSoil      = Hex(0x0E1811);   // deepest green, under the image
-static const ImVec4 kPanel     = Hex(0x172A1B);   // inputs, lists, status strip
-static const ImVec4 kPanelUp   = Hex(0x1F3523);   // hover
-static const ImVec4 kLine      = Hex(0x2F4B32);   // dividers, scrollbars
-static const ImVec4 kText      = Hex(0xE6EFDD);
-static const ImVec4 kMuted     = Hex(0x9FB59A);
-static const ImVec4 kLeaf      = Hex(0x86C64B);   // accent
-static const ImVec4 kLeafDeep  = Hex(0x3E6B27);
+static const ImVec4 kBg         = Hex(0x151517);
+static const ImVec4 kCard       = Hex(0x1B1B1E);
+static const ImVec4 kRow        = Hex(0x242428);
+static const ImVec4 kRowUp      = Hex(0x2E2E33);
+static const ImVec4 kRowDown    = Hex(0x38383E);
+static const ImVec4 kLine       = Hex(0x28282C);
+static const ImVec4 kText       = Hex(0xECECF0);
+static const ImVec4 kBody       = Hex(0xBEC0C6);
+static const ImVec4 kMuted      = Hex(0x76767E);
+static const ImVec4 kFaint      = Hex(0x4A4A52);
+static const ImVec4 kBlue       = Hex(0x6088EC);
+static const ImVec4 kAction     = Hex(0x182852);
+static const ImVec4 kActionUp   = Hex(0x20366C);
+static const ImVec4 kActionDown = Hex(0x2A4486);
+static const ImVec4 kActionText = Hex(0x80A4FF);
+static const ImVec4 kRed        = Hex(0xC43434);
 
-constexpr float kBodySize    = 17.0f;
-constexpr float kHeadingSize = 20.0f;
+constexpr float kBodySize = 16.0f;
 
 static void ApplyTheme() {
     ImGuiStyle& st = ImGui::GetStyle();
-    st.WindowPadding = ImVec2(16, 12);
-    st.FramePadding = ImVec2(9, 5);
-    st.ItemSpacing = ImVec2(8, 7);
-    st.ItemInnerSpacing = ImVec2(6, 4);
-    st.CellPadding = ImVec2(8, 4);
-    st.ScrollbarSize = 11;
+    st.WindowPadding = ImVec2(0, 0);
+    st.FramePadding = ImVec2(10, 6);
+    st.ItemSpacing = ImVec2(8, 8);
+    st.ItemInnerSpacing = ImVec2(8, 4);
+    st.CellPadding = ImVec2(8, 5);
+    st.IndentSpacing = 16;
+    st.ScrollbarSize = 8;
+    st.GrabMinSize = 12;
     st.WindowRounding = 0;
-    st.ChildRounding = 4;
-    st.FrameRounding = 4;
-    st.PopupRounding = 4;
-    st.GrabRounding = 4;
-    st.TabRounding = 4;
-    st.ScrollbarRounding = 4;
+    st.ChildRounding = 10;
+    st.FrameRounding = 8;
+    st.PopupRounding = 8;
+    st.GrabRounding = 8;
+    st.TabRounding = 8;
+    st.ScrollbarRounding = 8;
     st.WindowBorderSize = 0;
-    st.ChildBorderSize = 1;
+    st.ChildBorderSize = 0;
+    st.PopupBorderSize = 1;
     st.FrameBorderSize = 0;
     st.TabBorderSize = 0;
-    st.SeparatorTextBorderSize = 1;
-    st.SeparatorTextPadding = ImVec2(0, 6);
-    st.SeparatorTextAlign = ImVec2(0, 0.5f);
 
     ImVec4* c = st.Colors;
-    c[ImGuiCol_Text]                 = kText;
-    c[ImGuiCol_TextDisabled]         = kMuted;
-    c[ImGuiCol_WindowBg]             = ImVec4(0, 0, 0, 0);          // the background is drawn underneath
-    c[ImGuiCol_ChildBg]              = ImVec4(0, 0, 0, 0);
-    c[ImGuiCol_PopupBg]              = Hex(0x132216, 0.98f);
-    c[ImGuiCol_Border]               = kLine;
-    c[ImGuiCol_BorderShadow]         = ImVec4(0, 0, 0, 0);
-    c[ImGuiCol_FrameBg]              = Hex(0x172A1B, 0.88f);
-    c[ImGuiCol_FrameBgHovered]       = Hex(0x1F3523, 0.95f);
-    c[ImGuiCol_FrameBgActive]        = Hex(0x26412A, 1.0f);
-    c[ImGuiCol_TitleBg]              = Hex(0x0B140D, 0.95f);
-    c[ImGuiCol_TitleBgActive]        = Hex(0x0B140D, 0.95f);
-    c[ImGuiCol_TitleBgCollapsed]     = Hex(0x0B140D, 0.95f);
-    c[ImGuiCol_ScrollbarBg]          = ImVec4(0, 0, 0, 0);
-    c[ImGuiCol_ScrollbarGrab]        = kLine;
-    c[ImGuiCol_ScrollbarGrabHovered] = Hex(0x3C5E3F);
-    c[ImGuiCol_ScrollbarGrabActive]  = kLeafDeep;
-    c[ImGuiCol_CheckMark]            = kLeaf;
-    c[ImGuiCol_SliderGrab]           = kLeafDeep;
-    c[ImGuiCol_SliderGrabActive]     = kLeaf;
-    c[ImGuiCol_Button]               = Hex(0x1F3523, 0.92f);
-    c[ImGuiCol_ButtonHovered]        = Hex(0x2A4730);
-    c[ImGuiCol_ButtonActive]         = kLeafDeep;
-    c[ImGuiCol_Header]               = Hex(0x3E6B27, 0.55f);
-    c[ImGuiCol_HeaderHovered]        = Hex(0x1F3523, 0.95f);
-    c[ImGuiCol_HeaderActive]         = kLeafDeep;
-    c[ImGuiCol_Separator]            = kLine;
-    c[ImGuiCol_SeparatorHovered]     = kLeafDeep;
-    c[ImGuiCol_SeparatorActive]      = kLeaf;
-    c[ImGuiCol_ResizeGrip]           = ImVec4(0, 0, 0, 0);
-    c[ImGuiCol_Tab]                  = Hex(0x0B140D, 0.70f);
-    c[ImGuiCol_TabHovered]           = kPanelUp;
-    c[ImGuiCol_TabSelected]          = Hex(0x172A1B, 0.95f);
-    c[ImGuiCol_TabSelectedOverline]  = kLeaf;
-    c[ImGuiCol_TabDimmed]            = Hex(0x0B140D, 0.70f);
-    c[ImGuiCol_TabDimmedSelected]    = Hex(0x172A1B, 0.95f);
-    c[ImGuiCol_TableHeaderBg]        = Hex(0x172A1B, 0.95f);
-    c[ImGuiCol_TableBorderStrong]    = kLine;
-    c[ImGuiCol_TableBorderLight]     = Hex(0x2F4B32, 0.6f);
-    c[ImGuiCol_TableRowBg]           = ImVec4(0, 0, 0, 0);
-    c[ImGuiCol_TableRowBgAlt]        = Hex(0x172A1B, 0.35f);
-    c[ImGuiCol_TextSelectedBg]       = Hex(0x3E6B27, 0.7f);
-    c[ImGuiCol_NavCursor]            = kLeaf;
+    const ImVec4 none(0, 0, 0, 0);
+    c[ImGuiCol_Text]                      = kText;
+    c[ImGuiCol_TextDisabled]              = kMuted;
+    c[ImGuiCol_WindowBg]                  = none;
+    c[ImGuiCol_ChildBg]                   = none;
+    c[ImGuiCol_PopupBg]                   = Hex(0x1B1B1E, 0.98f);
+    c[ImGuiCol_Border]                    = kLine;
+    c[ImGuiCol_BorderShadow]              = none;
+    c[ImGuiCol_FrameBg]                   = kRow;
+    c[ImGuiCol_FrameBgHovered]            = kRowUp;
+    c[ImGuiCol_FrameBgActive]             = kRowDown;
+    c[ImGuiCol_TitleBg]                   = kBg;
+    c[ImGuiCol_TitleBgActive]             = kBg;
+    c[ImGuiCol_TitleBgCollapsed]          = kBg;
+    c[ImGuiCol_ScrollbarBg]               = none;
+    c[ImGuiCol_ScrollbarGrab]             = kRow;
+    c[ImGuiCol_ScrollbarGrabHovered]      = kRowUp;
+    c[ImGuiCol_ScrollbarGrabActive]       = kAction;
+    c[ImGuiCol_CheckMark]                 = kBlue;
+    c[ImGuiCol_SliderGrab]                = kBlue;
+    c[ImGuiCol_SliderGrabActive]          = kActionText;
+    c[ImGuiCol_Button]                    = kRow;
+    c[ImGuiCol_ButtonHovered]             = kRowUp;
+    c[ImGuiCol_ButtonActive]              = kRowDown;
+    c[ImGuiCol_Header]                    = kRow;
+    c[ImGuiCol_HeaderHovered]             = kRowUp;
+    c[ImGuiCol_HeaderActive]              = kRowDown;
+    c[ImGuiCol_Separator]                 = kLine;
+    c[ImGuiCol_SeparatorHovered]          = kAction;
+    c[ImGuiCol_SeparatorActive]           = kBlue;
+    c[ImGuiCol_ResizeGrip]                = none;
+    c[ImGuiCol_ResizeGripHovered]         = none;
+    c[ImGuiCol_ResizeGripActive]          = none;
+    c[ImGuiCol_Tab]                       = none;
+    c[ImGuiCol_TabHovered]                = kRow;
+    c[ImGuiCol_TabSelected]               = kRow;
+    c[ImGuiCol_TabSelectedOverline]       = kBlue;
+    c[ImGuiCol_TabDimmed]                 = none;
+    c[ImGuiCol_TabDimmedSelected]         = kRow;
+    c[ImGuiCol_TabDimmedSelectedOverline] = kBlue;
+    c[ImGuiCol_TableHeaderBg]             = Hex(0x111113);
+    c[ImGuiCol_TableBorderStrong]         = kLine;
+    c[ImGuiCol_TableBorderLight]          = kLine;
+    c[ImGuiCol_TableRowBg]                = none;
+    c[ImGuiCol_TableRowBgAlt]             = Hex(0x242428, 0.35f);
+    c[ImGuiCol_PlotHistogram]             = kBlue;
+    c[ImGuiCol_PlotHistogramHovered]      = kActionText;
+    c[ImGuiCol_TextSelectedBg]            = Hex(0x20366C, 0.8f);
+    c[ImGuiCol_DragDropTarget]            = kBlue;
+    c[ImGuiCol_NavCursor]                 = kBlue;
 }
 
-// Bahnschrift (DIN-style, ships with Windows 10+), then Segoe UI, then ImGui's own font.
+static ImFont* g_bold = nullptr;
+
 static void LoadFonts() {
     ImGuiIO& io = ImGui::GetIO();
     char dir[MAX_PATH] = "C:\\Windows";
     GetWindowsDirectoryA(dir, sizeof(dir));
-    static const char* const kFonts[] = { "bahnschrift.ttf", "segoeui.ttf" };
-    ImFont* font = nullptr;
-    for (const char* name : kFonts) {
+    auto load = [&](const char* name) -> ImFont* {
         char path[MAX_PATH];
         snprintf(path, sizeof(path), "%s\\Fonts\\%s", dir, name);
-        if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES) continue;
-        if ((font = io.Fonts->AddFontFromFileTTF(path, kBodySize)) != nullptr) break;
-    }
+        return GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES ? nullptr : io.Fonts->AddFontFromFileTTF(path, kBodySize);
+    };
+    ImFont* font = load("segoeui.ttf");
+    if (!font) font = load("bahnschrift.ttf");
+    g_bold = load("seguisb.ttf");
+    if (!g_bold) g_bold = font;
+    if (font) io.FontDefault = font;
     ImGuiStyle& st = ImGui::GetStyle();
     st.FontSizeBase = font ? kBodySize : 13.0f;
     st.FontScaleMain = font ? 1.0f : 1.3f;
 }
+
+static ImU32 Col(const ImVec4& c, float a = 1.0f) { return ImGui::GetColorU32(ImVec4(c.x, c.y, c.z, c.w * a)); }
+
+static ImVec4 Mix(const ImVec4& a, const ImVec4& b, float t) {
+    return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t);
+}
+
+static float Anim(ImGuiID id, float target, float speed = 16.0f) {
+    float* v = ImGui::GetStateStorage()->GetFloatRef(id, target);
+    *v += (target - *v) * (1.0f - expf(-speed * ImGui::GetIO().DeltaTime));
+    return *v;
+}
+
+static float EaseOut(float t) {
+    t = t < 0.0f ? 0.0f : t > 1.0f ? 1.0f : t;
+    return 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
+}
+
+enum Icon { kIcoPlayer, kIcoTravel, kIcoShip, kIcoCrew, kIcoNpc, kIcoBuild, kIcoStar, kIcoMark };
+
+static void DrawIcon(Icon icon, ImVec2 c, float s, ImU32 col) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float t = 1.6f, pi = 3.14159265f;
+    auto P = [&](float x, float y) { return ImVec2(c.x + x * s, c.y + y * s); };
+    auto line = [&](std::initializer_list<ImVec2> pts, bool closed = false) {
+        ImVec2 v[12];
+        int n = 0;
+        for (const ImVec2& p : pts) if (n < 12) v[n++] = p;
+        dl->AddPolyline(v, n, col, closed ? ImDrawFlags_Closed : ImDrawFlags_None, t);
+    };
+    auto person = [&](float dx, float k) {
+        dl->AddCircle(P(dx, -0.45f * k), 0.38f * s * k, col, 20, t);
+        dl->PathArcTo(P(dx, 0.95f), 0.8f * s * k, pi * 1.05f, pi * 1.95f, 20);
+        dl->PathStroke(col, ImDrawFlags_None, t);
+    };
+    switch (icon) {
+    case kIcoPlayer: person(0.0f, 1.0f); break;
+    case kIcoCrew: person(-0.38f, 0.8f); person(0.42f, 0.8f); break;
+    case kIcoNpc:
+        person(-0.15f, 0.9f);
+        line({ P(0.62f, -0.78f), P(0.62f, -0.18f) });
+        line({ P(0.32f, -0.48f), P(0.92f, -0.48f) });
+        break;
+    case kIcoTravel:
+        dl->PathArcTo(P(0, -0.25f), 0.62f * s, pi * 0.82f, pi * 2.18f, 24);
+        dl->PathLineTo(P(0, 0.95f));
+        dl->PathStroke(col, ImDrawFlags_Closed, t);
+        dl->AddCircleFilled(P(0, -0.25f), 0.2f * s, col, 12);
+        break;
+    case kIcoShip: line({ P(0, -0.95f), P(0.75f, 0.8f), P(0, 0.4f), P(-0.75f, 0.8f) }, true); break;
+    case kIcoBuild:
+        line({ P(0, -0.95f), P(0.85f, -0.48f), P(0.85f, 0.48f), P(0, 0.95f), P(-0.85f, 0.48f), P(-0.85f, -0.48f) }, true);
+        line({ P(-0.85f, -0.48f), P(0, 0), P(0.85f, -0.48f) });
+        line({ P(0, 0), P(0, 0.95f) });
+        break;
+    case kIcoStar: {
+        ImVec2 v[10];
+        for (int i = 0; i < 10; ++i) {
+            const float a = -pi / 2 + float(i) * pi / 5, r = (i % 2 ? 0.42f : 0.95f) * s;
+            v[i] = ImVec2(c.x + cosf(a) * r, c.y + sinf(a) * r);
+        }
+        dl->AddPolyline(v, 10, col, ImDrawFlags_Closed, t);
+        break;
+    }
+    case kIcoMark:
+        dl->AddCircle(c, 0.92f * s, col, 40, 2.2f);
+        dl->AddTriangleFilled(P(-0.28f, -0.45f), P(0.5f, 0.0f), P(-0.28f, 0.45f), col);
+        break;
+    }
+}
+
+struct Page { const char* name; Icon icon; };
+static const Page kPages[] = {
+    { "Player", kIcoPlayer }, { "Travel", kIcoTravel }, { "Vehicles", kIcoShip }, { "Crew", kIcoCrew },
+    { "NPCs", kIcoNpc }, { "Build", kIcoBuild }, { "Squadron 42", kIcoStar },
+};
+constexpr int kPageCount = int(sizeof(kPages) / sizeof(kPages[0]));
+static int    g_page = 0;
+static double g_pageSince = -10.0;
+
+static const char*    kDiscordText = "discord.gg/KPt5VBWeJ";
+static const wchar_t* kDiscordUrl = L"https://discord.gg/KPt5VBWeJ";
+static bool           g_openDiscord = false;
 
 // --- background image: data\menu_background.png / .jpg, decoded with Windows' own WIC ---------
 
@@ -316,7 +416,7 @@ static void LoadBackground() {
 static void DrawBackdrop() {
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     const ImVec2 size = ImGui::GetIO().DisplaySize;
-    dl->AddRectFilled(ImVec2(0, 0), size, ImGui::GetColorU32(kSoil));
+    dl->AddRectFilled(ImVec2(0, 0), size, ImGui::GetColorU32(kBg));
     if (!g_bgSrv || !g_bgShow || size.x <= 0 || size.y <= 0) return;
     // Cover the window, cropping whichever direction overflows.
     const float imageAspect = static_cast<float>(g_bgW) / static_cast<float>(g_bgH);
@@ -332,16 +432,41 @@ static void DrawBackdrop() {
         uv1.y = uv0.y + visible;
     }
     dl->AddImage(static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(g_bgSrv)), ImVec2(0, 0), size, uv0, uv1);
-    dl->AddRectFilled(ImVec2(0, 0), size, ImGui::GetColorU32(ImVec4(kSoil.x, kSoil.y, kSoil.z, g_bgDarkness / 100.0f)));
+    dl->AddRectFilled(ImVec2(0, 0), size, ImGui::GetColorU32(ImVec4(kBg.x, kBg.y, kBg.z, g_bgDarkness / 100.0f)));
 }
 
 // --- small building blocks ------------------------------------------------------------------
 
+static bool g_cardOpen = false;
+static int  g_cardIndex = 0;
+
+static void CloseCard() {
+    if (!g_cardOpen) return;
+    ImGui::EndChild();
+    ImGui::Dummy(ImVec2(0, 4));
+    g_cardOpen = false;
+}
+
 static void Section(const char* title) {
-    ImGui::Dummy(ImVec2(0, 2));
-    ImGui::PushFont(nullptr, kHeadingSize);
-    ImGui::SeparatorText(title);
+    CloseCard();
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, kCard);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16, 14));
+    ImGui::BeginChild(ImGui::GetID(g_page * 100 + g_cardIndex++), ImVec2(0, 0),
+                      ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+    g_cardOpen = true;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float w = ImGui::GetContentRegionAvail().x;
+    ImGui::PushFont(g_bold, 0.0f);
+    const float fs = ImGui::GetFontSize();
+    DrawIcon(kPages[g_page].icon, ImVec2(p.x + 8, p.y + fs * 0.5f), 7, Col(kBlue));
+    dl->AddText(ImVec2(p.x + 26, p.y), Col(kText), title);
     ImGui::PopFont();
+    dl->AddLine(ImVec2(p.x - 2, p.y + fs + 12), ImVec2(p.x + w + 2, p.y + fs + 12), Col(kLine), 1.0f);
+    ImGui::Dummy(ImVec2(0, fs + 16));
 }
 
 static void Hint(const char* text) {
@@ -350,13 +475,234 @@ static void Hint(const char* text) {
     ImGui::PopStyleColor();
 }
 
-static bool PrimaryButton(const char* label, float height = 36.0f) {
-    ImGui::PushStyleColor(ImGuiCol_Button, kLeafDeep);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Hex(0x4F8732));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, kLeaf);
-    const bool pressed = ImGui::Button(label, ImVec2(-1, height));
-    ImGui::PopStyleColor(3);
-    return pressed;
+static void Tip(const char* text) { ImGui::SetItemTooltip("%s", text); }
+
+static bool UiButton(const char* label, ImVec2 size = ImVec2(0, 0), bool primary = false) {
+    const char* end = label;
+    while (*end && !(end[0] == '#' && end[1] == '#')) ++end;
+    ImGui::PushFont(primary ? g_bold : nullptr, 0.0f);
+    const ImVec2 ts = ImGui::CalcTextSize(label, end);
+    const float avail = ImGui::GetContentRegionAvail().x;
+    if (size.x < 0) size.x = (std::max)(4.0f, avail + size.x + 1);
+    if (size.x == 0) size.x = ts.x + ImGui::GetStyle().FramePadding.x * 2;
+    if (size.y == 0) size.y = ImGui::GetFrameHeight();
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const bool clicked = ImGui::InvisibleButton(label, size);
+    const ImGuiID id = ImGui::GetItemID();
+    const bool hot = ImGui::IsItemHovered(), down = ImGui::IsItemActive();
+    if (hot) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    const float h = Anim(id, hot ? 1.0f : 0.0f, 12.0f), d = Anim(id + 1, down ? 1.0f : 0.0f, 20.0f);
+    const ImVec4 bg = primary ? Mix(Mix(kAction, kActionUp, h), kActionDown, d) : Mix(Mix(kRow, kRowUp, h), kRowDown, d);
+    const ImVec4 fg = primary ? Mix(kActionText, Hex(0xB4CAFF), h) : Mix(kBody, kText, h);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 in(d, d);
+    dl->AddRectFilled(pos + in, pos + size - in, Col(bg), 8);
+    const ImVec2 at(pos.x + (std::max)(ImGui::GetStyle().FramePadding.x, (size.x - ts.x) * 0.5f), pos.y + (size.y - ts.y) * 0.5f + d * 0.5f);
+    dl->PushClipRect(pos, pos + size, true);
+    dl->AddText(at, Col(fg), label, end);
+    dl->PopClipRect();
+    ImGui::PopFont();
+    return clicked;
+}
+
+static bool PrimaryButton(const char* label, float height = 40.0f) {
+    return UiButton(label, ImVec2(-1, height), true);
+}
+
+static bool UiToggle(const char* label, bool* v) {
+    const char* end = label;
+    while (*end && !(end[0] == '#' && end[1] == '#')) ++end;
+    const float h = ImGui::GetFrameHeight(), sw = 38, sh = 22, gap = ImGui::GetStyle().ItemInnerSpacing.x;
+    const ImVec2 ts = ImGui::CalcTextSize(label, end);
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const bool clicked = ImGui::InvisibleButton(label, ImVec2(sw + (ts.x > 0 ? gap + ts.x : 0), h));
+    if (clicked) *v = !*v;
+    const ImGuiID id = ImGui::GetItemID();
+    const bool hot = ImGui::IsItemHovered();
+    if (hot) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    const float on = Anim(id, *v ? 1.0f : 0.0f, 14.0f), hv = Anim(id + 1, hot ? 1.0f : 0.0f, 12.0f);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 a(pos.x, pos.y + (h - sh) * 0.5f), b(a.x + sw, a.y + sh);
+    dl->AddRectFilled(a, b, Col(Mix(Mix(kRow, kRowUp, hv), Mix(kAction, kActionUp, hv), on)), sh * 0.5f);
+    const ImVec2 c(a.x + sh * 0.5f + (sw - sh) * on, a.y + sh * 0.5f);
+    dl->AddCircleFilled(c, sh * 0.5f - 4 + hv * 0.5f, Col(Mix(kMuted, kActionText, on)), 24);
+    if (ts.x > 0) dl->AddText(ImVec2(b.x + gap, pos.y + (h - ts.y) * 0.5f), Col(Mix(kBody, kText, (std::max)(on, hv))), label, end);
+    return clicked;
+}
+
+static ImGuiStorage* g_comboStore = nullptr;
+static ImGuiID       g_comboKey = 0;
+
+static bool UiBeginCombo(const char* id, const char* preview, ImGuiComboFlags flags = 0) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImGuiStorage* store = ImGui::GetStateStorage();
+    char list[96];
+    snprintf(list, sizeof(list), "%s##list", id);
+    const ImGuiID key = ImGui::GetID(id);
+    const float w = ImGui::CalcItemWidth(), fh = ImGui::GetFrameHeight();
+    const ImVec2 a = ImGui::GetCursorScreenPos(), b(a.x + w, a.y + fh);
+    const bool wasOpen = store->GetBool(key + 7);
+    if (ImGui::InvisibleButton(id, ImVec2(w, fh)) && !wasOpen && !ImGui::IsPopupOpen(list)) {
+        ImGui::OpenPopup(list);
+        store->SetFloat(key + 5, float(ImGui::GetTime()));
+    }
+    const bool hot = ImGui::IsItemHovered();
+    if (hot) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    const bool isOpen = ImGui::IsPopupOpen(list);
+    store->SetBool(key + 7, isOpen);
+    const float h = Anim(key, hot ? 1.0f : 0.0f, 12.0f), o = Anim(key + 1, isOpen ? 1.0f : 0.0f, 16.0f);
+    dl->AddRectFilled(a, b, Col(Mix(Mix(kRow, kRowUp, h), kRowDown, o * 0.5f)), 8);
+    if (o > 0.0f) dl->AddRect(a, b, Col(kBlue, 0.55f * o), 8, 0, 1.0f);
+    const ImVec2 ts = ImGui::CalcTextSize(preview);
+    const float tx = a.x + ImGui::GetStyle().FramePadding.x, room = b.x - 30 - tx;
+    if (ts.x <= room) {
+        dl->AddText(ImVec2(tx, a.y + (fh - ts.y) * 0.5f), Col(kText), preview);
+    } else {
+        dl->PushClipRect(a, ImVec2(b.x - 30 - ImGui::CalcTextSize("...").x, b.y), true);
+        dl->AddText(ImVec2(tx, a.y + (fh - ts.y) * 0.5f), Col(kText), preview);
+        dl->PopClipRect();
+        dl->AddText(ImVec2(b.x - 30 - ImGui::CalcTextSize("...").x, a.y + (fh - ts.y) * 0.5f), Col(kText), "...");
+    }
+    const ImVec2 c(b.x - 16, (a.y + b.y) * 0.5f);
+    const float k = 1.0f - 2.0f * o;
+    const ImVec2 pts[3] = { ImVec2(c.x - 4.5f, c.y - 2.25f * k), ImVec2(c.x, c.y + 2.25f * k), ImVec2(c.x + 4.5f, c.y - 2.25f * k) };
+    dl->AddPolyline(pts, 3, Col(Mix(kMuted, kText, (std::max)(h, o))), ImDrawFlags_None, 1.6f);
+    if (!isOpen) return false;
+
+    const float maxH = (flags & ImGuiComboFlags_HeightLargest) ? 420.0f : (flags & ImGuiComboFlags_HeightLarge) ? 320.0f : 240.0f;
+    const float lastH = (std::min)(store->GetFloat(key + 6, 0.0f), maxH);
+    const float t = EaseOut((float(ImGui::GetTime()) - store->GetFloat(key + 5, 0.0f)) / 0.16f);
+    const float slide = (1.0f - t) * 6.0f;
+    const bool above = b.y + 6 + lastH > ImGui::GetIO().DisplaySize.y - 8 && a.y - 6 - lastH > 8;
+    ImGui::SetNextWindowPos(ImVec2(a.x, above ? a.y - 6 - lastH + slide : b.y + 6 - slide));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(w, 0), ImVec2(w, maxH));
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * t);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 6));
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, 10.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 2));
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, Hex(0x202024));
+    if (!ImGui::BeginPopup(list)) {
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar(4);
+        return false;
+    }
+    g_comboStore = store;
+    g_comboKey = key;
+    return true;
+}
+
+static void UiEndCombo() {
+    if (g_comboStore) g_comboStore->SetFloat(g_comboKey + 6, ImGui::GetWindowHeight());
+    ImGui::EndPopup();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(4);
+}
+
+static bool UiOption(const char* label, bool selected, bool enabled = true) {
+    const char* end = label;
+    while (*end && !(end[0] == '#' && end[1] == '#')) ++end;
+    const float w = ImGui::GetContentRegionAvail().x, rh = ImGui::GetFrameHeight();
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImGui::BeginDisabled(!enabled);
+    const bool clicked = ImGui::InvisibleButton(label, ImVec2(w, rh));
+    const bool hot = ImGui::IsItemHovered();
+    ImGui::EndDisabled();
+    if (hot) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    const float h = Anim(ImGui::GetItemID(), hot ? 1.0f : 0.0f, 18.0f);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (selected) dl->AddRectFilled(pos, pos + ImVec2(w, rh), Col(Mix(Hex(0x1C2A4C), kActionUp, h)), 6);
+    else if (h > 0.0f) dl->AddRectFilled(pos, pos + ImVec2(w, rh), Col(kRow, h), 6);
+    const ImVec2 ts = ImGui::CalcTextSize(label, end);
+    const ImVec4 fg = !enabled ? kFaint : selected ? kActionText : Mix(kBody, kText, h);
+    dl->PushClipRect(pos, pos + ImVec2(w - 26, rh), true);
+    dl->AddText(ImVec2(pos.x + 10, pos.y + (rh - ts.y) * 0.5f), Col(fg), label, end);
+    dl->PopClipRect();
+    if (selected) {
+        const ImVec2 c(pos.x + w - 16, pos.y + rh * 0.5f);
+        const ImVec2 pts[3] = { ImVec2(c.x - 4.5f, c.y), ImVec2(c.x - 1.5f, c.y + 3.0f), ImVec2(c.x + 4.5f, c.y - 3.5f) };
+        dl->AddPolyline(pts, 3, Col(kActionText), ImDrawFlags_None, 1.6f);
+    }
+    if (clicked && enabled) ImGui::CloseCurrentPopup();
+    return clicked && enabled;
+}
+
+static bool UiGroup(const char* label, bool defaultOpen, bool forceOpen) {
+    const char* end = label;
+    while (*end && !(end[0] == '#' && end[1] == '#')) ++end;
+    ImGuiStorage* store = ImGui::GetStateStorage();
+    const ImGuiID key = ImGui::GetID(label);
+    bool open = store->GetBool(key + 3, defaultOpen);
+    const float w = ImGui::GetContentRegionAvail().x, h = ImGui::GetFrameHeight();
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    if (ImGui::InvisibleButton(label, ImVec2(w, h))) { open = !open; store->SetBool(key + 3, open); }
+    if (forceOpen) open = true;
+    const bool hot = ImGui::IsItemHovered();
+    if (hot) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    const float hv = Anim(key, hot ? 1.0f : 0.0f, 12.0f), o = Anim(key + 1, open ? 1.0f : 0.0f, 14.0f);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(pos, pos + ImVec2(w, h), Col(Mix(kRow, kRowUp, hv)), 8);
+    const ImVec2 c(pos.x + 18, pos.y + h * 0.5f);
+    const float ang = (1.0f - o) * -1.5707963f, cs = cosf(ang), sn = sinf(ang);
+    auto rot = [&](float x, float y) { return ImVec2(c.x + x * cs - y * sn, c.y + x * sn + y * cs); };
+    const ImVec2 pts[3] = { rot(-4.5f, -2.25f), rot(0.0f, 2.25f), rot(4.5f, -2.25f) };
+    dl->AddPolyline(pts, 3, Col(Mix(kMuted, kBlue, o)), ImDrawFlags_None, 1.6f);
+    const ImVec2 ts = ImGui::CalcTextSize(label, end);
+    dl->AddText(ImVec2(pos.x + 34, pos.y + (h - ts.y) * 0.5f), Col(Mix(kBody, kText, (std::max)(hv, o))), label, end);
+    return open;
+}
+
+static float SliderFraction(float v, float lo, float hi, bool logarithmic) {
+    if (hi <= lo) return 0.0f;
+    const float t = logarithmic && lo > 0 ? logf(v / lo) / logf(hi / lo) : (v - lo) / (hi - lo);
+    return t < 0.0f ? 0.0f : t > 1.0f ? 1.0f : t;
+}
+
+static void PushHiddenSlider() {
+    const ImVec4 none(0, 0, 0, 0);
+    for (ImGuiCol c : { ImGuiCol_FrameBg, ImGuiCol_FrameBgHovered, ImGuiCol_FrameBgActive, ImGuiCol_SliderGrab, ImGuiCol_SliderGrabActive, ImGuiCol_Text })
+        ImGui::PushStyleColor(c, none);
+}
+
+static void DrawSlider(float t, const char* text) {
+    const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+    const ImGuiID id = ImGui::GetItemID();
+    const bool hot = ImGui::IsItemHovered(), held = ImGui::IsItemActive();
+    if (hot || held) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    const float shown = Anim(id + 7, t, 22.0f), hv = Anim(id + 8, hot || held ? 1.0f : 0.0f, 12.0f);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float h = b.y - a.y, r = h * 0.5f;
+    dl->AddRectFilled(a, b, Col(Mix(kRow, kRowUp, hv)), r);
+    const float fx = a.x + h + (b.x - a.x - h) * shown;
+    dl->AddRectFilled(a, ImVec2(fx, b.y), Col(Mix(kAction, kActionUp, hv)), r);
+    const float kx = fx - r, kr = r - 5 + hv * 1.5f;
+    dl->AddCircleFilled(ImVec2(kx, a.y + r), kr, Col(Mix(kBlue, kActionText, hv)), 24);
+    const ImVec2 ts = ImGui::CalcTextSize(text);
+    const bool inside = kx - kr - 10 - ts.x >= a.x + 12;
+    const float side = Anim(id + 9, inside ? 1.0f : 0.0f, 16.0f);
+    const float tx = (kx + kr + 10) + ((kx - kr - 10 - ts.x) - (kx + kr + 10)) * side;
+    dl->PushClipRect(a, b, true);
+    dl->AddText(ImVec2(tx, a.y + (h - ts.y) * 0.5f), Col(Mix(kBody, kText, side)), text);
+    dl->PopClipRect();
+}
+
+static bool UiSliderFloat(const char* id, float* v, float lo, float hi, const char* fmt, ImGuiSliderFlags flags = 0) {
+    PushHiddenSlider();
+    const bool changed = ImGui::SliderFloat(id, v, lo, hi, fmt, flags | ImGuiSliderFlags_NoInput);
+    ImGui::PopStyleColor(6);
+    char text[96];
+    snprintf(text, sizeof(text), fmt, *v);
+    DrawSlider(SliderFraction(*v, lo, hi, (flags & ImGuiSliderFlags_Logarithmic) != 0), text);
+    return changed;
+}
+
+static bool UiSliderInt(const char* id, int* v, int lo, int hi, const char* fmt) {
+    PushHiddenSlider();
+    const bool changed = ImGui::SliderInt(id, v, lo, hi, fmt, ImGuiSliderFlags_NoInput);
+    ImGui::PopStyleColor(6);
+    char text[96];
+    snprintf(text, sizeof(text), fmt, *v);
+    DrawSlider(SliderFraction(float(*v), float(lo), float(hi), false), text);
+    return changed;
 }
 
 static float Columns(int n) {
@@ -401,18 +747,18 @@ static bool NpcPicker() {
     char preview[128];
     PrettyBuildName(preview, sizeof(preview), Menu_NpcName(g_npcPick));
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::BeginCombo("##npc", preview, ImGuiComboFlags_HeightLarge)) {
+    if (UiBeginCombo("##npc", preview, ImGuiComboFlags_HeightLarge)) {
         for (int i = 0; i < npcs; ++i) {
             const char* name = Menu_NpcName(i);
             if (!MatchesFilter(name, filter)) continue;
             char label[160];
             PrettyBuildName(label, sizeof(label) - 16, name);
             snprintf(label + strlen(label), 16, "##n%d", i);
-            if (ImGui::Selectable(label, i == g_npcPick)) g_npcPick = i;
+            if (UiOption(label, i == g_npcPick)) g_npcPick = i;
             ImGui::SetItemTooltip("%s", name);
             if (i == g_npcPick) ImGui::SetItemDefaultFocus();
         }
-        ImGui::EndCombo();
+        UiEndCombo();
     }
     return true;
 }
@@ -428,35 +774,34 @@ static void GearCombo(int slot, const char* label, const char* none, int& pick, 
     snprintf(preview, sizeof(preview), "%s: %s", label, pick >= 0 ? Menu_GearName(slot, pick) : none);
     snprintf(id, sizeof(id), "##gear%d", slot);
     ImGui::SetNextItemWidth(width);
-    if (!ImGui::BeginCombo(id, preview, ImGuiComboFlags_HeightLarge)) return;
-    if (ImGui::Selectable(none, pick < 0)) pick = -1;
+    if (!UiBeginCombo(id, preview, ImGuiComboFlags_HeightLarge)) return;
+    if (UiOption(none, pick < 0)) pick = -1;
     for (int i = 0; i < n; ++i) {
         const char* name = Menu_GearName(slot, i);
         if (!MatchesFilter(name, filter)) continue;
         ImGui::PushID(i);
-        if (ImGui::Selectable(name, i == pick)) pick = i;
+        if (UiOption(name, i == pick)) pick = i;
         if (i == pick) ImGui::SetItemDefaultFocus();
         ImGui::PopID();
     }
-    ImGui::EndCombo();
+    UiEndCombo();
 }
 
 static void DrawPlayerTab(bool& keepOpen) {
     Section("Movement");
     static bool  noclip = false;
     static float speed = 30.0f;
-    if (ImGui::Checkbox("Noclip", &noclip)) Menu_SetNoclip(noclip, speed);
+    if (UiToggle("Noclip", &noclip)) Menu_SetNoclip(noclip, speed);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::SliderFloat("##noclipSpeed", &speed, 1.0f, 500.0f, "Speed %.0f", ImGuiSliderFlags_Logarithmic))
+    if (UiSliderFloat("##noclipSpeed", &speed, 1.0f, 500.0f, "Speed %.0f", ImGuiSliderFlags_Logarithmic))
         Menu_SetNoclipSpeed(speed);
-    Hint("F7 saves where you're standing and F8 takes you back. The Travel tab has named spots and places.");
 
     Section("Protection");
     static bool god = true, ammo = false;
-    if (ImGui::Checkbox("God mode", &god)) Menu_SetGodMode(god);
+    if (UiToggle("God mode", &god)) Menu_SetGodMode(god);
     ImGui::SameLine(0, 24);
-    if (ImGui::Checkbox("Infinite ammo", &ammo)) Menu_SetInfiniteAmmo(ammo);
+    if (UiToggle("Infinite ammo", &ammo)) Menu_SetInfiniteAmmo(ammo);
 
     Section("Gear");
     static int  gear[Gear_SlotCount] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
@@ -521,8 +866,8 @@ static void DrawTravelTab() {
 
     Section("Places");
     ImGui::SetNextItemWidth(-1);
-    ImGui::SliderFloat("##altitude", &altitude, 100.0f, 20000.0f, "Arrive %.0f m above the ground", ImGuiSliderFlags_Logarithmic);
-    ImGui::Checkbox("Show interiors and small zones", &showMinor);
+    UiSliderFloat("##altitude", &altitude, 100.0f, 20000.0f, "Arrive %.0f m above the ground", ImGuiSliderFlags_Logarithmic);
+    UiToggle("Show interiors and small zones", &showMinor);
     ImGui::SetItemTooltip("Elevator lobbies, hangars, asteroid-belt segments and similar. Hidden by default.");
     const TravelPlace* pick = nullptr;
     bool go = false;
@@ -539,8 +884,7 @@ static void DrawTravelTab() {
         const bool unnamed = _strnicmp(systems[s], "SolarSystem", 11) == 0;
         snprintf(header, sizeof(header), "%s%s (%d)###sys_%s", unnamed ? "Unnamed system" : systems[s],
                  isHere ? ", you are here" : "", shown, systems[s]);
-        if (searching) ImGui::SetNextItemOpen(true);
-        if (!ImGui::CollapsingHeader(header, isHere ? ImGuiTreeNodeFlags_DefaultOpen : 0)) continue;
+        if (!UiGroup(header, isHere, searching)) continue;
         char table[48];
         snprintf(table, sizeof(table), "##places_%s", systems[s]);
         const float rows = static_cast<float>(shown < 10 ? shown : 10);
@@ -583,21 +927,20 @@ static void DrawTravelTab() {
 
     float progress = 0;
     if (Travel_Scanning(progress)) {
-        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, kLeafDeep);
         ImGui::ProgressBar(progress, ImVec2(-1, 0), "Scanning...");
-        ImGui::PopStyleColor();
-    } else if (ImGui::Button("Scan the game for places", ImVec2(-1, 0))) {
-        Travel_RequestScan();
+    } else {
+        if (UiButton("Scan the game for places", ImVec2(-1, 0))) Travel_RequestScan();
+        Tip("The scan finds the planets, moons, stations, Lagrange points, comm arrays and jump points of every loaded "
+            "system and adds them here. It only reads; it takes a few seconds.");
     }
-    Hint("The scan finds the planets, moons, stations, Lagrange points, comm arrays and jump points of every loaded "
-         "system and adds them here. It only reads; it takes a few seconds.");
 
     Section("Saved spots");
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 160 - ImGui::GetStyle().ItemSpacing.x);
     ImGui::InputTextWithHint("##markName", "Name this spot", markName, sizeof(markName));
     ImGui::SameLine();
-    if (ImGui::Button("Save this spot", ImVec2(160, 0))) { Travel_RequestSaveBookmark(markName); markName[0] = 0; }
-    if (!nm) Hint("Nothing saved yet. Stand somewhere, name it, and press Save this spot.");
+    if (UiButton("Save this spot", ImVec2(160, 0))) { Travel_RequestSaveBookmark(markName); markName[0] = 0; }
+    Tip("F7 saves where you're standing and F8 takes you back. Teleports only work within the system you're in.");
+    if (!nm) Hint("Nothing saved yet.");
     for (int s = 0; s < ns; ++s) {
         int shown = 0;
         for (int i = 0; i < nm; ++i)
@@ -605,23 +948,26 @@ static void DrawTravelTab() {
         if (!shown) continue;
         char node[80];
         snprintf(node, sizeof(node), "%s (%d)###marks_%s", systems[s], shown, systems[s]);
-        if (searching) ImGui::SetNextItemOpen(true);
-        if (!ImGui::TreeNodeEx(node, ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth)) continue;
+        if (!UiGroup(node, true, searching)) continue;
         for (int i = 0; i < nm; ++i) {
             if (_stricmp(marks[i].system, systems[s]) != 0 || (searching && !MatchesFilter(marks[i].name, filter))) continue;
             ImGui::PushID(i);
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted(marks[i].name);
-            const float buttons = 70 + 80 + ImGui::GetStyle().ItemSpacing.x;
-            ImGui::SameLine(ImGui::GetContentRegionMax().x - buttons);
-            if (ImGui::Button("Go", ImVec2(70, 0))) Travel_RequestBookmark(i);
-            ImGui::SameLine();
-            if (ImGui::Button("Delete", ImVec2(80, 0))) Travel_RequestDeleteBookmark(i);
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const float rowH = ImGui::GetFrameHeight() + 8, w = ImGui::GetContentRegionAvail().x;
+            const ImVec2 r0 = ImGui::GetCursorScreenPos();
+            const bool rowHot = ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(r0, r0 + ImVec2(w, rowH));
+            const float rh = Anim(ImGui::GetID("##row"), rowHot ? 1.0f : 0.0f, 12.0f);
+            dl->AddRectFilled(r0, r0 + ImVec2(w, rowH), Col(Mix(Hex(0x1F1F23), Hex(0x26262B), rh)), 8);
+            dl->AddText(ImVec2(r0.x + 14, r0.y + (rowH - ImGui::GetFontSize()) * 0.5f), Col(Mix(kBody, kText, rh)), marks[i].name);
+            ImGui::SetCursorScreenPos(ImVec2(r0.x + w - 4 - 80 - 6 - 70, r0.y + 4));
+            if (UiButton("Go", ImVec2(70, 0))) Travel_RequestBookmark(i);
+            ImGui::SameLine(0, 6);
+            if (UiButton("Delete", ImVec2(80, 0))) Travel_RequestDeleteBookmark(i);
+            ImGui::SetCursorScreenPos(ImVec2(r0.x, r0.y + rowH - 4));
+            ImGui::Dummy(ImVec2(0, 0));
             ImGui::PopID();
         }
-        ImGui::TreePop();
     }
-    Hint("F7 and F8 still work as a quick save slot. Teleports only work within the system you're in.");
 }
 
 // =============================================================================================
@@ -669,10 +1015,13 @@ static void DrawVehiclesTab(bool& keepOpen) {
         }
 
         ImGui::SetNextItemWidth(-1);
-        ImGui::SliderFloat("##height", &opt.height, 0.0f, 500.0f, "Spawn %.0f m above you");
+        UiSliderFloat("##height", &opt.height, 0.0f, 500.0f, "Spawn %.0f m above you");
         static const char* const kBoard[] = { "Don't board", "Board in the pilot seat", "Board in a seat by name", "Choose a seat after it spawns" };
         ImGui::SetNextItemWidth(-1);
-        ImGui::Combo("##board", &opt.seatMode, kBoard, 4);
+        if (UiBeginCombo("##board", kBoard[opt.seatMode >= 0 && opt.seatMode < 4 ? opt.seatMode : 0])) {
+            for (int i = 0; i < 4; ++i) if (UiOption(kBoard[i], opt.seatMode == i)) opt.seatMode = i;
+            UiEndCombo();
+        }
         if (opt.seatMode == SeatMode_Named) {
             ImGui::SetNextItemWidth(-1);
             ImGui::InputTextWithHint("##seatName", "Seat name, e.g. copilot or turret left", opt.seatName, sizeof(opt.seatName));
@@ -680,9 +1029,9 @@ static void DrawVehiclesTab(bool& keepOpen) {
         }
         const bool boarding = opt.seatMode == SeatMode_Pilot || opt.seatMode == SeatMode_Named;
         ImGui::BeginDisabled(!boarding);
-        ImGui::Checkbox("Remove the NPC in my seat", &opt.replaceNpc);
+        UiToggle("Remove the NPC in my seat", &opt.replaceNpc);
         ImGui::SameLine(0, 24);
-        ImGui::Checkbox("Power on", &opt.flightReady);
+        UiToggle("Power on", &opt.flightReady);
         ImGui::SetItemTooltip("Powers the ship on once you're in a pilot seat.");
         ImGui::EndDisabled();
 
@@ -698,10 +1047,10 @@ static void DrawVehiclesTab(bool& keepOpen) {
 
     Section("Current ship");
     static bool shipAmmo = false;
-    if (ImGui::Checkbox("Infinite ship ammo", &shipAmmo)) Menu_SetInfiniteShipAmmo(shipAmmo);
+    if (UiToggle("Infinite ship ammo", &shipAmmo)) Menu_SetInfiniteShipAmmo(shipAmmo);
     ImGui::SetItemTooltip("Refills the magazines of the ship you're aboard, and the ship in the Crew tab.");
-    if (ImGui::Button("Power on / off", ImVec2(-1, 0))) Menu_RequestFlightReady();
-    Hint("Toggles Flight Ready on the ship in the Crew tab, as if you pressed R in its pilot seat.");
+    if (UiButton("Power on / off", ImVec2(-1, 0))) Menu_RequestFlightReady();
+    Tip("Toggles Flight Ready on the ship in the Crew tab, as if you pressed R in its pilot seat.");
 }
 
 // =============================================================================================
@@ -753,8 +1102,8 @@ static void DrawCrewTab() {
     ImGui::SameLine();
     const float button = 190;
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - button);
-    if (ImGui::Button("Use the ship I'm in", ImVec2(button, 0))) Menu_TargetShipImIn();
-    if (count < 0) { Hint("Spawn a ship, or board one and press 'Use the ship I'm in'."); return; }
+    if (UiButton("Use the ship I'm in", ImVec2(button, 0))) Menu_TargetShipImIn();
+    if (count < 0) { Hint("Spawn or board a ship first."); return; }
     if (count == 0) { Hint("Waiting for the ship to load..."); return; }
 
     Section("Seats");
@@ -777,7 +1126,7 @@ static void DrawCrewTab() {
             if (seats[i].id == selectedSeat) sel = i;
             ImGui::TableNextColumn();
             switch (seats[i].state) {
-            case SeatState_You:   ImGui::TextColored(kLeaf, "You"); break;
+            case SeatState_You:   ImGui::TextColored(kBlue, "You"); break;
             case SeatState_Npc:   ImGui::TextUnformatted("NPC"); break;
             case SeatState_Taken: ImGui::TextDisabled("Unknown"); break;
             default:              ImGui::TextDisabled("Empty"); break;
@@ -789,36 +1138,36 @@ static void DrawCrewTab() {
     const int state = sel >= 0 ? seats[sel].state : -1;
     const float quarter = Columns(4);
     ImGui::BeginDisabled(sel < 0 || state == SeatState_You);
-    if (ImGui::Button("Sit here", ImVec2(quarter, 0))) Menu_RequestSit(seats[sel].id, replace);
+    if (UiButton("Sit here", ImVec2(quarter, 0))) Menu_RequestSit(seats[sel].id, replace);
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(state != SeatState_Npc && state != SeatState_You);
-    if (ImGui::Button("Stand up", ImVec2(quarter, 0))) Menu_RequestStandUp(seats[sel].id);
+    if (UiButton("Stand up", ImVec2(quarter, 0))) Menu_RequestStandUp(seats[sel].id);
     ImGui::SetItemTooltip("Whoever is in the seat gets up and stays aboard.");
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(state != SeatState_Npc);
-    if (ImGui::Button("Remove NPC", ImVec2(quarter, 0))) Menu_RequestKick(seats[sel].id);
+    if (UiButton("Remove NPC", ImVec2(quarter, 0))) Menu_RequestKick(seats[sel].id);
     ImGui::SetItemTooltip("Takes the NPC out of the game.");
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(state != SeatState_Empty);
-    if (ImGui::Button("Add NPC", ImVec2(quarter, 0))) Menu_RequestAddCrew(seats[sel].id, g_npcPick);
+    if (UiButton("Add NPC", ImVec2(quarter, 0))) Menu_RequestAddCrew(seats[sel].id, g_npcPick);
     ImGui::EndDisabled();
-    ImGui::Checkbox("If an NPC is in the seat I pick, remove it", &replace);
+    UiToggle("If an NPC is in the seat I pick, remove it", &replace);
 
     Section("Crew");
-    Hint("NPC to add to seats:");
+    ImGui::TextUnformatted("NPC to add to seats");
     const bool haveNpcs = NpcPicker();
     const float third = Columns(3);
     ImGui::BeginDisabled(!haveNpcs);
-    if (ImGui::Button("Fill empty seats", ImVec2(third, 0))) Menu_RequestFillCrew(g_npcPick);
+    if (UiButton("Fill empty seats", ImVec2(third, 0))) Menu_RequestFillCrew(g_npcPick);
+    Tip("NPCs you add sit in their seats. They don't fly the ship or operate turrets yet.");
     ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ImGui::Button("All NPCs stand up", ImVec2(third, 0))) Menu_RequestStandAll();
+    if (UiButton("All NPCs stand up", ImVec2(third, 0))) Menu_RequestStandAll();
     ImGui::SameLine();
-    if (ImGui::Button("Remove all NPCs", ImVec2(third, 0))) Menu_RequestClearCrew();
-    Hint("NPCs you add sit in their seats. They don't fly the ship or operate turrets yet.");
+    if (UiButton("Remove all NPCs", ImVec2(third, 0))) Menu_RequestClearCrew();
 }
 
 // =============================================================================================
@@ -830,10 +1179,10 @@ static void DrawNpcsTab(bool& keepOpen) {
     if (!NpcPicker()) return;
     static int howMany = 1;
     ImGui::SetNextItemWidth(-1);
-    ImGui::SliderInt("##howMany", &howMany, 1, 10, howMany == 1 ? "1 NPC" : "%d NPCs");
+    UiSliderInt("##howMany", &howMany, 1, 10, howMany == 1 ? "1 NPC" : "%d NPCs");
     if (PrimaryButton("Spawn in front of me")) { Menu_RequestNpc(g_npcPick, howMany); keepOpen = false; }
-    if (ImGui::Button("Remove spawned NPCs", ImVec2(-1, 0))) Menu_RequestClearNpcs();
-    Hint("Removes every NPC this menu has spawned, crew included.");
+    if (UiButton("Remove spawned NPCs", ImVec2(-1, 0))) Menu_RequestClearNpcs();
+    Tip("Removes every NPC this menu has spawned, crew included.");
 }
 
 // =============================================================================================
@@ -859,7 +1208,13 @@ static void DrawBuildTab(bool& keepOpen) {
     }
     SearchBox("##buildFilter", "Search all objects", buildFilter, sizeof(buildFilter));
     const bool searching = buildFilter[strspn(buildFilter, " _")] != 0;
-    if (ImGui::BeginChild("##buildList", ImVec2(0, 260), ImGuiChildFlags_Borders)) {
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, Hex(0x111113));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 6));
+    const bool listOpen = ImGui::BeginChild("##buildList", ImVec2(0, 260), ImGuiChildFlags_AlwaysUseWindowPadding);
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+    if (listOpen) {
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 2));
         for (int i = 0; i < buildables; ++i) {
             const char* name = Menu_BuildName(i);
             if (searching ? !MatchesFilter(name, buildFilter) : Menu_BuildCategoryOf(i) != buildTab) continue;
@@ -871,9 +1226,10 @@ static void DrawBuildTab(bool& keepOpen) {
                 strcpy_s(label, sizeof(label) - 16, tagged);
             }
             snprintf(label + strlen(label), 16, "##%d", i);
-            if (ImGui::Selectable(label, i == build)) build = i;
+            if (UiOption(label, i == build)) build = i;
             ImGui::SetItemTooltip("%s", name);
         }
+        ImGui::PopStyleVar();
     }
     ImGui::EndChild();
 
@@ -883,7 +1239,7 @@ static void DrawBuildTab(bool& keepOpen) {
     ImGui::Text("Selected: %s", picked);
     float reach = Menu_BuildReach();
     ImGui::SetNextItemWidth(-1);
-    ImGui::SliderFloat("##reach", &reach, 5.0f, 300.0f, "Reach %.0f m");
+    UiSliderFloat("##reach", &reach, 5.0f, 300.0f, "Reach %.0f m");
     ImGui::SetItemTooltip("How far ahead objects are placed. They land on the ground where you look, or under the point this far out.");
     Menu_SetBuild(build, reach);
     const bool building = Menu_BuildModeActive();
@@ -891,77 +1247,30 @@ static void DrawBuildTab(bool& keepOpen) {
         Menu_ToggleBuildMode();
         if (!building) keepOpen = false;
     }
+    Tip("While building: left click places, R rotates, [ and ] change reach, Backspace undoes, F6 stops.");
     const float half = Columns(2);
-    if (ImGui::Button("Undo last", ImVec2(half, 0))) Menu_BuildUndo();
+    if (UiButton("Undo last", ImVec2(half, 0))) Menu_BuildUndo();
     ImGui::SameLine();
     char clearLabel[48];
     snprintf(clearLabel, sizeof(clearLabel), "Clear base (%d)###clearBase", Menu_BuildPlacedCount());
-    if (ImGui::Button(clearLabel, ImVec2(half, 0))) Menu_BuildClear();
-    Hint("While building: left click places, R rotates, [ and ] change reach, Backspace undoes, F6 stops.");
+    if (UiButton(clearLabel, ImVec2(half, 0))) Menu_BuildClear();
 }
 
-// =============================================================================================
-// Menu settings
-// =============================================================================================
-
-static void DrawMenuTab() {
-    Section("Background");
-    if (g_bgSrv) {
-        ImGui::Checkbox("Show background image", &g_bgShow);
-        ImGui::BeginDisabled(!g_bgShow);
-        ImGui::SetNextItemWidth(-1);
-        ImGui::SliderInt("##dark", &g_bgDarkness, 20, 95, "Darkness %d%%");
-        if (static_cast<float>(g_bgW) / g_bgH > 0.7f) {
-            ImGui::SetNextItemWidth(-1);
-            ImGui::SliderFloat("##pos", &g_bgPosition, 0.0f, 1.0f, "Image position");
-            ImGui::SetItemTooltip("The menu is taller than the picture is wide. Slide to choose which part shows.");
-        }
-        ImGui::EndDisabled();
-        Hint(g_bgPath);
-    } else {
-        Hint("To use a background image, save it as menu_background.png (or .jpg) here, then restart the game:");
-        ImGui::TextWrapped("%s", g_bgPath[0] ? g_bgPath : "data\\menu_background.png");
-    }
-
-    Section("About");
-    Hint(SCO_TITLE " is a work in progress, " SCO_BASED_ON ".");
-    Hint("Bug reports: github.com/scubamount/sc-offline/issues");
-}
-
-// =============================================================================================
-// Window
-// =============================================================================================
-
-static void DrawStatusStrip(float height) {
-    char status[256];
-    Menu_GetStatus(status, sizeof(status));
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, Hex(0x0B140D, 0.92f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16, 8));
-    ImGui::BeginChild("##status", ImVec2(0, height), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoScrollbar);
-    const ImVec2 p = ImGui::GetWindowPos();
-    ImGui::GetWindowDrawList()->AddRectFilled(p, ImVec2(p.x + 4, p.y + height), ImGui::GetColorU32(kLeaf));
-    ImGui::TextWrapped("%s", status);
-    ImGui::EndChild();
-    ImGui::PopStyleVar();
-    ImGui::PopStyleColor();
-}
-
-// Set by the Squadron 42 spoiler gate's Back button; DrawMenu selects the first tab once.
 static bool g_backToFirstTab = false;
 
 static void DrawSq42Tab(bool& keepOpen) {
     static bool spoilerOk = false;
     if (!spoilerOk) {
-        ImGui::SeparatorText("Spoiler warning");
+        Section("Spoiler warning");
         ImGui::TextWrapped("This tab could have Squadron 42 spoilers.");
         ImGui::TextWrapped("Press OK to continue.");
-        if (ImGui::Button("OK", ImVec2(120, 0))) spoilerOk = true;
+        if (UiButton("OK", ImVec2(120, 0))) spoilerOk = true;
         ImGui::SameLine();
-        if (ImGui::Button("Back", ImVec2(120, 0))) g_backToFirstTab = true;
+        if (UiButton("Back", ImVec2(120, 0))) g_backToFirstTab = true;
         return;
     }
 
-    ImGui::SeparatorText("Outfits");
+    Section("Outfits");
     const int outfits = Menu_OutfitCount();
     static int outfit = 0;
     if (outfits < 0) {
@@ -974,40 +1283,40 @@ static void DrawSq42Tab(bool& keepOpen) {
         ImGui::SetNextItemWidth(-1);
         ImGui::InputTextWithHint("##outfitFilter", "search outfits...", filter, sizeof(filter));
         ImGui::SetNextItemWidth(-1);
-        if (ImGui::BeginCombo("##outfit", Menu_OutfitName(outfit), ImGuiComboFlags_HeightLargest)) {
+        if (UiBeginCombo("##outfit", Menu_OutfitName(outfit), ImGuiComboFlags_HeightLargest)) {
             for (int i = 0; i < outfits; ++i) {
                 const char* name = Menu_OutfitName(i);
                 if (!MatchesFilter(name, filter)) continue;
                 ImGui::PushID(i);
-                if (ImGui::Selectable(name, i == outfit)) outfit = i;
+                if (UiOption(name, i == outfit)) outfit = i;
                 if (i == outfit) ImGui::SetItemDefaultFocus();
                 ImGui::PopID();
             }
-            ImGui::EndCombo();
+            UiEndCombo();
         }
-        if (ImGui::Button("Wear SQ42 outfit", ImVec2(-1, 0))) {
+        if (UiButton("Wear SQ42 outfit", ImVec2(-1, 0))) {
             Menu_RequestWearOutfit(outfit);
             keepOpen = false;
         }
     }
     static bool visor = false;
-    if (ImGui::Checkbox("SQ42 visor HUD (applies on the next Equip or outfit)", &visor))
+    if (UiToggle("SQ42 visor HUD (applies on the next Equip or outfit)", &visor))
         Menu_SetS42VisorHud(visor);
 
-    ImGui::SeparatorText("Settings");
+    Section("Settings");
     for (int i = 0; i < Menu_S42SettingCount(); ++i) {
         bool on = Menu_S42SettingOn(i);
         ImGui::PushID(i);
         const bool known = Menu_S42SettingKnown(i);   // greyed until the game thread has read the cvar
         ImGui::BeginDisabled(!known);
-        if (ImGui::Checkbox(Menu_S42SettingLabel(i), &on)) Menu_RequestS42Setting(i, on);
+        if (UiToggle(Menu_S42SettingLabel(i), &on)) Menu_RequestS42Setting(i, on);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("%s", known ? Menu_S42SettingTip(i) : "Reading this setting from the game...");
         ImGui::PopID();
     }
 
-    ImGui::SeparatorText("Spawn");
+    Section("Spawn");
     {
         static int   thing = -1;
         static char  thingFilter[64] = "";
@@ -1025,28 +1334,28 @@ static void DrawSq42Tab(bool& keepOpen) {
                     if (_stricmp(Menu_BuildCategory(i), "sq42") == 0) { thing = i; break; }
             }
             if (thing >= buildables) thing = 0;
-            ImGui::Checkbox("Spawn in front of you", &inFront);
+            UiToggle("Spawn in front of you", &inFront);
             ImGui::SetNextItemWidth(-1);
             ImGui::InputTextWithHint("##thingFilter", "search the [sq42] group...", thingFilter, sizeof(thingFilter));
             ImGui::SetNextItemWidth(-1);
-            if (ImGui::BeginCombo("##sq42thing", Menu_BuildName(thing), ImGuiComboFlags_HeightLargest)) {
+            if (UiBeginCombo("##sq42thing", Menu_BuildName(thing), ImGuiComboFlags_HeightLargest)) {
                 for (int i = 0; i < buildables; ++i) {
                     // Only the [sq42] group, like the original; the text filter narrows it further.
                     if (_stricmp(Menu_BuildCategory(i), "sq42") != 0) continue;
                     const char* name = Menu_BuildName(i);
                     if (!MatchesFilter(name, thingFilter)) continue;
                     ImGui::PushID(i);
-                    if (ImGui::Selectable(name, i == thing)) thing = i;
+                    if (UiOption(name, i == thing)) thing = i;
                     if (i == thing) ImGui::SetItemDefaultFocus();
                     ImGui::PopID();
                 }
-                ImGui::EndCombo();
+                UiEndCombo();
             }
             if (inFront) {
-                ImGui::SetNextItemWidth(200);
-                ImGui::SliderFloat("ahead (m)", &ahead, 1.0f, 50.0f, "%.0f");
+                ImGui::SetNextItemWidth(-1);
+                UiSliderFloat("##ahead", &ahead, 1.0f, 50.0f, "Ahead %.0f m");
             }
-            if (ImGui::Button("Spawn it", ImVec2(-1, 0))) {
+            if (UiButton("Spawn it", ImVec2(-1, 0))) {
                 Menu_RequestPlace(thing, inFront, ahead);
                 keepOpen = false;
             }
@@ -1054,7 +1363,7 @@ static void DrawSq42Tab(bool& keepOpen) {
         }
     }
 
-    ImGui::SeparatorText("Ships");
+    Section("Ships");
     struct Entry { const char* label; const char* cls; bool enemyWing; float height; bool sit; };
     static const struct { const char* label; const char* cls; } kSq42Ships[] = {
         { "Idris-P (the Stanton's class)", "AEGS_Idris_P" },
@@ -1101,29 +1410,30 @@ static void DrawSq42Tab(bool& keepOpen) {
         return false;
     };
 
-    ImGui::TextWrapped("Your ships put you in the pilot seat; the Vanduul ones spawn 300 m up and come for you.");
     ImGui::SetNextItemWidth(-1);
     ImGui::InputTextWithHint("##sq42shipFilter", "search ships...", sqFilter, sizeof(sqFilter));
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::BeginCombo("##sq42ships", list[pick].label, ImGuiComboFlags_HeightLargest)) {
+    if (UiBeginCombo("##sq42ships", list[pick].label, ImGuiComboFlags_HeightLargest)) {
         for (int i = 0; i < n; ++i) {
             if (sqFilter[0] && !MatchesFilter(list[i].label, sqFilter)) continue;
             ImGui::PushID(i);
             const bool have = known(list[i].cls);
-            if (ImGui::Selectable(list[i].label, i == pick, have ? 0 : ImGuiSelectableFlags_Disabled)) pick = i;
+            if (UiOption(list[i].label, i == pick, have)) pick = i;
             if (!have) ImGui::SetItemTooltip("%s isn't in this game build's ship list.", list[i].cls);
             if (i == pick) ImGui::SetItemDefaultFocus();
             ImGui::PopID();
         }
-        ImGui::EndCombo();
+        UiEndCombo();
     }
     const bool pickKnown = known(list[pick].cls);
     if (list[pick].sit) {
-        ImGui::SliderFloat("height above me (m)", &height, 0.0f, 500.0f, "%.0f");
-        ImGui::Checkbox("put me in the pilot seat", &sit);
+        ImGui::SetNextItemWidth(-1);
+        UiSliderFloat("##sq42height", &height, 0.0f, 500.0f, "Height above me %.0f m");
+        UiToggle("Put me in the pilot seat", &sit);
     }
     ImGui::BeginDisabled(!pickKnown);
-    const bool spawnClicked = ImGui::Button("Spawn", ImVec2(-1, 42));
+    const bool spawnClicked = PrimaryButton("Spawn", 42);
+    Tip("Your ships put you in the pilot seat; the Vanduul ones spawn 300 m up and come for you.");
     ImGui::EndDisabled();
     if (spawnClicked) {
         Menu_RequestSpawnClass(list[pick].cls,
@@ -1133,7 +1443,7 @@ static void DrawSq42Tab(bool& keepOpen) {
         keepOpen = false;
     }
 
-    ImGui::SeparatorText("Console");
+    Section("Console");
     static char cmd[256] = "";
     const bool consoleReady = Menu_ConsoleReady();
     ImGui::BeginDisabled(!consoleReady);
@@ -1143,45 +1453,119 @@ static void DrawSq42Tab(bool& keepOpen) {
                                         "a console command, e.g. i_target_selector.targeting2_enabled 1",
                                         cmd, sizeof(cmd), ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::SameLine();
-    run |= ImGui::Button("Run");
+    run |= UiButton("Run");
+    Tip("Runs in the game's own console. What it did shows in the game's log, not here.");
     ImGui::EndDisabled();
     if (run && cmd[0]) {
         Menu_RunConsole(cmd);
         cmd[0] = 0;
     }
     if (!consoleReady) ImGui::TextDisabled("The game's console wasn't found yet.");
-    ImGui::TextWrapped("Runs in the game's own console. What it did shows in the game's log, not here.");
+}
+
+static void CardFrame(ImVec2 lo, ImVec2 hi, Icon icon, const char* title) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(lo, hi, Col(kCard), 10);
+    ImGui::PushFont(g_bold, 0.0f);
+    const float cy = lo.y + 22;
+    DrawIcon(icon, ImVec2(lo.x + 24, cy), 7, Col(kBlue));
+    dl->AddText(ImVec2(lo.x + 42, cy - ImGui::GetFontSize() * 0.5f), Col(kText), title);
+    ImGui::PopFont();
+    dl->AddLine(ImVec2(lo.x + 14, lo.y + 44), ImVec2(hi.x - 14, lo.y + 44), Col(kLine), 1.0f);
+}
+
+static void NavRows(float x, float y, float w) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float rh = 36, step = 40;
+    const float hy = Anim(ImGui::GetID("##navpick"), y + float(g_page) * step, 20.0f);
+    dl->AddRectFilled(ImVec2(x, hy), ImVec2(x + w, hy + rh), Col(kRow), 8);
+    for (int i = 0; i < kPageCount; ++i) {
+        const ImVec2 p(x, y + float(i) * step);
+        ImGui::SetCursorScreenPos(p);
+        ImGui::PushID(i);
+        if (ImGui::InvisibleButton("##nav", ImVec2(w, rh)) && g_page != i) { g_page = i; g_pageSince = ImGui::GetTime(); }
+        const float h = Anim(ImGui::GetID("##hot"), ImGui::IsItemHovered() ? 1.0f : 0.0f);
+        const float on = Anim(ImGui::GetID("##on"), g_page == i ? 1.0f : 0.0f);
+        ImGui::PopID();
+        DrawIcon(kPages[i].icon, ImVec2(p.x + 20, p.y + rh * 0.5f), 7, Col(Mix(Mix(kFaint, kMuted, h), kBlue, on)));
+        dl->AddText(ImVec2(p.x + 40, p.y + (rh - ImGui::GetFontSize()) * 0.5f), Col(Mix(Mix(kMuted, kBody, h), kText, on)), kPages[i].name);
+    }
 }
 
 static bool DrawMenu() {
     bool keepOpen = true;
+    if (g_backToFirstTab) { g_page = 0; g_pageSince = ImGui::GetTime(); g_backToFirstTab = false; }
     DrawBackdrop();
+    const ImVec2 size = ImGui::GetIO().DisplaySize;
     ImGui::SetNextWindowPos(ImVec2(0, 0));
-    ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
-    ImGui::Begin(SCO_TITLE "###main", &keepOpen,
-                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse
-                 | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
+    ImGui::SetNextWindowSize(size);
+    ImGui::Begin("##main", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings
+                 | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollWithMouse);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const double now = ImGui::GetTime();
+    const float open = EaseOut(float((now - g_openSince) / 0.25));
+    const float slide = (1.0f - open) * 8.0f;
+    const float top = 46, pad = 16, navW = 196, gap = 14;
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, open);
 
-    const float statusHeight = ImGui::GetTextLineHeight() * 2 + 18;
-    const float bodyHeight = -(statusHeight + ImGui::GetStyle().ItemSpacing.y);
-    if (ImGui::BeginTabBar("##tabs", ImGuiTabBarFlags_FittingPolicyShrink)) {
-        auto body = [&](auto draw) {
-            if (ImGui::BeginChild("##body", ImVec2(0, bodyHeight))) draw();
-            ImGui::EndChild();
-        };
-        const ImGuiTabItemFlags firstTab = g_backToFirstTab ? ImGuiTabItemFlags_SetSelected : 0;
-        g_backToFirstTab = false;
-        if (ImGui::BeginTabItem("Player", nullptr, firstTab)) { body([&] { DrawPlayerTab(keepOpen); }); ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Travel"))   { body([&] { DrawTravelTab(); });           ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Vehicles")) { body([&] { DrawVehiclesTab(keepOpen); }); ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Crew"))     { body([&] { DrawCrewTab(); });             ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("NPCs"))     { body([&] { DrawNpcsTab(keepOpen); });     ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Build"))    { body([&] { DrawBuildTab(keepOpen); });    ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Squadron 42")) { body([&] { DrawSq42Tab(keepOpen); }); ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Menu"))     { body([&] { DrawMenuTab(); });             ImGui::EndTabItem(); }
-        ImGui::EndTabBar();
+    ImGui::PushFont(g_bold, 0.0f);
+    {
+        const float y = (top - ImGui::GetFontSize()) * 0.5f;
+        float x = pad + 4;
+        dl->AddText(ImVec2(x, y), Col(kBlue), "fork offline");
+        x += ImGui::CalcTextSize("fork offline").x;
+        dl->AddText(ImVec2(x, y), Col(kFaint), "  -  ");
+        x += ImGui::CalcTextSize("  -  ").x;
+        const ImVec2 ts = ImGui::CalcTextSize(kDiscordText);
+        ImGui::SetCursorScreenPos(ImVec2(x, y));
+        if (ImGui::InvisibleButton("##discord", ts)) g_openDiscord = true;
+        const bool hot = ImGui::IsItemHovered();
+        if (hot) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        const float h = Anim(ImGui::GetID("##discord"), hot ? 1.0f : 0.0f);
+        dl->AddText(ImVec2(x, y), Col(Mix(kText, kBlue, h)), kDiscordText);
+        dl->AddLine(ImVec2(x, y + ts.y), ImVec2(x + ts.x, y + ts.y), Col(kBlue, h), 1.0f);
     }
-    DrawStatusStrip(statusHeight);
+    ImGui::PopFont();
+    {
+        const float s = 28;
+        const ImVec2 p(size.x - 10 - s, 9);
+        ImGui::SetCursorScreenPos(p);
+        if (ImGui::InvisibleButton("##close", ImVec2(s, s))) keepOpen = false;
+        const float h = Anim(ImGui::GetID("##close"), ImGui::IsItemHovered() ? 1.0f : 0.0f);
+        dl->AddRectFilled(p, p + ImVec2(s, s), Col(kRed, h), 6);
+        const ImVec2 c = p + ImVec2(s, s) * 0.5f;
+        const ImU32 ic = Col(Mix(kBody, kText, h));
+        dl->AddLine(c - ImVec2(5, 5), c + ImVec2(5, 5), ic, 1.4f);
+        dl->AddLine(c + ImVec2(-5, 5), c + ImVec2(5, -5), ic, 1.4f);
+    }
+
+    const float y0 = top + slide, y1 = size.y - pad + slide;
+    CardFrame(ImVec2(pad, y0), ImVec2(pad + navW, y1), kIcoMark, "Menu");
+    NavRows(pad + 10, y0 + 54, navW - 20);
+
+    const float px = pad + navW + gap;
+    const float pf = EaseOut(float((now - g_pageSince) / 0.22));
+    ImGui::SetCursorScreenPos(ImVec2(px, y0 + (1.0f - pf) * 6.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, open * pf);
+    char id[16];
+    snprintf(id, sizeof(id), "##page%d", g_page);
+    if (ImGui::BeginChild(id, ImVec2(size.x - px - pad, y1 - y0))) {
+        g_cardIndex = 0;
+        switch (g_page) {
+        case 0: DrawPlayerTab(keepOpen); break;
+        case 1: DrawTravelTab(); break;
+        case 2: DrawVehiclesTab(keepOpen); break;
+        case 3: DrawCrewTab(); break;
+        case 4: DrawNpcsTab(keepOpen); break;
+        case 5: DrawBuildTab(keepOpen); break;
+        case 6: DrawSq42Tab(keepOpen); break;
+        }
+        CloseCard();
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleVar();
+    ImGui::GetForegroundDrawList()->AddRect(ImVec2(0, 0), size, ImGui::GetColorU32(kLine), 0, 0, 1.0f);
     ImGui::End();
     return keepOpen;
 }
@@ -1193,7 +1577,7 @@ static DWORD WINAPI MenuThread(LPVOID) {
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.lpszClassName = L"starcitzenofflinemods_menu";
     RegisterClassExW(&wc);
-    g_wnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, wc.lpszClassName, L"sc-offline", WS_POPUP,
+    g_wnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, wc.lpszClassName, L"fork offline", WS_POPUP,
                             100, 100, kMenuW, kMenuH, nullptr, nullptr, wc.hInstance, nullptr);
     if (!g_wnd || !CreateDevice()) return 0;
 
@@ -1237,13 +1621,20 @@ static DWORD WINAPI MenuThread(LPVOID) {
         ImGui::NewFrame();
         const bool keepOpen = DrawMenu();
         ImGui::Render();
-        const float clear[4] = { kSoil.x, kSoil.y, kSoil.z, 1.0f };
+        const float clear[4] = { kBg.x, kBg.y, kBg.z, 1.0f };
         g_context->OMSetRenderTargets(1, &g_rtv, nullptr);
         g_context->ClearRenderTargetView(g_rtv, clear);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
         g_swap->Present(1, 0);
 
-        if (!keepOpen) { visible = false; ShowMenu(false); }
+        if (g_openDiscord) {
+            g_openDiscord = false;
+            visible = false;
+            ClipCursor(nullptr);
+            g_clipped = false;
+            ShowWindow(g_wnd, SW_HIDE);
+            ShellExecuteW(nullptr, L"open", kDiscordUrl, nullptr, nullptr, SW_SHOWNORMAL);
+        } else if (!keepOpen) { visible = false; ShowMenu(false); }
     }
 }
 

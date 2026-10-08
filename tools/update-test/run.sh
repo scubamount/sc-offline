@@ -56,15 +56,18 @@ rm -rf "$UT"; mkdir -p "$UT/build/launcher" "$UT/build/src" "$UT/bin" "$UT/fixtu
 cp -cR "$WINE_ROOT/prefix" "$UT/prefix" 2>/dev/null || cp -R "$WINE_ROOT/prefix" "$UT/prefix" || die "can't copy the Wine prefix"
 
 # --- Builds ---------------------------------------------------------------------------------
-LIBS="-lbcrypt -lwinhttp -lshlwapi -lole32 -lcomctl32 -luuid -lgdi32 -luser32 -lshell32 -ladvapi32"
+LIBS="-lbcrypt -lwinhttp -lshlwapi -lole32 -lcomctl32 -luuid -lgdi32 -luser32 -lshell32 -ladvapi32 -ld3d11 -ld3dcompiler -ldwmapi -limm32"
+IMGUI="imgui imgui_draw imgui_tables imgui_widgets imgui_impl_win32 imgui_impl_dx11"
 build_launcher() {  # <version> <out.exe>
     cp "$CPP" "$UT/build/launcher/launcher.cpp"
     cp "$SRC_REPO"/src/*.h "$UT/build/src/" 2>/dev/null
+    mkdir -p "$UT/build/src/third_party" && cp -R "$SRC_REPO/src/third_party/imgui" "$UT/build/src/third_party/"
     perl -0pi -e "s/#define\\s+SCO_VERSION\\s+\"[^\"]*\"/#define SCO_VERSION  \"$1\"/" "$UT/build/src/version.h"
     grep -q "SCO_VERSION  \"$1\"" "$UT/build/src/version.h" || die "couldn't set SCO_VERSION $1"
     # shellcheck disable=SC2086
     "$CXX" -std=c++20 -O2 -w -municode -static -DUNICODE -D_UNICODE -DSCO_UPDATE_TEST \
-        -o "$2" "$UT/build/launcher/launcher.cpp" $LIBS >"$UT/build/cc-$1.txt" 2>&1 \
+        -o "$2" "$UT/build/launcher/launcher.cpp" $(for f in $IMGUI; do echo "$UT/build/src/third_party/imgui/$f.cpp"; done) \
+        $LIBS >"$UT/build/cc-$1.txt" 2>&1 \
         || { cat "$UT/build/cc-$1.txt" | head -20 >&2; die "launcher $1 didn't build"; }
 }
 build_tool() { "$CXX" -std=c++20 -O2 -w -municode -static -o "$UT/bin/$1.exe" "$HERE/$1.cpp" || die "$1 didn't build"; }

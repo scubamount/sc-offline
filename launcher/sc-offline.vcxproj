@@ -81,6 +81,12 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="launcher.cpp" />
+    <ClCompile Include="..\src\third_party\imgui\imgui.cpp" />
+    <ClCompile Include="..\src\third_party\imgui\imgui_draw.cpp" />
+    <ClCompile Include="..\src\third_party\imgui\imgui_tables.cpp" />
+    <ClCompile Include="..\src\third_party\imgui\imgui_widgets.cpp" />
+    <ClCompile Include="..\src\third_party\imgui\imgui_impl_win32.cpp" />
+    <ClCompile Include="..\src\third_party\imgui\imgui_impl_dx11.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="sc-offline.ini" />

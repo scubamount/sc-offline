@@ -94,8 +94,7 @@ jobs:
           pkg="sc-offline-$TAG"
           mkdir -p "stage/$pkg"
           cp built/dinput8.dll built/sc-offline.exe "stage/$pkg/"
-          cp launcher/sc-offline.ini launcher/sc-offline.sh README.md CHANGELOG.md LICENSE "stage/$pkg/"
-          git ls-files -z docs | xargs -0 -r cp --parents -t "stage/$pkg/"
+          cp launcher/sc-offline.ini launcher/sc-offline.sh LICENSE "stage/$pkg/"
           git ls-files -z data | xargs -0 cp --parents -t "stage/$pkg/"
           chmod +x "stage/$pkg/sc-offline.sh"
           python3 tools/release-manifest.py write "stage/$pkg" --tag "$TAG" --commit "$SHA" --version-h src/version.h
@@ -122,8 +121,8 @@ jobs:
             `${{ github.ref_name }}`.
 
             **Playing:** download `sc-offline-${{ github.ref_name }}.zip`, extract it, and run
-            `sc-offline.exe` (Linux, experimental: `sc-offline.sh`). Do the README's one-time
-            Setup first; `sc-offline.exe status` checks it. `dinput8.dll` is attached on its
+            `sc-offline.exe` (Linux, experimental: `sc-offline.sh`).
+            `sc-offline.exe status` checks the setup. `dinput8.dll` is attached on its
             own for anyone swapping DLLs.
 
             Every runtime path in a release is unproven until someone has run it.
