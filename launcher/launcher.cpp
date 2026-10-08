@@ -704,66 +704,119 @@ static void MergeIni(const wstring& here, const wstring& newIni, const std::stri
     WriteAll(here + L"\\sc-offline.ini", mine + "\r\n# New in " + tag + ":\r\n" + add);
 }
 
-// Download, verify, swap. Returns true when the new version is in place.
-static bool ApplyUpdate(const wstring& here, const UpdateInfo& u);
+// S4: the update runs in two parts. StageUpdate (normal rights) downloads, checks the zip against
+// GitHub's digest, unpacks it, checks the manifest and copies the listed files into a staging
+// folder. SwapStaged (the only part that may run as administrator) reads nothing from the network:
+// it re-checks the staged files against the staged manifest and swaps them in.
 
-// Issue #16: a mod folder only administrators can write (e.g. under Program Files). Run
-// `sc-offline.exe --elevated-update` once elevated; it checks, verifies and swaps but never starts
-// the game or relaunches, so the new launcher (and the game) still start with normal rights.
-static bool ApplyUpdateMaybeElevated(const wstring& here, const UpdateInfo& u) {
-    if (CanWriteTo(here) && CanWriteTo(here + L"\\data")) return ApplyUpdate(here, u);
-    Out("[i] this folder needs administrator rights to update; Windows will ask once.\n"
-        "    (Only the update runs as administrator; the game never does.)\n");
-    wchar_t self[MAX_PATH * 2]; GetModuleFileNameW(nullptr, self, ARRAYSIZE(self));
-    const wstring args = L"--elevated-update " + Wide(u.tag);
-    SHELLEXECUTEINFOW sei{}; sei.cbSize = sizeof(sei); sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-    sei.lpVerb = L"runas"; sei.lpFile = self; sei.lpParameters = args.c_str(); sei.lpDirectory = here.c_str(); sei.nShow = SW_SHOWNORMAL;
-    if (!ShellExecuteExW(&sei) || !sei.hProcess) { Out("[!] administrator rights refused; nothing changed\n"); return false; }
-    WaitForSingleObject(sei.hProcess, INFINITE);
-    DWORD code = 1; GetExitCodeProcess(sei.hProcess, &code); CloseHandle(sei.hProcess);
-    if (code) { Out("[!] the update failed (exit %lu); see data\\launcher.log. Your current version is unchanged.\n", code); return false; }
-    return true;
+// Where an update is staged: data\update when this folder is writable, else (a Program Files
+// install) %LOCALAPPDATA%\sc-offline\update, which the elevated part re-checks file by file.
+static wstring StageRoot(const wstring& here) {
+    if (CanWriteTo(here + L"\\data")) return UpdateDir(here);
+    wchar_t buf[MAX_PATH];
+    const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", buf, ARRAYSIZE(buf));
+    if (!n || n >= ARRAYSIZE(buf)) return UpdateDir(here);
+    const wstring root = wstring(buf, n) + L"\\sc-offline";
+    CreateDirectoryW(root.c_str(), nullptr);
+    return root + L"\\update";
 }
 
-static bool ApplyUpdate(const wstring& here, const UpdateInfo& u) {
-    const wstring dir = UpdateDir(here);
-    RemoveTree(dir);
-    CreateDirectoryW(dir.c_str(), nullptr);
-    Out("[i] downloading %s ...\n", u.zipName.c_str());
-    std::string zip;
-    if (!HttpGet(Wide(u.zipUrl), zip, 60000, 256u << 20)) { Out("[!] download failed; nothing changed\n"); RemoveTree(dir); return false; }
-    const std::string got = Sha256(zip);
-    if (got != u.sha256) {
-        Out("[!] the download doesn't match GitHub's SHA-256 (got %s, expected %s); nothing changed\n", got.c_str(), u.sha256.c_str());
-        RemoveTree(dir); return false;
-    }
-    Out("[+] SHA-256 matches GitHub's digest\n");
-    const wstring zipPath = dir + L"\\" + Wide(u.zipName), ex = dir + L"\\new";
+// Reads and checks a staged manifest: parses, belongs to `tag`, newer than this launcher (S2).
+static bool LoadManifest(const wstring& dir, const std::string& tag, Manifest& man, std::string& why) {
+    std::string text;
+    if (!ReadAll(dir + L"\\manifest.json", text)) { why = "no manifest.json"; return false; }
+    return ParseManifest(text, man, why) && ManifestMatchesRelease(man, tag, why);
+}
+
+// Unpacks a downloaded, digest-checked zip and stages exactly the files its manifest lists.
+// Refuses a zip holding files the manifest doesn't list (S3).
+static bool StageZip(const wstring& root, const wstring& zipPath, const std::string& tag) {
+    const wstring ex = root + L"\\new", staged = root + L"\\staged";
+    RemoveTree(ex); RemoveTree(staged);
     CreateDirectoryW(ex.c_str(), nullptr);
-    if (!WriteAll(zipPath, zip)) { Out("[!] couldn't save the download; nothing changed\n"); RemoveTree(dir); return false; }
     wchar_t sys[MAX_PATH]; GetSystemDirectoryW(sys, MAX_PATH);
     const wstring tar = wstring(sys) + L"\\tar.exe";
     DWORD code = 1;
     if (!IsFile(tar) || !RunWait(tar, L"\"" + tar + L"\" -xf \"" + zipPath + L"\" -C \"" + ex + L"\"", ex, code) || code) {
         Out("[!] couldn't unpack the zip (Windows' tar.exe %s); nothing changed.\n"
             "    Update by hand: %s\n", IsFile(tar) ? "failed" : "is missing", "https://github.com/scubamount/sc-offline/releases/latest");
-        RemoveTree(dir); return false;
+        return false;
     }
-    const wstring pkg = ex + L"\\" + Wide(u.zipName.substr(0, u.zipName.size() - 4));
-    Manifest man; std::string manText, why;
-    if (!ReadAll(pkg + L"\\manifest.json", manText) || !ParseManifest(manText, man, why) || !ManifestMatchesRelease(man, u.tag, why) ||
-        !VerifyAgainstManifest(pkg, man, why)) {
-        Out("[!] the release's manifest.json check failed (%s); nothing changed\n", why.empty() ? "no manifest.json in the zip" : why.c_str());
-        RemoveTree(dir); return false;
+    const wstring pkg = ex + L"\\sc-offline-" + Wide(tag);
+    Manifest man; std::string why;
+    if (!LoadManifest(pkg, tag, man, why) || !VerifyAgainstManifest(pkg, man, why)) {
+        Out("[!] the release's manifest check failed (%s); nothing changed\n", why.c_str());
+        return false;
     }
-    Out("[+] all %zu files match the release manifest (%s)\n", man.files.size(), man.tag.c_str());
+    for (const wstring& rel : FilesUnder(ex)) {
+        const wstring prefix = L"sc-offline-" + Wide(tag) + L"\\";
+        const bool inPkg = !_wcsnicmp(rel.c_str(), prefix.c_str(), prefix.size());
+        const wstring sub = inPkg ? rel.substr(prefix.size()) : rel;
+        bool listed = inPkg && !_wcsicmp(sub.c_str(), L"manifest.json");
+        for (const ManifestFile& f : man.files) if (inPkg && !_wcsicmp(SafeRelPath(f.path).c_str(), sub.c_str())) { listed = true; break; }
+        if (!listed) { Out("[!] the zip holds %ls, which its manifest doesn't list; nothing changed\n", rel.c_str()); return false; }
+    }
+    if (!IsFile(pkg + L"\\sc-offline.exe") || !IsFile(pkg + L"\\dinput8.dll")) {
+        Out("[!] the release doesn't hold sc-offline.exe and dinput8.dll; nothing changed\n");
+        return false;
+    }
+    CreateDirectoryW(staged.c_str(), nullptr);
+    for (const ManifestFile& f : man.files) {
+        const wstring rel = SafeRelPath(f.path);
+        const size_t cut = rel.find_last_of(L'\\');
+        if (cut != wstring::npos) SHCreateDirectoryExW(nullptr, (staged + L"\\" + rel.substr(0, cut)).c_str(), nullptr);
+        if (!CopyFileW((pkg + L"\\" + rel).c_str(), (staged + L"\\" + rel).c_str(), FALSE)) {
+            Out("[!] couldn't stage %ls (error %lu); nothing changed\n", rel.c_str(), GetLastError()); return false;
+        }
+    }
+    if (!CopyFileW((pkg + L"\\manifest.json").c_str(), (staged + L"\\manifest.json").c_str(), FALSE) ||
+        !VerifyAgainstManifest(staged, man, why)) {
+        Out("[!] staging failed (%s); nothing changed\n", why.empty() ? "manifest.json" : why.c_str()); return false;
+    }
+    RemoveTree(ex);
+    Out("[+] all %zu files match the release manifest (%s); staged\n", man.files.size(), man.tag.c_str());
+    return true;
+}
+
+// Downloads the release zip, checks it against GitHub's digest and stages it. Network: normal rights only.
+static bool StageUpdate(const wstring& here, const UpdateInfo& u) {
+    const wstring root = StageRoot(here);
+    RemoveTree(root + L"\\staged"); RemoveTree(root + L"\\new");
+    CreateDirectoryW(root.c_str(), nullptr);
+    Out("[i] downloading %s ...\n", u.zipName.c_str());
+    std::string zip;
+    if (!HttpGet(Wide(u.zipUrl), zip, 60000, 256u << 20)) { Out("[!] download failed; nothing changed\n"); return false; }
+    const std::string got = Sha256(zip);
+    if (got != u.sha256) {
+        Out("[!] the download doesn't match GitHub's SHA-256 (got %s, expected %s); nothing changed\n", got.c_str(), u.sha256.c_str());
+        return false;
+    }
+    Out("[+] SHA-256 matches GitHub's digest\n");
+    const wstring zipPath = root + L"\\" + Wide(u.zipName);
+    if (!WriteAll(zipPath, zip)) { Out("[!] couldn't save the download; nothing changed\n"); return false; }
+    const bool ok = StageZip(root, zipPath, u.tag);
+    DeleteFileW(zipPath.c_str());
+    if (!ok) { RemoveTree(root + L"\\staged"); RemoveTree(root + L"\\new"); }
+    return ok;
+}
+
+// Swaps the staged files in. Re-checks the staged manifest (tag, version) and every file first.
+static bool SwapStaged(const wstring& here, const wstring& staged, const std::string& tag) {
+    Manifest man; std::string why;
+    if (!LoadManifest(staged, tag, man, why) || !VerifyAgainstManifest(staged, man, why)) {
+        Out("[!] the staged update doesn't match its manifest (%s); nothing changed\n", why.c_str());
+        return false;
+    }
+    CreateDirectoryW((here + L"\\data").c_str(), nullptr);
+    CreateDirectoryW(UpdateDir(here).c_str(), nullptr);
+    DeleteFileW(Journal(here).c_str());
     // Swap, journaling each step before it happens. Only files the manifest lists are copied.
     int replaced = 0, added = 0;
     bool ok = true;
     for (const ManifestFile& mf : man.files) {
         const wstring rel = SafeRelPath(mf.path);
         if (PlayerOwned(rel)) continue;
-        const wstring dst = here + L"\\" + rel, src = pkg + L"\\" + rel;
+        const wstring dst = here + L"\\" + rel, src = staged + L"\\" + rel;
         const size_t cut = rel.find_last_of(L'\\');
         if (cut != wstring::npos) SHCreateDirectoryExW(nullptr, (here + L"\\" + rel.substr(0, cut)).c_str(), nullptr);
         if (IsFile(dst)) {
@@ -780,13 +833,49 @@ static bool ApplyUpdate(const wstring& here, const UpdateInfo& u) {
     if (!ok) {
         Out("[!] update failed; putting the old files back\n");
         RollBackUpdate(here);
-        RemoveTree(dir);
+        DeleteFileW(Journal(here).c_str());
         return false;
     }
-    if (IsFile(pkg + L"\\sc-offline.ini")) MergeIni(here, pkg + L"\\sc-offline.ini", u.tag);
+    if (IsFile(staged + L"\\sc-offline.ini")) MergeIni(here, staged + L"\\sc-offline.ini", tag);
     JournalLine(here, "done");
-    Out("[+] updated to %s: %d files replaced, %d added; your saves and sc-offline.ini were kept\n", u.tag.c_str(), replaced, added);
+    Out("[+] updated to %s: %d files replaced, %d added; your saves and sc-offline.ini were kept\n", tag.c_str(), replaced, added);
     return true;
+}
+
+// The swap, as administrator when this folder needs it (issue #16): `sc-offline.exe
+// --elevated-update <tag> <staged folder>` only re-checks and swaps; it never touches the network,
+// starts the game or relaunches, so the new launcher (and the game) still start with normal rights.
+static bool SwapMaybeElevated(const wstring& here, const wstring& staged, const std::string& tag) {
+    if (CanWriteTo(here) && CanWriteTo(here + L"\\data")) return SwapStaged(here, staged, tag);
+    Out("[i] this folder needs administrator rights to update; Windows will ask once.\n"
+        "    (Only the file swap runs as administrator; the game never does.)\n");
+    wchar_t self[MAX_PATH * 2]; GetModuleFileNameW(nullptr, self, ARRAYSIZE(self));
+    const wstring args = L"--elevated-update " + Wide(tag) + L" \"" + staged + L"\"";
+    SHELLEXECUTEINFOW sei{}; sei.cbSize = sizeof(sei); sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+    sei.lpVerb = L"runas"; sei.lpFile = self; sei.lpParameters = args.c_str(); sei.lpDirectory = here.c_str(); sei.nShow = SW_SHOWNORMAL;
+    if (!ShellExecuteExW(&sei) || !sei.hProcess) { Out("[!] administrator rights refused; nothing changed\n"); return false; }
+    WaitForSingleObject(sei.hProcess, INFINITE);
+    DWORD code = 1; GetExitCodeProcess(sei.hProcess, &code); CloseHandle(sei.hProcess);
+    if (code) { Out("[!] the update failed (exit %lu); see data\\launcher.log. Your current version is unchanged.\n", code); return false; }
+    return true;
+}
+
+// The elevated half: only accepts a staging folder named ...\update\staged.
+static int ElevatedUpdate(const wstring& here, const wstring& tag, const wstring& staged) {
+    OpenLog(here + L"\\data", true, "elevated update");
+    const wstring tail = L"\\update\\staged";
+    if (staged.size() <= tail.size() || _wcsicmp(staged.c_str() + staged.size() - tail.size(), tail.c_str())) {
+        Out("[!] refusing staging folder %ls\n", staged.c_str()); return kExitError;
+    }
+    return SwapStaged(here, StripSlashes(staged), Narrow(tag)) ? kExitOk : kExitError;
+}
+
+static bool ApplyUpdate(const wstring& here, const UpdateInfo& u) {
+    if (!StageUpdate(here, u)) return false;
+    const wstring staged = StageRoot(here) + L"\\staged";
+    const bool ok = SwapMaybeElevated(here, staged, u.tag);
+    if (!ok) RemoveTree(staged);
+    return ok;
 }
 
 // Starts the new launcher with the same arguments and waits for it, so a double-clicked window
@@ -2417,15 +2506,8 @@ int wmain(int argc, wchar_t** argv) {
     if (GuiChild()) { std::setvbuf(stdout, nullptr, _IONBF, 0); SetConsoleOutputCP(CP_UTF8); }
     if (argc == 4 && !_wcsicmp(argv[1], L"--delete-logs"))
         return DeleteSessionLogs(argv[2], _wcstoui64(argv[3], nullptr, 10));
-    if (argc == 3 && !_wcsicmp(argv[1], L"--elevated-update")) {
-        // The elevated half of ApplyUpdateMaybeElevated: re-asks GitHub itself (never trusts a URL from
-        // the command line) and only applies the tag the unelevated launcher showed the player.
-        const wstring here = ExeDir();
-        OpenLog(here + L"\\data", true, "elevated update");
-        const UpdateInfo u = CheckLatest(15000, nullptr);
-        if (u.tag.empty() || Wide(u.tag) != argv[2]) { Out("[!] GitHub's latest release changed; run update again\n"); return kExitError; }
-        return ApplyUpdate(here, u) ? kExitOk : kExitError;
-    }
+    if (argc == 4 && !_wcsicmp(argv[1], L"--elevated-update"))
+        return ElevatedUpdate(ExeDir(), argv[2], argv[3]);   // S4: no network as administrator
 
     wstring command = L"play", gameArg;
     bool dry = false, skipEac = false, sawCommand = false;
@@ -2479,7 +2561,7 @@ int wmain(int argc, wchar_t** argv) {
             else if (GameRunning()) Out("[!] close the game before updating\n");
             else if (!OwnsConsoleInput()) Out("          (not asking: no console to answer in)\n");
             else if (AskYes("Update now? Your saves and sc-offline.ini are kept.")) {
-                if (ApplyUpdateMaybeElevated(here, u)) {
+                if (ApplyUpdate(here, u)) {
                     if (GuiChild()) { Out("[i] restarting sc-offline with the new version\n"); return kExitRestart; }
                     Out("[i] starting the new version\n\n");
                     if (g_log) { std::fclose(g_log); g_log = nullptr; }
