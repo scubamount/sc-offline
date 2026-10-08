@@ -1,7 +1,7 @@
 name: discord
 
 # Posts project activity to the project's Discord channel (issue #30):
-# releases, merged PRs, and issues opened or closed.
+# releases, merged PRs, issues opened or closed, and pushes to main.
 #
 # The webhook URL lives only in the DISCORD_WEBHOOK_URL Actions secret. Untrusted text
 # (titles, labels, bodies) reaches the payload only through env vars and `jq --arg`, never
@@ -16,6 +16,8 @@ on:
     types: [closed]
   issues:
     types: [opened, closed]
+  push:
+    branches: [main]
 
 permissions: {}
 
@@ -69,6 +71,11 @@ jobs:
           IS_AT: ${{ github.event.issue.updated_at }}
           IS_REASON: ${{ github.event.issue.state_reason }}
           IS_LABELS: ${{ join(github.event.issue.labels.*.name, ', ') }}
+          PUSH_COMPARE: ${{ github.event.compare }}
+          PUSH_PUSHER: ${{ github.event.pusher.name }}
+          PUSH_AVATAR: ${{ github.event.sender.avatar_url }}
+          PUSH_AT: ${{ github.event.head_commit.timestamp }}
+          PUSH_COMMITS: ${{ toJSON(github.event.commits) }}
         run: |
           set -eu
           # A body excerpt: HTML comments (PR/issue templates) and blank runs dropped, first 700 chars.
@@ -128,6 +135,19 @@ jobs:
                   + (if $l != "" then [{name: "Labels", value: $l, inline: true}] else [] end)),
                 footer: {text: "sc-offline · Star Citizen offline mod"}}' > embed.json
               ;;
+            push)
+              # One line per commit (first line of the message), newest last, at most 10.
+              list=$(printf '%s' "$PUSH_COMMITS" | jq -r '.[-10:][] | "[`\(.id[0:7])`](\(.url)) \(.message | split("\n")[0] | .[0:120])"')
+              count=$(printf '%s' "$PUSH_COMMITS" | jq 'length')
+              if [ "$count" -eq 0 ]; then echo '{}' > embed.json   # tag or branch delete: nothing to post
+              else jq -n --arg t "$count new commit(s) on main" --arg u "$PUSH_COMPARE" --arg d "$list" \
+                    --arg a "$PUSH_PUSHER" --arg av "$PUSH_AVATAR" --arg at "$PUSH_AT" '{
+                title: $t, url: $u, color: 3447003, timestamp: $at,
+                author: {name: ("Pushed by " + $a), icon_url: $av},
+                description: ($d | if length > 3500 then .[0:3500] + "\n…" else . end),
+                footer: {text: "sc-offline · Star Citizen offline mod"}}' > embed.json
+              fi
+              ;;
           esac
           jq '{username: "sc-offline", allowed_mentions: {parse: []}, embeds: [.]}' embed.json > payload.json
           jq -c . payload.json
@@ -137,6 +157,7 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           set -eu
+          if [ "$(jq -r '.embeds[0] | length' payload.json)" = "0" ]; then echo "nothing to post"; exit 0; fi
           if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
             echo "::warning::DISCORD_WEBHOOK_URL isn't set; nothing posted"
             exit 0
