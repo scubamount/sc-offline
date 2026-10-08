@@ -676,15 +676,15 @@ static bool JournalLine(const wstring& here, const std::string& line) {
 // D2: antivirus (Defender scanning a new exe or DLL) and indexers hold files open for a moment.
 // Retry sharing / access-denied / lock errors with growing waits instead of giving up at once.
 static bool TransientLock(DWORD e) { return e == ERROR_SHARING_VIOLATION || e == ERROR_ACCESS_DENIED || e == ERROR_LOCK_VIOLATION; }
+static const DWORD kLockWaits[] = { 100, 250, 500, 1000, 2000, 4000 };
 
 static bool MoveRetrying(const wstring& from, const wstring& to, DWORD flags) {
-    static const DWORD kWaits[] = { 100, 250, 500, 1000, 2000, 4000 };
     for (int i = 0;; ++i) {
         if (MoveFileExW(from.c_str(), to.c_str(), flags)) return true;
         const DWORD e = GetLastError();
-        if (!TransientLock(e) || i == ARRAYSIZE(kWaits)) { SetLastError(e); return false; }
-        Out("[i] %ls is in use (error %lu, antivirus?); trying again in %lu ms\n", from.c_str(), e, kWaits[i]);
-        Sleep(kWaits[i]);
+        if (!TransientLock(e) || i == ARRAYSIZE(kLockWaits)) { SetLastError(e); return false; }
+        Out("[i] %ls is in use (error %lu, antivirus?); trying again in %lu ms\n", from.c_str(), e, kLockWaits[i]);
+        Sleep(kLockWaits[i]);
     }
 }
 
@@ -692,14 +692,13 @@ static bool MoveRetrying(const wstring& from, const wstring& to, DWORD flags) {
 static bool CopyFlushed(const wstring& src, const wstring& dst) {
     std::string bytes;
     if (!ReadAll(src, bytes)) return false;
-    static const DWORD kWaits[] = { 100, 250, 500, 1000, 2000, 4000 };
     HANDLE f = INVALID_HANDLE_VALUE;
     for (int i = 0;; ++i) {
         f = CreateFileW(dst.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (f != INVALID_HANDLE_VALUE) break;
         const DWORD e = GetLastError();
-        if (!TransientLock(e) || i == ARRAYSIZE(kWaits)) { SetLastError(e); return false; }
-        Sleep(kWaits[i]);
+        if (!TransientLock(e) || i == ARRAYSIZE(kLockWaits)) { SetLastError(e); return false; }
+        Sleep(kLockWaits[i]);
     }
     DWORD put = 0;
     bool ok = WriteFile(f, bytes.data(), (DWORD)bytes.size(), &put, nullptr) && put == bytes.size();
