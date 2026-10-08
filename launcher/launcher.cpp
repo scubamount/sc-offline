@@ -241,6 +241,12 @@ static bool WriteAll(const wstring& path, const std::string& text) {
     return ok;
 }
 
+static wstring Wide(const std::string& s) {
+    wstring w(s.size(), L'\0');
+    w.resize(MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), w.data(), (int)w.size()));
+    return w;
+}
+
 static std::string Narrow(const wstring& w) {
     if (w.empty()) return "";
     std::string s(WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr), '\0');
@@ -415,6 +421,154 @@ static UpdateInfo CheckLatest(DWORD timeoutMs, std::string* why) {
     return u;
 }
 
+// --- Release manifest (issue #31, S1-S3) ---------------------------------------------------
+// CI writes manifest.json into the release folder (tools/release-manifest.py): format 1, version,
+// tag, commit and one {"path","sha256","size"} object per shipped file. The zip itself is still
+// checked against GitHub's digest; the manifest then pins every file inside it. Only listed files
+// are ever copied, each one re-hashed first.
+
+struct ManifestFile { std::string path; std::string sha256; unsigned long long size = 0; };
+struct Manifest { std::string version, tag, commit; std::vector<ManifestFile> files; };
+
+// "v0.7.0-rc1" -> numbers {0,7,0,0} + pre "rc1". False unless 1-4 dot-separated numbers, then
+// optionally "-" and [0-9A-Za-z.]+.
+static bool ParseTagVersion(std::string v, int num[4], std::string& pre) {
+    pre.clear();
+    const size_t dash = v.find('-');
+    if (dash != std::string::npos) {
+        pre = v.substr(dash + 1);
+        v.resize(dash);
+        if (pre.empty()) return false;
+        for (char c : pre) if (!isalnum((unsigned char)c) && c != '.') return false;
+    }
+    return ParseVersion(v, num);
+}
+
+// a > b. A pre-release sorts below the same numbers without one (0.7.0-rc1 < 0.7.0).
+static bool VersionGreater(const std::string& a, const std::string& b) {
+    int x[4], y[4]; std::string px, py;
+    if (!ParseTagVersion(a, x, px) || !ParseTagVersion(b, y, py)) return false;
+    for (int i = 0; i < 4; ++i) if (x[i] != y[i]) return x[i] > y[i];
+    if (px.empty() != py.empty()) return px.empty();
+    return px > py;
+}
+
+// S3: a manifest path is relative, '/'-separated, with no '..', '.', empty part, ':' (alternate
+// data streams, drive letters), '\\' or control character. Returns the Windows relative path, or
+// empty when refused.
+static wstring SafeRelPath(const std::string& p) {
+    if (p.empty() || p.size() > 400 || p[0] == '/' || p.find('\\') != std::string::npos || p.find(':') != std::string::npos)
+        return L"";
+    for (unsigned char c : p) if (c < 0x20 || c == '"' || c == '*' || c == '?' || c == '<' || c == '>' || c == '|') return L"";
+    size_t from = 0;
+    while (true) {
+        const size_t slash = p.find('/', from);
+        const std::string part = p.substr(from, slash == std::string::npos ? std::string::npos : slash - from);
+        if (part.empty() || part == "." || part == ".." || part.back() == '.' || part.back() == ' ') return L"";
+        if (slash == std::string::npos) break;
+        from = slash + 1;
+    }
+    wstring w = Wide(p);
+    for (wchar_t& c : w) if (c == L'/') c = L'\\';
+    return w;
+}
+
+static bool IsHex64(const std::string& s) {
+    if (s.size() != 64) return false;
+    for (char c : s) if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+    return true;
+}
+
+// Parses manifest.json. Unknown keys are ignored. False with a reason when anything required is
+// missing or malformed.
+static bool ParseManifest(const std::string& j, Manifest& m, std::string& why) {
+    m = Manifest{};
+    const size_t top = j.find('{');
+    std::string format;
+    if (top == std::string::npos || !JsonKey(j, top, "format", format) || format != "1") { why = "manifest format isn't 1"; return false; }
+    if (!JsonKey(j, top, "version", m.version) || !JsonKey(j, top, "tag", m.tag)) { why = "manifest has no version or tag"; return false; }
+    JsonKey(j, top, "commit", m.commit);
+    std::string raw; size_t at = 0;
+    if (!JsonKey(j, top, "files", raw, &at) || at >= j.size() || j[at] != '[') { why = "manifest has no files list"; return false; }
+    for (size_t i = at + 1; i < j.size();) {
+        while (i < j.size() && (isspace((unsigned char)j[i]) || j[i] == ',')) ++i;
+        if (i >= j.size() || j[i] == ']') break;
+        if (j[i] != '{') { why = "manifest files list is malformed"; return false; }
+        ManifestFile f; std::string size;
+        if (!JsonKey(j, i, "path", f.path) || !JsonKey(j, i, "sha256", f.sha256) || !JsonKey(j, i, "size", size)) {
+            why = "a manifest entry lacks path, sha256 or size"; return false;
+        }
+        for (char& c : f.sha256) c = (char)tolower((unsigned char)c);
+        if (!IsHex64(f.sha256)) { why = "bad sha256 for " + f.path; return false; }
+        if (size.empty() || size.size() > 15 || size.find_first_not_of("0123456789") != std::string::npos) { why = "bad size for " + f.path; return false; }
+        f.size = std::stoull(size);
+        if (SafeRelPath(f.path).empty()) { why = "refused path in manifest: " + f.path; return false; }
+        for (const ManifestFile& o : m.files) if (!_stricmp(o.path.c_str(), f.path.c_str())) { why = "path listed twice: " + f.path; return false; }
+        m.files.push_back(f);
+        // skip this object
+        int depth = 0; bool str = false;
+        for (; i < j.size(); ++i) {
+            const char c = j[i];
+            if (str) { if (c == '\\') ++i; else if (c == '"') str = false; continue; }
+            if (c == '"') str = true;
+            else if (c == '{' || c == '[') ++depth;
+            else if (c == '}' || c == ']') { if (--depth == 0) { ++i; break; } }
+        }
+    }
+    if (m.files.empty()) { why = "manifest lists no files"; return false; }
+    return true;
+}
+
+// S2: the manifest must belong to the release that was asked for, and be newer than this launcher.
+static bool ManifestMatchesRelease(const Manifest& m, const std::string& tag, std::string& why) {
+    if (m.tag != tag) { why = "manifest tag " + m.tag + " isn't the release tag " + tag; return false; }
+    if ("v" + m.version != tag) { why = "manifest version " + m.version + " doesn't match tag " + tag; return false; }
+    if (!VersionGreater(m.version, SCO_VERSION)) { why = "manifest version " + m.version + " isn't newer than " + SCO_VERSION; return false; }
+    return true;
+}
+
+// SHA-256 of a file, streamed (lowercase hex, empty when unreadable).
+static std::string FileSha256(const wstring& path, unsigned long long* size = nullptr) {
+    HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return "";
+    BCRYPT_ALG_HANDLE alg = nullptr; BCRYPT_HASH_HANDLE h = nullptr;
+    std::string hex; unsigned long long total = 0;
+    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) == 0) {
+        if (BCryptCreateHash(alg, &h, nullptr, 0, nullptr, 0, 0) == 0) {
+            std::vector<unsigned char> buf(1 << 20);
+            DWORD got = 0; bool ok = true;
+            while ((ok = ReadFile(f, buf.data(), (DWORD)buf.size(), &got, nullptr) != 0) && got) {
+                if (BCryptHashData(h, buf.data(), got, 0) != 0) { ok = false; break; }
+                total += got;
+            }
+            unsigned char digest[32];
+            if (ok && BCryptFinishHash(h, digest, sizeof(digest), 0) == 0) {
+                char two[3];
+                for (unsigned char c : digest) { std::snprintf(two, sizeof(two), "%02x", c); hex += two; }
+            }
+            BCryptDestroyHash(h);
+        }
+        BCryptCloseAlgorithmProvider(alg, 0);
+    }
+    CloseHandle(f);
+    if (size) *size = total;
+    return hex;
+}
+
+// Every manifest file exists under root with the listed size and sha256. Files under root that
+// the manifest doesn't list are ignored here and never copied.
+static bool VerifyAgainstManifest(const wstring& root, const Manifest& m, std::string& why) {
+    for (const ManifestFile& f : m.files) {
+        const wstring p = root + L"\\" + SafeRelPath(f.path);
+        const DWORD a = GetFileAttributesW(p.c_str());
+        if (a == INVALID_FILE_ATTRIBUTES || (a & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))) { why = f.path + " is missing"; return false; }
+        unsigned long long size = 0;
+        const std::string got = FileSha256(p, &size);
+        if (got != f.sha256 || size != f.size) { why = f.path + " doesn't match the manifest"; return false; }
+    }
+    return true;
+}
+
 static std::vector<wstring> FilesUnder(const wstring& root, const wstring& rel = L"") {
     std::vector<wstring> out;
     WIN32_FIND_DATAW fd;
@@ -454,12 +608,6 @@ static bool RunWait(const wstring& exe, wstring cmd, const wstring& cwd, DWORD& 
     GetExitCodeProcess(pi.hProcess, &code);
     CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
     return true;
-}
-
-static wstring Wide(const std::string& s) {
-    wstring w(s.size(), L'\0');
-    w.resize(MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), w.data(), (int)w.size()));
-    return w;
 }
 
 // Paths (relative to the launcher folder) an update must never replace.
@@ -602,15 +750,18 @@ static bool ApplyUpdate(const wstring& here, const UpdateInfo& u) {
         RemoveTree(dir); return false;
     }
     const wstring pkg = ex + L"\\" + Wide(u.zipName.substr(0, u.zipName.size() - 4));
-    if (!IsFile(pkg + L"\\sc-offline.exe") || !IsFile(pkg + L"\\dinput8.dll")) {
-        Out("[!] the zip doesn't hold sc-offline.exe and dinput8.dll where expected; nothing changed\n");
+    Manifest man; std::string manText, why;
+    if (!ReadAll(pkg + L"\\manifest.json", manText) || !ParseManifest(manText, man, why) || !ManifestMatchesRelease(man, u.tag, why) ||
+        !VerifyAgainstManifest(pkg, man, why)) {
+        Out("[!] the release's manifest.json check failed (%s); nothing changed\n", why.empty() ? "no manifest.json in the zip" : why.c_str());
         RemoveTree(dir); return false;
     }
-    // Swap, journaling each step before it happens.
-    const std::vector<wstring> files = FilesUnder(pkg);
+    Out("[+] all %zu files match the release manifest (%s)\n", man.files.size(), man.tag.c_str());
+    // Swap, journaling each step before it happens. Only files the manifest lists are copied.
     int replaced = 0, added = 0;
     bool ok = true;
-    for (const wstring& rel : files) {
+    for (const ManifestFile& mf : man.files) {
+        const wstring rel = SafeRelPath(mf.path);
         if (PlayerOwned(rel)) continue;
         const wstring dst = here + L"\\" + rel, src = pkg + L"\\" + rel;
         const size_t cut = rel.find_last_of(L'\\');
