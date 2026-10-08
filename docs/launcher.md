@@ -138,6 +138,47 @@ If a step fails, the old files are put back at once. If the PC dies mid-update, 
 `sc-offline.exe` reads `applied.txt` and puts them back. `check_updates = off` turns the check off;
 `sc-offline.exe update` checks on demand.
 
+#### What an update is checked against
+
+Two things vouch for an update. Neither is a signature: releases aren't code-signed.
+
+1. **GitHub's digest.** GitHub publishes a SHA-256 `digest` for every release asset, served over HTTPS
+   from `api.github.com`. The downloaded zip must match it.
+2. **`manifest.json` inside the zip.** CI writes it when it builds the release: the `version`, the `tag`,
+   the `commit` it was built from, and every other file in the zip with its `sha256` and `size`, one per line.
+   Its version must equal the release tag. Only files it lists are copied, and only when their SHA-256 matches.
+   A listed path with `..`, a leading `/`, a `\` or a `:` makes the whole update fail.
+
+So the update is exactly what CI built from that commit, as long as the GitHub release itself is
+trustworthy. Anyone who can publish a release on `scubamount/sc-offline` can publish an update.
+
+#### Checking a release by hand
+
+On Windows (PowerShell), in the folder you downloaded the zip to:
+
+```powershell
+# 1. The zip against GitHub's digest (shown on the release page next to the asset, or:)
+#    gh release view v0.7.0 -R scubamount/sc-offline --json assets --jq '.assets[] | [.name, .digest]'
+(Get-FileHash .\sc-offline-v0.7.0.zip -Algorithm SHA256).Hash.ToLower()
+
+# 2. Every unpacked file against manifest.json
+Expand-Archive .\sc-offline-v0.7.0.zip -DestinationPath .
+$dir = '.\sc-offline-v0.7.0'
+$man = Get-Content "$dir\manifest.json" -Raw | ConvertFrom-Json
+"$($man.tag) from commit $($man.commit), $($man.files.Count) files"
+foreach ($f in $man.files) {
+  $p = Join-Path $dir $f.path
+  if (-not (Test-Path $p)) { "MISSING  $($f.path)"; continue }
+  if ((Get-FileHash $p -Algorithm SHA256).Hash.ToLower() -ne $f.sha256) { "CHANGED  $($f.path)" }
+}
+```
+
+No output after the summary line means every listed file matches. A file in the folder that the manifest
+doesn't list (other than `manifest.json`) isn't part of the release. With Python (macOS, Linux or Windows),
+`python3 tools/release-manifest.py check sc-offline-v0.7.0` from a clone of this repository does step 2,
+also flags unlisted files, and exits non-zero on any problem. The `commit` field lets you
+look up the exact source at `https://github.com/scubamount/sc-offline/tree/<commit>`.
+
 ### Discord status
 
 With the Discord app open on the same PC, **Play** sets your Discord status once the game starts:
