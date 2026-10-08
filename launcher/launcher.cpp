@@ -281,13 +281,18 @@ static std::string Sha256(const std::string& bytes) {
     return hex;
 }
 
-// --- Self-update (issue #14) ---------------------------------------------------------------
-// Ask GitHub for the latest full release; if it is newer, offer to download the release zip,
-// check it against the SHA-256 digest GitHub publishes for the asset, and swap the files in.
-// The swap is journaled in data\update\applied.txt before each step, so a crash rolls back on
-// the next run. Files the player owns are never replaced: sc-offline.ini is kept (new keys are
-// appended to it, commented out), and anything in data\ that the release doesn't ship (wallet,
-// saved places, bookmarks, logs) is left alone because only shipped paths are written.
+// --- Self-update (issues #14, #31) ----------------------------------------------------------
+// Ask GitHub for the newest release on the player's update_channel; if it is newer, offer to
+// download the release zip and check it against the SHA-256 digest GitHub publishes for the asset.
+// The zip's manifest.json then pins every file (path, size, SHA-256), its version must equal the
+// tag and be newer than this launcher, and only listed files are copied. Download and checks run
+// with normal rights and stage the files in data\update\staged; the part that may run as
+// administrator only re-checks the staged files and swaps them in. Each file is written as
+// .update-new, flushed, moved into place with write-through and re-hashed; the swap is journaled
+// in data\update\applied.txt before each step, so a crash rolls back on the next run, and the new
+// launcher must pass --self-test or the old files go back. Files the player owns are never
+// replaced: sc-offline.ini is kept (new keys are appended to it, commented out), and anything in
+// data\ that the release doesn't ship (wallet, saved places, bookmarks, logs) is left alone.
 
 static const wchar_t* kReleasesApi = L"https://api.github.com/repos/scubamount/sc-offline/releases/latest";
 static const wchar_t* kReleasesList = L"https://api.github.com/repos/scubamount/sc-offline/releases?per_page=20";
