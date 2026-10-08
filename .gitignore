@@ -30,3 +30,4 @@ data/game-build.txt
 data/menu_background.*
 data/locations_found.txt
 data/bookmarks.txt
+__pycache__/
