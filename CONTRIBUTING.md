@@ -20,7 +20,7 @@ Questions and ideas: open an issue or ask in the [Discord](https://discord.gg/NJ
 ## Making a change
 
 1. For anything bigger than a small fix, open an issue first so we can agree on the approach.
-2. Fork the repo and branch from `main`.
+2. Fork the repo, clone with `git clone --recurse-submodules` (or run `git submodule update --init`), and branch from `main`.
 3. Build and check as described in [docs/build.md](docs/build.md):
    - Windows: build **Release | x64** with Visual Studio.
    - macOS or Linux: `tools/check.sh` must report `0 new` diagnostics. It isn't a build; CI's MSVC build is the real check.
@@ -35,6 +35,7 @@ PRs are squash-merged. Keep one change per PR.
 ## Code style
 
 - Match the surrounding code: C++ in `src/` (the mod) and `launcher/` (the launcher), no new dependencies without discussing it first.
+- Game addresses belong in [sco-core](https://github.com/scubamount/sco-core) (`external/sco-core`), not in new patterns in `src/`. Moving a feature over: [Adding a signature](https://github.com/scubamount/sco-core/blob/main/docs/adding-signatures.md). Status messages for the player go through `sco::Status()`, not the menu.
 - In `src/`, don't put `__try` in a function that owns objects with destructors (such as `std::string`); MSVC rejects it (C2712) and `tools/check.sh` screens for it.
 - Write messages players will read in plain words: what happened and what to do.
 

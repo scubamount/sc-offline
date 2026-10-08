@@ -19,6 +19,9 @@
 #include "services.h"
 #include "outfits.h"
 #include "menu.h"
+#include "sco/game/signatures.h"
+#include "sco/log.h"
+#include "sco/signatures.h"
 
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "advapi32.lib")
@@ -91,12 +94,16 @@ static bool AntiCheatPresent() {
 static bool g_offline = false;
 static bool g_outfitsOk = false;
 
+static void CoreLog(const char* line) { Log("%s", line); }
+
 static void StartOffline() {
     g_offline = ApplyOfflinePatches();
     if (!g_offline) return;
     InstallHooks(g_text);
     ResolveQuantumApi(g_text, g_rdata);
-    if (ResolveTeleportApi(g_text, g_rdata)) {
+    sco::SetLogSink(CoreLog);
+    if (sco::game::RegisterGameSignatures()) sco::ResolveAll(sco::ModuleImage());
+    if (ResolveTeleportApi()) {
         ResolveSpawnApi(g_text, g_rdata);
         g_outfitsOk = ResolveLoadoutApi(g_text, g_rdata);  // outfits ride the gear menu's loader
         ResolveNpcApi(g_text);
@@ -111,6 +118,7 @@ static void StartOffline() {
 
 static void LogStartup() {
     LogOfflinePatches();
+    sco::LogSignatureReport(false);
     LogHooks();
     LogQuantum();
     if (g_tp.ok) Log("[+] teleport: ready (F7 = save spot, F8 = go there)");

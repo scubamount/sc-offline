@@ -30,8 +30,6 @@ void            Menu_RequestAddCrew(unsigned long long seatId, int npcIndex);
 void            Menu_RequestFillCrew(int npcIndex);
 void            Menu_RequestClearCrew();
 void            Menu_RequestFlightReady();
-void            Menu_GetStatus(char* out, size_t n);
-void            SetMenuStatus(const char* fmt, ...);   // also logged; shown in the menu's status strip
 void            Menu_SetNoclip(bool on, float speed);
 void            Menu_SetNoclipSpeed(float speed);
 void            Menu_SetGodMode(bool on);
