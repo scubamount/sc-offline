@@ -145,6 +145,8 @@ struct Config {
     bool cleanLogs = true;
     // Check GitHub for a newer sc-offline release on play/status (issue #14).
     bool checkUpdates = true;
+    // Which releases the update check offers: stable (full releases) or prerelease (issue #31, S5).
+    bool prereleases = false;
     // After a crash, offer a redacted log bundle and a prefilled bug form (issue #18).
     bool crashReports = true;
     // Show "Playing sc-offline" on the player's Discord profile while the game runs (issue #34).
@@ -192,6 +194,11 @@ static bool ReadConfig(const wstring& path, Config& c) {
         }
         else if (!_wcsicmp(k.c_str(), L"check_updates")) {
             if (!ParseOnOff(v, c.checkUpdates)) Out("[!] sc-offline.ini line %d: check_updates must be on or off\n", lineNo);
+        }
+        else if (!_wcsicmp(k.c_str(), L"update_channel")) {
+            if (!_wcsicmp(v.c_str(), L"stable")) c.prereleases = false;
+            else if (!_wcsicmp(v.c_str(), L"prerelease")) c.prereleases = true;
+            else Out("[!] sc-offline.ini line %d: update_channel must be stable or prerelease\n", lineNo);
         }
         else if (!_wcsicmp(k.c_str(), L"clean_logs")) {
             if (!_wcsicmp(v.c_str(), L"ask")) c.cleanLogs = true;
@@ -282,6 +289,7 @@ static std::string Sha256(const std::string& bytes) {
 // saved places, bookmarks, logs) is left alone because only shipped paths are written.
 
 static const wchar_t* kReleasesApi = L"https://api.github.com/repos/scubamount/sc-offline/releases/latest";
+static const wchar_t* kReleasesList = L"https://api.github.com/repos/scubamount/sc-offline/releases?per_page=20";
 
 static bool HttpGet(const wstring& url, std::string& body, DWORD timeoutMs, size_t cap) {
     body.clear();
@@ -356,8 +364,8 @@ static bool JsonKey(const std::string& j, size_t from, const char* key, std::str
     return false;
 }
 
-// "v0.4.2" / "0.4.2" -> {0,4,2,0}. False on anything that isn't 1-4 dot-separated numbers
-// (a "-rc" suffix included), so an unreadable tag is never offered.
+// "v0.4.2" / "0.4.2" -> {0,4,2,0}. False on anything that isn't 1-4 dot-separated numbers;
+// ParseTagVersion handles a "-rc1" suffix.
 static bool ParseVersion(std::string v, int out[4]) {
     if (!v.empty() && (v[0] == 'v' || v[0] == 'V')) v.erase(0, 1);
     int n = 0; out[0] = out[1] = out[2] = out[3] = 0;
@@ -372,30 +380,27 @@ static bool ParseVersion(std::string v, int out[4]) {
     return n > 0;
 }
 
-static bool IsNewerVersion(const std::string& latest, const std::string& current) {
-    int a[4], b[4];
-    if (!ParseVersion(latest, a) || !ParseVersion(current, b)) return false;
-    for (int i = 0; i < 4; ++i) if (a[i] != b[i]) return a[i] > b[i];
-    return false;
-}
-
 struct UpdateInfo { std::string tag, zipName, zipUrl, sha256; };
 
-// What GitHub says the latest release is. Empty tag when there's nothing newer to offer.
-static UpdateInfo CheckLatest(DWORD timeoutMs, std::string* why) {
-    UpdateInfo u;
-    std::string body;
-    if (!HttpGet(kReleasesApi, body, timeoutMs, 1u << 20)) { if (why) *why = "couldn't reach GitHub"; return u; }
-    const size_t top = body.find('{');
-    std::string tag, pre, draft;
-    if (top == std::string::npos || !JsonKey(body, top, "tag_name", tag)) { if (why) *why = "unexpected reply from GitHub"; return u; }
-    JsonKey(body, top, "prerelease", pre); JsonKey(body, top, "draft", draft);
-    if (pre == "true" || draft == "true") { if (why) *why = "latest release is a pre-release"; return u; }
-    if (!IsNewerVersion(tag, SCO_VERSION)) { if (why) *why = "up to date (latest " + tag + ")"; return u; }
+// Skips the JSON object or array starting at j[i]; returns the index just past it.
+static size_t SkipJsonValue(const std::string& j, size_t i) {
+    int depth = 0; bool str = false;
+    for (; i < j.size(); ++i) {
+        const char c = j[i];
+        if (str) { if (c == '\\') ++i; else if (c == '"') str = false; continue; }
+        if (c == '"') str = true;
+        else if (c == '{' || c == '[') ++depth;
+        else if (c == '}' || c == ']') { if (--depth == 0) return i + 1; }
+    }
+    return j.size();
+}
+
+// The release object at body[top]: its tag and the sc-offline-<tag>.zip asset with a SHA-256 digest.
+static bool ReleaseAsset(const std::string& body, size_t top, UpdateInfo& u, std::string& why) {
+    std::string tag, raw; size_t at = 0;
+    if (!JsonKey(body, top, "tag_name", tag)) { why = "unexpected reply from GitHub"; return false; }
     const std::string want = "sc-offline-" + tag + ".zip";
-    size_t at = 0;
-    if (!JsonKey(body, top, "assets", pre, &at) || at >= body.size() || body[at] != '[') { if (why) *why = "release has no assets"; return u; }
-    // Walk the assets array object by object.
+    if (!JsonKey(body, top, "assets", raw, &at) || at >= body.size() || body[at] != '[') { why = tag + " has no assets"; return false; }
     for (size_t i = at + 1; i < body.size();) {
         while (i < body.size() && (isspace((unsigned char)body[i]) || body[i] == ',')) ++i;
         if (i >= body.size() || body[i] != '{') break;
@@ -405,19 +410,49 @@ static UpdateInfo CheckLatest(DWORD timeoutMs, std::string* why) {
             !digest.compare(0, 7, "sha256:") && digest.size() == 7 + 64) {
             u.tag = tag; u.zipName = name; u.zipUrl = url; u.sha256 = digest.substr(7);
             for (char& c : u.sha256) c = (char)tolower((unsigned char)c);
-            return u;
+            return true;
         }
-        // skip this object
-        int depth = 0; bool str = false;
-        for (; i < body.size(); ++i) {
-            const char c = body[i];
-            if (str) { if (c == '\\') ++i; else if (c == '"') str = false; continue; }
-            if (c == '"') str = true;
-            else if (c == '{' || c == '[') ++depth;
-            else if (c == '}' || c == ']') { if (--depth == 0) { ++i; break; } }
-        }
+        i = SkipJsonValue(body, i);
     }
-    if (why) *why = tag + " has no " + want + " with a SHA-256 digest";
+    why = tag + " has no " + want + " with a SHA-256 digest";
+    return false;
+}
+
+static bool VersionGreater(const std::string& a, const std::string& b);
+
+// S5: what GitHub offers on the player's channel. stable = the latest full release; prerelease =
+// the newest release of any kind (drafts never). Empty tag when there's nothing newer to offer.
+static UpdateInfo CheckLatest(DWORD timeoutMs, bool prerelease, std::string* why) {
+    UpdateInfo u;
+    std::string body, w;
+    const wstring url = prerelease ? wstring(kReleasesList) : wstring(kReleasesApi);
+    if (!HttpGet(url, body, timeoutMs, 4u << 20)) { if (why) *why = "couldn't reach GitHub"; return u; }
+    // One release object (stable) or an array of them (prerelease); take the newest acceptable one.
+    std::vector<size_t> tops;
+    size_t first = body.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) { if (why) *why = "unexpected reply from GitHub"; return u; }
+    if (body[first] == '{') tops.push_back(first);
+    else if (body[first] == '[')
+        for (size_t i = first + 1; i < body.size();) {
+            while (i < body.size() && (isspace((unsigned char)body[i]) || body[i] == ',')) ++i;
+            if (i >= body.size() || body[i] != '{') break;
+            tops.push_back(i);
+            i = SkipJsonValue(body, i);
+        }
+    std::string best, newestSeen;
+    for (size_t top : tops) {
+        std::string tag, pre, draft;
+        if (!JsonKey(body, top, "tag_name", tag)) continue;
+        JsonKey(body, top, "prerelease", pre); JsonKey(body, top, "draft", draft);
+        if (draft == "true" || (!prerelease && pre == "true")) { if (tops.size() == 1) w = "latest release is a pre-release"; continue; }
+        if (newestSeen.empty() || VersionGreater(tag, newestSeen)) newestSeen = tag;
+        if (!VersionGreater(tag, SCO_VERSION)) continue;
+        if (!best.empty() && !VersionGreater(tag, best)) continue;
+        UpdateInfo cand; std::string candWhy;
+        if (ReleaseAsset(body, top, cand, candWhy)) { u = cand; best = tag; }
+        else w = candWhy;
+    }
+    if (u.tag.empty() && why) *why = !w.empty() ? w : newestSeen.empty() ? std::string("no releases found") : "up to date (latest " + newestSeen + ")";
     return u;
 }
 
@@ -505,15 +540,7 @@ static bool ParseManifest(const std::string& j, Manifest& m, std::string& why) {
         if (SafeRelPath(f.path).empty()) { why = "refused path in manifest: " + f.path; return false; }
         for (const ManifestFile& o : m.files) if (!_stricmp(o.path.c_str(), f.path.c_str())) { why = "path listed twice: " + f.path; return false; }
         m.files.push_back(f);
-        // skip this object
-        int depth = 0; bool str = false;
-        for (; i < j.size(); ++i) {
-            const char c = j[i];
-            if (str) { if (c == '\\') ++i; else if (c == '"') str = false; continue; }
-            if (c == '"') str = true;
-            else if (c == '{' || c == '[') ++depth;
-            else if (c == '}' || c == ']') { if (--depth == 0) { ++i; break; } }
-        }
+        i = SkipJsonValue(j, i);
     }
     if (m.files.empty()) { why = "manifest lists no files"; return false; }
     return true;
@@ -2551,7 +2578,7 @@ int wmain(int argc, wchar_t** argv) {
     if (command == L"update" || (cfg.checkUpdates && !dry && (command == L"play" || command == L"status"))) {
         const bool explicitUpdate = command == L"update";
         std::string why;
-        const UpdateInfo u = CheckLatest(explicitUpdate ? 15000 : 3000, &why);
+        const UpdateInfo u = CheckLatest(explicitUpdate ? 15000 : 3000, cfg.prereleases, &why);
         if (u.tag.empty()) {
             if (explicitUpdate) { Out("Update:   %s\n", why.c_str()); return why.rfind("up to date", 0) == 0 ? kExitOk : kExitError; }
         } else {
