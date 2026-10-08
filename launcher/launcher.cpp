@@ -11,11 +11,11 @@
 //   3. set the SC_OFFLINE_* variables the mod reads, pointing at data\ next to this exe;
 //   4. start a helper (this exe again, `--helper`, no window) that copies dinput8.dll into Bin64
 //      and data\OfflineDB\default_1.xml into <channel>\user\client\0, backing up anything it
-//      replaces. The helper runs as administrator only when the game folder refuses a plain
-//      write; the game never does;
+//      replaces. Nothing asks for administrator rights; the game folder must be writable;
 //      Before that, on play, the helper blocks StarCitizen.exe in Windows Firewall, adds the EAC
 //      hosts line and renames EasyAntiCheat_EOS.exe (each switchable in sc-offline.ini), recording
-//      every change in %ProgramData%\sc-offline\pc-changes.txt; the helper then also runs elevated;
+//      every change in %ProgramData%\sc-offline\pc-changes.txt. These need administrator rights, so
+//      they only happen when sc-offline.exe itself was started as administrator;
 //   5. start StarCitizen.exe. The helper waits until this launcher has exited AND no
 //      StarCitizen.exe is left, then takes the mod out, restores the backups and undoes the recorded
 //      PC changes. Because it is a
@@ -25,6 +25,9 @@
 //
 // On Linux, sc-offline.sh runs this inside the game's Wine prefix (see that file).
 #include <windows.h>
+#include <windowsx.h>
+#include <d3d11.h>
+#include <dwmapi.h>
 #include <bcrypt.h>
 #include <shellapi.h>
 #include <shlobj.h>
@@ -43,9 +46,16 @@
 #include <share.h>
 #include <ctime>
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 #include "../src/version.h"
+#define IMGUI_DEFINE_MATH_OPERATORS
+#include "../src/third_party/imgui/imgui.h"
+#include "../src/third_party/imgui/imgui_impl_win32.h"
+#include "../src/third_party/imgui/imgui_impl_dx11.h"
+#include "../src/third_party/imgui/imgui_internal.h"
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 #pragma comment(lib, "bcrypt.lib")
 #pragma comment(lib, "shell32.lib")
@@ -56,6 +66,8 @@
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "dwmapi.lib")
 // Visual styles for the window (issue #20); MSVC embeds this, MinGW builds get classic controls.
 #pragma comment(linker, "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
@@ -286,8 +298,8 @@ static std::string Sha256(const std::string& bytes) {
 // download the release zip and check it against the SHA-256 digest GitHub publishes for the asset.
 // The zip's manifest.json then pins every file (path, size, SHA-256), its version must equal the
 // tag and be newer than this launcher, and only listed files are copied. Download and checks run
-// with normal rights and stage the files in data\update\staged; the part that may run as
-// administrator only re-checks the staged files and swaps them in. Each file is written as
+// with normal rights and stage the files in data\update\staged; the swap only
+// re-checks the staged files and swaps them in. Each file is written as
 // .update-new, flushed, moved into place with write-through and re-hashed; the swap is journaled
 // in data\update\applied.txt before each step, so a crash rolls back on the next run, and the new
 // launcher must pass --self-test or the old files go back. Files the player owns are never
@@ -782,11 +794,11 @@ static void MergeIni(const wstring& here, const wstring& newIni, const std::stri
 
 // S4: the update runs in two parts. StageUpdate (normal rights) downloads, checks the zip against
 // GitHub's digest, unpacks it, checks the manifest and copies the listed files into a staging
-// folder. SwapStaged (the only part that may run as administrator) reads nothing from the network:
+// folder. SwapStaged reads nothing from the network:
 // it re-checks the staged files against the staged manifest and swaps them in.
 
 // Where an update is staged: data\update when this folder is writable, else (a Program Files
-// install) %LOCALAPPDATA%\sc-offline\update, which the elevated part re-checks file by file.
+// install) %LOCALAPPDATA%\sc-offline\update, which the swap re-checks file by file.
 static wstring StageRoot(const wstring& here) {
     if (CanWriteTo(here + L"\\data")) return UpdateDir(here);
     wchar_t buf[MAX_PATH];
@@ -954,38 +966,17 @@ static bool SwapStaged(const wstring& here, const wstring& staged, const std::st
     return true;
 }
 
-// The swap, as administrator when this folder needs it (issue #16): `sc-offline.exe
-// --elevated-update <tag> <staged folder>` only re-checks and swaps; it never touches the network,
-// starts the game or relaunches, so the new launcher (and the game) still start with normal rights.
-static bool SwapMaybeElevated(const wstring& here, const wstring& staged, const std::string& tag) {
+static bool SwapIfWritable(const wstring& here, const wstring& staged, const std::string& tag) {
     if (CanWriteTo(here) && CanWriteTo(here + L"\\data")) return SwapStaged(here, staged, tag);
-    Out("[i] this folder needs administrator rights to update; Windows will ask once.\n"
-        "    (Only the file swap runs as administrator; the game never does.)\n");
-    wchar_t self[MAX_PATH * 2]; GetModuleFileNameW(nullptr, self, ARRAYSIZE(self));
-    const wstring args = L"--elevated-update " + Wide(tag) + L" \"" + staged + L"\"";
-    SHELLEXECUTEINFOW sei{}; sei.cbSize = sizeof(sei); sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-    sei.lpVerb = L"runas"; sei.lpFile = self; sei.lpParameters = args.c_str(); sei.lpDirectory = here.c_str(); sei.nShow = SW_SHOWNORMAL;
-    if (!ShellExecuteExW(&sei) || !sei.hProcess) { Out("[!] administrator rights refused; nothing changed\n"); return false; }
-    WaitForSingleObject(sei.hProcess, INFINITE);
-    DWORD code = 1; GetExitCodeProcess(sei.hProcess, &code); CloseHandle(sei.hProcess);
-    if (code) { Out("[!] the update failed (exit %lu); see data\\launcher.log. Your current version is unchanged.\n", code); return false; }
-    return true;
+    Out("[!] this folder can't be changed without administrator rights, so the update can't go in here.\n"
+        "    Move the sc-offline folder somewhere like your Desktop, or update by hand: %s\n",
+        "https://github.com/scubamount/sc-offline/releases/latest");
+    return false;
 }
 
-// The elevated half: only accepts a staging folder named ...\update\staged.
-static int ElevatedUpdate(const wstring& here, const wstring& tag, const wstring& staged) {
-    OpenLog(here + L"\\data", true, "elevated update");
-    const wstring tail = L"\\update\\staged";
-    if (staged.size() <= tail.size() || _wcsicmp(staged.c_str() + staged.size() - tail.size(), tail.c_str())) {
-        Out("[!] refusing staging folder %ls\n", staged.c_str()); return kExitError;
-    }
-    return SwapStaged(here, StripSlashes(staged), Narrow(tag)) ? kExitOk : kExitError;
-}
-
-// Swaps a staged update in (as administrator only when needed); the staging folder goes either way.
 static bool InstallStaged(const wstring& here, const std::string& tag) {
     const wstring staged = StageRoot(here) + L"\\staged";
-    const bool ok = SwapMaybeElevated(here, staged, tag);
+    const bool ok = SwapIfWritable(here, staged, tag);
     RemoveTree(staged);
     return ok;
 }
@@ -1356,31 +1347,10 @@ static void OfferToCleanLogs(const wstring& channelDir, ULONGLONG since) {
         else { ++failed; Out("[!] couldn't delete %ls (error %lu)\n", f.c_str(), GetLastError()); }
     }
     if (denied) {
-        // Issue #16: the game folder needs administrator rights. One UAC prompt; the elevated run
-        // works out this session's files again itself (DeleteSessionLogs), it isn't handed a list.
-        Out("[i] %d file%s need administrator rights to delete; Windows will ask once.\n", denied, denied == 1 ? "" : "s");
-        wchar_t self[MAX_PATH * 2]; GetModuleFileNameW(nullptr, self, ARRAYSIZE(self));
-        const wstring args = L"--delete-logs \"" + channelDir + L"\" " + std::to_wstring(since);
-        SHELLEXECUTEINFOW sei{}; sei.cbSize = sizeof(sei); sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-        sei.lpVerb = L"runas"; sei.lpFile = self; sei.lpParameters = args.c_str(); sei.nShow = SW_HIDE;
-        DWORD code = 1;
-        if (ShellExecuteExW(&sei) && sei.hProcess) {
-            WaitForSingleObject(sei.hProcess, 60000); GetExitCodeProcess(sei.hProcess, &code); CloseHandle(sei.hProcess);
-        }
-        const size_t left = SessionLogs(channelDir, since).size();
-        if (code == 0 && left == 0) gone += denied;
-        else { failed += (int)left; Out("[!] %zu file%s still there (administrator rights refused?)\n", left, left == 1 ? "" : "s"); }
+        Out("[!] %d file%s need administrator rights to delete; left in place\n", denied, denied == 1 ? "" : "s");
+        failed += denied;
     }
     Out("Logs:     deleted %d file%s%s\n", gone, gone == 1 ? "" : "s", failed ? "; see above for the rest" : "");
-}
-
-// --delete-logs <channel folder> <since>: the elevated half of OfferToCleanLogs. Only acts on a
-// real channel folder (Bin64\StarCitizen.exe inside) and only on this session's files there.
-static int DeleteSessionLogs(const wstring& channelDir, ULONGLONG since) {
-    if (!IsFile(channelDir + L"\\Bin64\\" + kGameExe) || since == 0) return 4;
-    int failed = 0;
-    for (const wstring& f : SessionLogs(channelDir, since)) if (!DeleteFileW(f.c_str())) ++failed;
-    return failed ? 3 : 0;
 }
 
 
@@ -1670,9 +1640,7 @@ static DllInfo Identify(const wstring& path) {
     if (!ReadAll(path, bytes) || bytes.empty()) return d;
     d.present = true;
     d.sha = Sha256(bytes);
-    // Ours: any sc-offline build (0.3.0+ says "sc-offline v<ver>"; earlier ones said
-    // "ChrisWareOffline ... / sc-offline <ver>"), or the original prebuilt DLL.
-    d.ours = bytes.find("ChrisWareOffline") != std::string::npos || bytes.find("sc-offline v") != std::string::npos;
+    d.ours = bytes.find("sc-offline v") != std::string::npos || bytes.find("/ sc-offline ") != std::string::npos;
     size_t v = bytes.find("sc-offline v"), skip = 12;
     if (v == std::string::npos) { v = bytes.find("/ sc-offline "); skip = 13; }
     if (v != std::string::npos) {
@@ -2161,6 +2129,16 @@ static int ApplyPcChanges(const PcWanted& w, const wstring& gameExe, bool dry) {
 
 static bool NeedsPcChanges(const PcWanted& w) { return !OnWine() && (w.firewall || w.eacHosts || w.eacRename); }
 
+static bool IsElevated() {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
+    TOKEN_ELEVATION e{};
+    DWORD n = 0;
+    const bool elevated = GetTokenInformation(token, TokenElevation, &e, sizeof(e), &n) && e.TokenIsElevated;
+    CloseHandle(token);
+    return elevated;
+}
+
 static wstring PcFlags(const PcWanted& w) {
     if (OnWine()) return L"-";
     wstring f;
@@ -2179,7 +2157,7 @@ static PcWanted ParsePcFlags(const wstring& f) {
 }
 
 // --helper <play|install|uninstall> <Bin64> <launcher pid> <event name> <pc flags>
-// The part that changes the game folder and the PC; runs elevated when either needs it.
+// The part that changes the game folder and the PC.
 // play: make the PC changes (pc flags: f firewall, h hosts, e EAC rename, - none), put the mod in,
 // signal the event, wait for the launcher and every StarCitizen.exe to exit, then take the mod
 // out and undo the PC changes. install: put in. uninstall: take out and undo leftover PC changes.
@@ -2212,43 +2190,21 @@ static int Helper(const wstring& op, const wstring& bin, DWORD parentPid, const 
     return taken ? taken : undone;
 }
 
-// Starts the helper: hidden and unelevated when the game folder is writable, otherwise elevated
-// (one UAC prompt). Returns its process handle, or null.
 static HANDLE StartHelper(const wchar_t* op, const GamePaths& g, const wstring& eventName, const PcWanted& pc) {
     wchar_t self[MAX_PATH * 2];
     GetModuleFileNameW(nullptr, self, ARRAYSIZE(self));
-    const wstring args = L"--helper " + wstring(op) + L" \"" + g.bin + L"\" " + std::to_wstring(GetCurrentProcessId()) +
-                         L" " + eventName + L" " + PcFlags(pc);
-    const bool isPlay = !_wcsicmp(op, L"play");
-    const bool pcChanges = (isPlay && NeedsPcChanges(pc)) ||
-                           ((isPlay || !_wcsicmp(op, L"uninstall")) && !PcChangesLeft().empty());
-    if (!pcChanges && CanWriteTo(g.bin) && CanWriteTo(ParentDir(g.bin))) {
-        wstring cmd = L"\"" + wstring(self) + L"\" " + args;
-        STARTUPINFOW si{};
-        si.cb = sizeof(si);
-        PROCESS_INFORMATION pi{};
-        if (!CreateProcessW(self, cmd.data(), nullptr, nullptr, FALSE,
-                            DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, nullptr, nullptr, &si, &pi))
-            return nullptr;
-        CloseHandle(pi.hThread);
-        return pi.hProcess;
-    }
-    if (pcChanges)
-        Out("[i] Windows will ask for administrator rights once: the helper blocks the game's network and\n"
-            "    turns Easy Anti-Cheat off while you play, and undoes both when the game closes.\n"
-            "    Only the helper runs as administrator, not the game.\n");
-    else
-        Out("[i] the game folder needs administrator rights for the mod; Windows will ask once.\n"
-            "    Only the copy/remove helper runs as administrator, not the game.\n");
-    SHELLEXECUTEINFOW sei{};
-    sei.cbSize = sizeof(sei);
-    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-    sei.lpVerb = L"runas";
-    sei.lpFile = self;
-    sei.lpParameters = args.c_str();
-    sei.nShow = SW_HIDE;
-    if (!ShellExecuteExW(&sei)) return nullptr;
-    return sei.hProcess;
+    if (!CanWriteTo(g.bin) || !CanWriteTo(ParentDir(g.bin)))
+        Out("[!] %ls can't be changed without administrator rights. Give your Windows user write access to the\n"
+            "    StarCitizen folder (Properties, Security), or move the game out of Program Files.\n", g.bin.c_str());
+    wstring cmd = L"\"" + wstring(self) + L"\" --helper " + op + L" \"" + g.bin + L"\" " + std::to_wstring(GetCurrentProcessId()) +
+                  L" " + eventName + L" " + PcFlags(pc);
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(self, cmd.data(), nullptr, nullptr, FALSE, DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, nullptr, nullptr, &si, &pi))
+        return nullptr;
+    CloseHandle(pi.hThread);
+    return pi.hProcess;
 }
 
 // Ctrl+C would kill only this window; the helper still cleans up, but say so instead of dying.
@@ -2310,8 +2266,9 @@ static CheckResult SelfChecks(const wstring& here, const Config& cfg, const Game
         DescribePcChanges(pcLeft);
         if (!GameRunning()) Out("    Run `sc-offline.exe uninstall` to undo them before going online.\n");
     }
-    if (!OnWine()) Out("Network:  %s\n", cfg.firewall ? "blocked for StarCitizen.exe, RSI Launcher.exe and CrashHandler.exe while you play (block_network)"
-                                                       : "NOT blocked (block_network = off)");
+    if (!OnWine()) Out("Network:  %s\n", !cfg.firewall ? "NOT blocked (block_network = off)"
+                                       : IsElevated() ? "blocked for StarCitizen.exe, RSI Launcher.exe and CrashHandler.exe while you play (block_network)"
+                                       : "NOT blocked (block_network needs administrator rights)");
 
     // 5. Easy Anti-Cheat.
     const Eac eac = EacState();
@@ -2325,10 +2282,10 @@ static CheckResult SelfChecks(const wstring& here, const Config& cfg, const Game
     } else if (eac == Eac::Active) {
         Out("[!] Easy Anti-Cheat is active; the mod can't run with it. In PowerShell as administrator:\n"
             "      ren \"C:\\Program Files (x86)\\EasyAntiCheat_EOS\\EasyAntiCheat_EOS.exe\" EasyAntiCheat_EOS.exe.bak\n"
-            "    and block modules-cdn.eac-prod.on.epicgames.com in your hosts file (README, Setup).\n");
+            "    and block modules-cdn.eac-prod.on.epicgames.com in your hosts file.\n");
     } else if (!OnWine() && !cfg.eacHosts && !HostsBlocksEac()) {
         Out("[i] add `127.0.0.1 modules-cdn.eac-prod.on.epicgames.com` to your hosts file so the RSI Launcher\n"
-            "    doesn't download Easy Anti-Cheat again (README, Setup).\n");
+            "    doesn't download Easy Anti-Cheat again.\n");
     }
     if (OnWine()) {
         wchar_t ov[512];
@@ -2339,97 +2296,146 @@ static CheckResult SelfChecks(const wstring& here, const Config& cfg, const Game
 }
 
 
-// --- Launcher window (issue #20) -----------------------------------------------------------
-// Double-clicking sc-offline.exe (no arguments, its own console) opens this window instead of the
-// console run. Every button runs `sc-offline.exe <command>` as a hidden child with SC_OFFLINE_GUI
-// set, so the window and the CLI share one code path: the child's output is streamed into the box,
-// and its [y/N] questions are answered by the Yes/No buttons through its stdin.
+enum { kMsgOutput = WM_APP + 1, kMsgDone };
 
-enum { kIdPlay = 101, kIdStatus, kIdUpdate, kIdInstall, kIdUninstall, kIdSettings, kIdLogs, kIdYes, kIdNo,
-       kIdOutput, kIdLight, kIdLightText, kIdPrompt, kIdDiscord };
-enum { kMsgOutput = WM_APP + 1, kMsgDone, kTimerLight = 1 };
+enum Action { kActNone, kActPlay, kActStatus, kActUpdate, kActRepo, kActSettings, kActLogs,
+              kActYes, kActNo, kActCopy, kActMinimize, kActClose };
+
+static const wchar_t* kRepoUrl = L"https://github.com/scubamount/sc-offline";
+
+enum Icon { kIcoPlay, kIcoInstall, kIcoStatus, kIcoUpdate, kIcoHome, kIcoOutput, kIcoSettings, kIcoFolder,
+            kIcoPad, kIcoShield, kIcoBolt, kIcoCheck, kIcoMark };
+
+struct GuiCommand { const char* label; const wchar_t* cmd; Action act; Icon icon; };
+static const GuiCommand kGuiCommands[] = {
+    { "Play", L"play", kActPlay, kIcoPlay },
+    { "Install", nullptr, kActRepo, kIcoInstall },
+    { "Status", L"status", kActStatus, kIcoStatus },
+    { "Update", L"update", kActUpdate, kIcoUpdate },
+};
+static const int kGuiCommandCount = int(ARRAYSIZE(kGuiCommands));
+
+static const ImU32 kUiBg          = IM_COL32(21, 21, 23, 255);
+static const ImU32 kUiSide        = IM_COL32(17, 17, 19, 255);
+static const ImU32 kUiCard        = IM_COL32(27, 27, 30, 255);
+static const ImU32 kUiRow         = IM_COL32(36, 36, 40, 255);
+static const ImU32 kUiRowHover    = IM_COL32(46, 46, 51, 255);
+static const ImU32 kUiLine        = IM_COL32(40, 40, 44, 255);
+static const ImU32 kUiText        = IM_COL32(236, 236, 240, 255);
+static const ImU32 kUiTextBody    = IM_COL32(190, 192, 198, 255);
+static const ImU32 kUiTextDim     = IM_COL32(118, 118, 126, 255);
+static const ImU32 kUiTextFaint   = IM_COL32(74, 74, 82, 255);
+static const ImU32 kUiBlue        = IM_COL32(96, 136, 236, 255);
+static const ImU32 kUiAction      = IM_COL32(24, 40, 82, 255);
+static const ImU32 kUiActionHover = IM_COL32(32, 54, 108, 255);
+static const ImU32 kUiActionText  = IM_COL32(128, 164, 255, 255);
+static const ImU32 kUiBannerFrom  = IM_COL32(30, 50, 106, 255);
+static const ImU32 kUiBannerTo    = IM_COL32(31, 32, 37, 255);
+static const ImU32 kUiGreen       = IM_COL32(46, 196, 118, 255);
+static const ImU32 kUiRed         = IM_COL32(196, 52, 52, 255);
+static const ImU32 kUiWarn        = IM_COL32(255, 132, 104, 255);
+
+static const float kUiW = 720, kUiH = 328, kUiSideW = 72, kUiTop = 46, kUiPad = 18, kUiGap = 14;
+static const double kIntroSpin = 0.9, kIntroGrow = 0.42, kIntroFade = 0.3;
 
 struct Gui {
-    HWND wnd = nullptr, out = nullptr, light = nullptr, lightText = nullptr, prompt = nullptr, yes = nullptr, no = nullptr;
-    HWND buttons[5] = {};
+    HWND wnd = nullptr;
     HANDLE child = nullptr, childIn = nullptr;
-    std::wstring tail;           // the end of the output, to spot a [y/N] question
-    std::wstring running;        // command being run, "" when idle
-    int state = 0;               // 0 grey (unknown / game running), 1 green, 2 red
-    bool hasLeftovers = false;
-    HFONT font = nullptr, mono = nullptr, mark = nullptr;
-    HBRUSH brushes[3] = {};
+    std::wstring tail;
+    std::wstring running;
+    bool hasLeftovers = false, gameUp = false, modIn = false;
+    std::string lightTitle;
+    std::string log;
+    std::vector<size_t> lines{ 0 };
+    bool newOutput = false;
+    bool jumpToEnd = false;
+    std::string question;
+    Action action = kActNone;
+    int sel = 0;
+    int page = 0;
+    double contentSince = 0, introStart = 0, pageSince = 0;
+    bool introDone = false, animating = false, focused = true, inFrame = false, sizing = false, occluded = false, dwmBorder = false;
+    RECT splash{}, full{};
+    LONG fullW = 0, fullH = 0;
+    float dpi = 1.0f, controlsX = 0;
+    ULONGLONG lastRefresh = 0;
+    ID3D11Device* dev = nullptr;
+    ID3D11DeviceContext* ctx = nullptr;
+    IDXGISwapChain* swap = nullptr;
+    ID3D11RenderTargetView* rtv = nullptr;
+    UINT resizeW = 0, resizeH = 0;
+    ImFont* font = nullptr;
+    ImFont* bold = nullptr;
+    ImFont* mono = nullptr;
     wstring here;
 };
 static Gui g_gui;
 
-// What the light shows. Uses only cheap facts (no drive search): the game folder from
-// sc-offline.ini or the one remembered from the last run.
+static double Seconds() {
+    static LARGE_INTEGER f{};
+    if (!f.QuadPart) QueryPerformanceFrequency(&f);
+    LARGE_INTEGER c; QueryPerformanceCounter(&c);
+    return double(c.QuadPart) / double(f.QuadPart);
+}
+
 static void RefreshLight() {
     Gui& g = g_gui;
+    g.lastRefresh = GetTickCount64();
     Config cfg;
     { FILE* saved = g_log; g_log = nullptr; ReadConfig(g.here + L"\\sc-offline.ini", cfg); g_log = saved; }
     wstring bin = cfg.game.empty() ? L"" : ToBin64(cfg.game, cfg.channel);
     if (bin.empty()) { std::vector<Found> f; FromRemembered(g.here, cfg.channel, f); if (!f.empty()) bin = f.front().bin; }
-    std::wstring text;
-    std::vector<std::wstring> left;
+    g.modIn = false;
     if (!bin.empty()) {
         const GamePaths p(bin);
         const DllInfo d = Identify(p.dll);
-        if (IsFile(p.marker) || (d.present && d.ours)) left.push_back(L"the mod is still in Bin64");
+        g.modIn = IsFile(p.marker) || (d.present && d.ours);
     }
     const std::string pc = PcChangesLeft();
-    if (!pc.empty()) {
-        for (const FwRule& r : kFwRules) if (Field(pc, r.key) == "added") left.push_back(std::wstring(L"firewall rule \"") + r.name + L"\"");
-        if (Field(pc, "hosts") == "added") left.push_back(L"the EAC line in the hosts file");
-        if (Field(pc, "eac") == "renamed") left.push_back(L"EasyAntiCheat_EOS.exe renamed to .bak");
-    }
-    g.hasLeftovers = !left.empty();
-    const bool gameUp = GameRunning();
-    if (gameUp) {
-        g.state = 2; text = L"NOT safe to go online: Star Citizen is running. When it closes, sc-offline takes the mod out and undoes its PC changes.";
-    } else if (!left.empty()) {
-        g.state = 2; text = L"NOT safe to go online yet. Click Uninstall to undo: ";
-        for (size_t i = 0; i < left.size(); ++i) text += (i ? L"; " : L"") + left[i];
-    } else if (bin.empty()) {
-        g.state = 0; text = L"Game folder not known yet. Click Status or Play to find it. No PC changes are left over.";
-    } else {
-        g.state = 1; text = L"Safe to go online: the mod is out of the game folder and no PC changes are left.";
-    }
-    SetWindowTextW(g.lightText, text.c_str());
-    InvalidateRect(g.light, nullptr, TRUE);
-    const bool idle = g.running.empty();
-    for (int i = 0; i < 5; ++i) {
-        bool on = idle && !gameUp;
-        if (i == 4) on = on && g.hasLeftovers;   // Uninstall: only with something to undo
-        if (i == 1) on = idle;                   // Status: always, it changes nothing
-        EnableWindow(g.buttons[i], on);
-    }
+    bool pcLeft = false;
+    for (const FwRule& r : kFwRules) pcLeft = pcLeft || Field(pc, r.key) == "added";
+    pcLeft = pcLeft || Field(pc, "hosts") == "added" || Field(pc, "eac") == "renamed";
+    g.hasLeftovers = g.modIn || pcLeft;
+    g.gameUp = GameRunning();
+    g.lightTitle = g.gameUp ? "Not safe to go online" : g.hasLeftovers ? "Not safe to go online yet"
+                 : bin.empty() ? "Game folder not known yet" : "Safe to go online";
+}
+
+static void IndexLines() {
+    Gui& g = g_gui;
+    g.lines.assign(1, 0);
+    for (size_t i = 0; i < g.log.size(); ++i) if (g.log[i] == '\n') g.lines.push_back(i + 1);
+}
+
+static void ClearOutput() {
+    Gui& g = g_gui;
+    g.log.clear(); g.lines.assign(1, 0); g.tail.clear(); g.question.clear();
 }
 
 static void AppendOutput(const std::wstring& w) {
     Gui& g = g_gui;
-    std::wstring t;
-    for (wchar_t c : w) { if (c == L'\r') continue; if (c == L'\n') t += L"\r\n"; else t += c; }
-    const int len = GetWindowTextLengthW(g.out);
-    if (len > 400000) { SendMessageW(g.out, EM_SETSEL, 0, 100000); SendMessageW(g.out, EM_REPLACESEL, FALSE, (LPARAM)L""); }
-    const int end = GetWindowTextLengthW(g.out);
-    SendMessageW(g.out, EM_SETSEL, end, end);
-    SendMessageW(g.out, EM_REPLACESEL, FALSE, (LPARAM)t.c_str());
-    SendMessageW(g.out, EM_SCROLLCARET, 0, 0);
+    std::string t = Narrow(w);
+    t.erase(std::remove(t.begin(), t.end(), '\r'), t.end());
+    if (g.log.size() + t.size() > 150000) {
+        const size_t cut = g.log.find('\n', 50000);
+        g.log.erase(0, cut == std::string::npos ? g.log.size() : cut + 1);
+        IndexLines();
+    }
+    const size_t from = g.log.size();
+    g.log += t;
+    for (size_t i = from; i < g.log.size(); ++i) if (g.log[i] == '\n') g.lines.push_back(i + 1);
+    g.newOutput = true;
     g.tail += w;
     if (g.tail.size() > 600) g.tail.erase(0, g.tail.size() - 600);
-    // A question is the last line, ending in "[y/N] " with no newline after it.
     const size_t q = g.tail.rfind(L"[y/N] ");
-    const bool asking = q != std::wstring::npos && q + 6 == g.tail.size();
-    if (asking) {
+    if (q != std::wstring::npos && q + 6 == g.tail.size()) {
         const size_t nl = g.tail.find_last_of(L'\n', q);
-        SetWindowTextW(g.prompt, g.tail.substr(nl == std::wstring::npos ? 0 : nl + 1, q - (nl == std::wstring::npos ? 0 : nl + 1)).c_str());
+        const size_t start = nl == std::wstring::npos ? 0 : nl + 1;
+        g.question = Narrow(g.tail.substr(start, q - start));
+        while (!g.question.empty() && g.question.back() == ' ') g.question.pop_back();
+    } else {
+        g.question.clear();
     }
-    ShowWindow(g.prompt, asking ? SW_SHOW : SW_HIDE);
-    ShowWindow(g.yes, asking ? SW_SHOW : SW_HIDE);
-    ShowWindow(g.no, asking ? SW_SHOW : SW_HIDE);
-    if (asking) SetFocus(g.no);
 }
 
 struct ReaderArgs { HANDLE pipe, proc; HWND wnd; };
@@ -2438,7 +2444,6 @@ static DWORD WINAPI ReaderThread(void* p) {
     char buf[4096]; DWORD got = 0; std::string pending;
     while (ReadFile(a.pipe, buf, sizeof(buf), &got, nullptr) && got) {
         pending.append(buf, got);
-        // Hand over whole UTF-8 sequences only.
         size_t cut = pending.size();
         while (cut > 0 && cut > pending.size() - 4 && (pending[cut - 1] & 0xC0) == 0x80) --cut;
         if (cut > 0 && (unsigned char)pending[cut - 1] >= 0xC0) --cut;
@@ -2475,9 +2480,11 @@ static void RunCommand(const wchar_t* cmd) {
     CloseHandle(outW); CloseHandle(inR);
     if (!ok) { CloseHandle(outR); CloseHandle(inW); AppendOutput(L"[!] couldn't start sc-offline.exe " + wstring(cmd) + L"\n"); return; }
     CloseHandle(pi.hThread);
-    g.child = pi.hProcess; g.childIn = inW; g.running = cmd; g.tail.clear();
-    SetWindowTextW(g.out, L"");
+    g.child = pi.hProcess; g.childIn = inW; g.running = cmd;
+    ClearOutput();
     AppendOutput(L"> sc-offline.exe " + wstring(cmd) + L"\n");
+    if (!wcscmp(cmd, L"status") || !wcscmp(cmd, L"update")) { g.page = 1; g.pageSince = Seconds(); }
+    g.jumpToEnd = true;
     RefreshLight();
     HANDLE dup = nullptr;
     DuplicateHandle(GetCurrentProcess(), pi.hProcess, GetCurrentProcess(), &dup, SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, 0);
@@ -2492,121 +2499,539 @@ static void Answer(bool yes) {
     AppendOutput(yes ? L"y\n" : L"n\n");
 }
 
-static void Layout(HWND wnd) {
+static float Px(float v) { return v * g_gui.dpi; }
+static float Clamp01(float v) { return v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v; }
+static float EaseOut(float t) { t = Clamp01(t); return 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t); }
+
+static ImU32 Mix(ImU32 a, ImU32 b, float t) {
+    const ImVec4 x = ImGui::ColorConvertU32ToFloat4(a), y = ImGui::ColorConvertU32ToFloat4(b);
+    return ImGui::ColorConvertFloat4ToU32(ImVec4(x.x + (y.x - x.x) * t, x.y + (y.y - x.y) * t, x.z + (y.z - x.z) * t, x.w + (y.w - x.w) * t));
+}
+
+static ImU32 Col(ImU32 c, float alpha = 1.0f) { return ImGui::GetColorU32(c, alpha); }
+
+static float Anim(ImGuiID id, float target, float speed = 16.0f) {
+    float* v = ImGui::GetStateStorage()->GetFloatRef(id, target);
+    *v += (target - *v) * (1.0f - std::exp(-speed * ImGui::GetIO().DeltaTime));
+    if (std::fabs(target - *v) < 0.002f) *v = target; else g_gui.animating = true;
+    return *v;
+}
+
+static float Since(double since, double secs) {
+    const float t = Clamp01(float((Seconds() - since) / secs));
+    if (t < 1.0f) g_gui.animating = true;
+    return EaseOut(t);
+}
+
+struct UseFont {
+    explicit UseFont(ImFont* f, float size = 0.0f) { ImGui::PushFont(f, size); }
+    ~UseFont() { ImGui::PopFont(); }
+};
+
+static void Label(ImVec2 at, ImU32 col, const char* s, const char* end = nullptr) {
+    ImGui::GetWindowDrawList()->AddText(at, Col(col), s, end);
+}
+
+static void UiSpinner(ImVec2 c, float r, float thick, ImU32 col) {
+    const float t = float(ImGui::GetTime());
+    const float start = t * 6.0f, len = 3.14159265f * (0.3f + 1.2f * (0.5f + 0.5f * std::sin(t * 3.2f)));
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->PathArcTo(c, r, start, start + len, 40);
+    dl->PathStroke(Col(col), ImDrawFlags_None, thick);
+    if (g_gui.focused) g_gui.animating = true;
+}
+
+static ImU32 Fade(ImU32 c, float a) {
+    const ImU32 alpha = ImU32(float((c >> IM_COL32_A_SHIFT) & 0xFF) * a);
+    return (c & ~IM_COL32_A_MASK) | (alpha << IM_COL32_A_SHIFT);
+}
+
+static std::string Fit(std::string s, float width, bool fromLeft) {
+    if (ImGui::CalcTextSize(s.c_str()).x <= width) return s;
+    while (s.size() > 1 && ImGui::CalcTextSize((fromLeft ? "..." + s : s + "...").c_str()).x > width) {
+        if (fromLeft) { s.erase(0, 1); while (!s.empty() && (s[0] & 0xC0) == 0x80) s.erase(0, 1); }
+        else { char c; do { c = s.back(); s.pop_back(); } while (!s.empty() && (c & 0xC0) == 0x80); }
+    }
+    return fromLeft ? "..." + s : s + "...";
+}
+
+static void DrawIcon(Icon icon, ImVec2 c, float s, ImU32 col) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float t = Px(1.6f);
+    auto P = [&](float x, float y) { return ImVec2(c.x + x * s, c.y + y * s); };
+    auto line = [&](std::initializer_list<ImVec2> pts, bool closed = false) {
+        ImVec2 v[8]; int n = 0;
+        for (const ImVec2& p : pts) if (n < 8) v[n++] = p;
+        dl->AddPolyline(v, n, col, closed ? ImDrawFlags_Closed : ImDrawFlags_None, t);
+    };
+    switch (icon) {
+    case kIcoPlay: dl->AddTriangleFilled(P(-0.55f, -0.8f), P(0.8f, 0.0f), P(-0.55f, 0.8f), col); break;
+    case kIcoInstall:
+        line({ P(0, -0.9f), P(0, 0.3f) });
+        line({ P(-0.45f, -0.15f), P(0, 0.3f), P(0.45f, -0.15f) });
+        line({ P(-0.9f, 0.35f), P(-0.9f, 0.9f), P(0.9f, 0.9f), P(0.9f, 0.35f) });
+        break;
+    case kIcoStatus:
+        line({ P(-0.95f, 0.1f), P(-0.45f, 0.1f), P(-0.2f, -0.6f), P(0.15f, 0.7f), P(0.4f, 0.1f), P(0.95f, 0.1f) });
+        break;
+    case kIcoUpdate: {
+        const float r = 0.75f * s, a1 = 1.6f * IM_PI;
+        dl->PathArcTo(c, r, 0.1f * IM_PI, a1, 24);
+        dl->PathStroke(col, ImDrawFlags_None, t);
+        const ImVec2 e(c.x + r * std::cos(a1), c.y + r * std::sin(a1)), d(-std::sin(a1), std::cos(a1)), n(-d.y, d.x);
+        line({ e - d * (0.45f * s) + n * (0.4f * s), e, e - d * (0.45f * s) - n * (0.4f * s) });
+        break;
+    }
+    case kIcoHome:
+        line({ P(-0.9f, -0.05f), P(0, -0.85f), P(0.9f, -0.05f) });
+        line({ P(-0.62f, -0.3f), P(-0.62f, 0.85f), P(0.62f, 0.85f), P(0.62f, -0.3f) });
+        break;
+    case kIcoOutput:
+        dl->AddRect(P(-0.95f, -0.8f), P(0.95f, 0.8f), col, 0.25f * s, 0, t);
+        line({ P(-0.55f, -0.3f), P(-0.2f, 0.0f), P(-0.55f, 0.3f) });
+        line({ P(0.0f, 0.35f), P(0.5f, 0.35f) });
+        break;
+    case kIcoSettings:
+        for (int i = -1; i <= 1; ++i) {
+            const float y = 0.62f * float(i), k = i < 0 ? 0.35f : i == 0 ? -0.35f : 0.15f;
+            line({ P(-0.9f, y), P(0.9f, y) });
+            dl->AddCircleFilled(P(k, y), 0.24f * s, col, 12);
+        }
+        break;
+    case kIcoFolder:
+        line({ P(-0.95f, -0.75f), P(-0.3f, -0.75f), P(-0.1f, -0.5f), P(0.95f, -0.5f), P(0.95f, 0.8f), P(-0.95f, 0.8f) }, true);
+        break;
+    case kIcoPad:
+        dl->AddRect(P(-0.95f, -0.55f), P(0.95f, 0.6f), col, 0.5f * s, 0, t);
+        line({ P(-0.6f, 0.02f), P(-0.15f, 0.02f) });
+        line({ P(-0.375f, -0.21f), P(-0.375f, 0.25f) });
+        dl->AddCircleFilled(P(0.32f, -0.08f), 0.12f * s, col, 10);
+        dl->AddCircleFilled(P(0.58f, 0.15f), 0.12f * s, col, 10);
+        break;
+    case kIcoShield:
+        line({ P(0, -0.95f), P(0.8f, -0.6f), P(0.7f, 0.3f), P(0, 0.95f), P(-0.7f, 0.3f), P(-0.8f, -0.6f) }, true);
+        break;
+    case kIcoBolt:
+        dl->AddTriangleFilled(P(0.2f, -0.95f), P(0.1f, 0.15f), P(-0.65f, 0.15f), col);
+        dl->AddTriangleFilled(P(-0.1f, -0.15f), P(0.65f, -0.15f), P(-0.2f, 0.95f), col);
+        break;
+    case kIcoCheck: line({ P(-0.8f, 0.05f), P(-0.25f, 0.6f), P(0.85f, -0.55f) }); break;
+    case kIcoMark:
+        dl->AddCircle(c, 0.92f * s, col, 40, Px(2.2f));
+        dl->AddTriangleFilled(P(-0.28f, -0.45f), P(0.5f, 0.0f), P(-0.28f, 0.45f), col);
+        break;
+    }
+}
+
+static float UiCard(ImVec2 lo, ImVec2 hi, Icon icon, const char* title) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(lo, hi, Col(kUiCard), Px(10));
+    const float cy = lo.y + Px(22);
+    DrawIcon(icon, ImVec2(lo.x + Px(24), cy), Px(7), Col(kUiBlue));
+    {
+        UseFont f(g_gui.bold);
+        Label(ImVec2(lo.x + Px(42), cy - ImGui::GetFontSize() * 0.5f), kUiText, title);
+    }
+    dl->AddLine(ImVec2(lo.x + Px(14), lo.y + Px(44)), ImVec2(hi.x - Px(14), lo.y + Px(44)), Col(kUiLine), Px(1));
+    return lo.y + Px(44);
+}
+
+enum Look { kAction, kPlain, kQuiet };
+
+static bool UiButton(const char* label, ImVec2 pos, ImVec2 size, Look look, bool enabled = true, int icon = -1) {
+    ImGui::SetCursorScreenPos(pos);
+    const ImGuiID id = ImGui::GetID(label);
+    ImGui::BeginDisabled(!enabled);
+    const bool clicked = ImGui::InvisibleButton(label, size);
+    const bool hot = ImGui::IsItemHovered(), down = ImGui::IsItemActive();
+    ImGui::EndDisabled();
+    const float h = Anim(id, hot ? 1.0f : 0.0f), d = Anim(id + 1, down ? 1.0f : 0.0f, 24.0f);
+    const float a = 0.4f + 0.6f * Anim(id + 2, enabled ? 1.0f : 0.0f, 10.0f);
+    ImU32 bg = 0, fg = kUiText;
+    switch (look) {
+    case kAction: bg = Mix(kUiAction, kUiActionHover, h); fg = kUiActionText; break;
+    case kPlain:  bg = Mix(kUiRow, kUiRowHover, h); break;
+    default:      fg = Mix(kUiTextDim, kUiText, h); break;
+    }
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float in = d * Px(1);
+    if (look != kQuiet) dl->AddRectFilled(pos + ImVec2(in, in), pos + size - ImVec2(in, in), Col(Fade(bg, a)), Px(8));
+    const char* end = label;
+    while (*end && !(end[0] == '#' && end[1] == '#')) ++end;
+    UseFont f(g_gui.bold);
+    const ImVec2 ts = ImGui::CalcTextSize(label, end);
+    const float iw = icon >= 0 ? Px(20) : 0.0f;
+    const ImVec2 at(pos.x + (size.x - ts.x - iw) * 0.5f, pos.y + (size.y - ts.y) * 0.5f);
+    if (icon >= 0) DrawIcon(Icon(icon), ImVec2(at.x + Px(6), pos.y + size.y * 0.5f), Px(6), Col(Fade(fg, a)));
+    dl->AddText(ImVec2(at.x + iw, at.y), Col(Fade(fg, a)), label, end);
+    return clicked && enabled;
+}
+
+static bool UiRow(const GuiCommand& c, ImVec2 pos, ImVec2 size, bool picked, bool enabled) {
+    ImGui::SetCursorScreenPos(pos);
+    const ImGuiID id = ImGui::GetID(c.label);
+    const bool clicked = ImGui::InvisibleButton(c.label, size);
+    const float h = Anim(id, ImGui::IsItemHovered() ? 1.0f : 0.0f), on = Anim(id + 1, picked ? 1.0f : 0.0f);
+    const float a = enabled ? 1.0f : 0.45f;
+    DrawIcon(c.icon, ImVec2(pos.x + Px(22), pos.y + size.y * 0.5f), Px(7), Col(Fade(Mix(Mix(kUiTextFaint, kUiTextDim, h), kUiBlue, on), a)));
+    Label(ImVec2(pos.x + Px(44), pos.y + (size.y - ImGui::GetFontSize()) * 0.5f), Fade(Mix(Mix(kUiTextDim, kUiTextBody, h), kUiText, on), a), c.label);
+    return clicked;
+}
+
+static ImU32 LineColour(const char* b, const char* e) {
+    auto starts = [&](const char* p) { const size_t n = strlen(p); return size_t(e - b) >= n && !strncmp(b, p, n); };
+    if (starts("[!]") || starts("[finished")) return kUiWarn;
+    if (starts("[+]") || starts("[done]")) return kUiGreen;
+    if (starts("[i]") || starts("> ")) return kUiBlue;
+    return kUiTextBody;
+}
+
+static bool CommandEnabled(Action a) {
+    const Gui& g = g_gui;
+    const bool idle = g.running.empty();
+    if (a == kActRepo) return true;
+    if (a == kActStatus) return idle;
+    return idle && !g.gameUp;
+}
+
+static void ShowPage(int page) {
     Gui& g = g_gui;
-    RECT r; GetClientRect(wnd, &r);
-    const int W = r.right, H = r.bottom, m = 12, bh = 34;
-    MoveWindow(g.light, m, m, 18, 18, TRUE);
-    MoveWindow(g.lightText, m + 28, m - 2, W - 2 * m - 28 - 190, 40, TRUE);   // 190: the watermark
-    int x = m; const int y = m + 46;
-    const int widths[] = { 90, 80, 80, 80, 90 };
-    for (int i = 0; i < 5; ++i) { MoveWindow(g.buttons[i], x, y, widths[i], bh, TRUE); x += widths[i] + 6; }
-    MoveWindow(GetDlgItem(wnd, kIdDiscord), x + 12, y + 7, 170, 20, TRUE);
-    MoveWindow(GetDlgItem(wnd, kIdLogs), W - m - 100, y, 100, bh, TRUE);
-    MoveWindow(GetDlgItem(wnd, kIdSettings), W - m - 100 - 6 - 110, y, 110, bh, TRUE);
-    const int qy = H - m - bh;
-    MoveWindow(g.prompt, m, qy + 7, W - 2 * m - 190, 24, TRUE);
-    MoveWindow(g.yes, W - m - 180, qy, 85, bh, TRUE);
-    MoveWindow(g.no, W - m - 90, qy, 90, bh, TRUE);
-    MoveWindow(g.out, m, y + bh + 10, W - 2 * m, qy - (y + bh + 10) - 8, TRUE);
+    if (g.page == page) return;
+    g.page = page; g.pageSince = Seconds();
+    g.jumpToEnd = page == 1;
+}
+
+static float DrawQuestion(ImVec2 at, float width) {
+    Gui& g = g_gui;
+    {
+        UseFont f(g.bold);
+        Label(at, kUiText, Fit(g.question, width, false).c_str());
+        at.y += ImGui::GetFontSize() + Px(10);
+    }
+    const float bw = (width - Px(10)) * 0.5f, bh = Px(42);
+    if (UiButton("Yes", at, ImVec2(bw, bh), kAction, true, kIcoCheck)) g.action = kActYes;
+    if (UiButton("No", ImVec2(at.x + bw + Px(10), at.y), ImVec2(bw, bh), kPlain)) g.action = kActNo;
+    return at.y + bh;
+}
+
+static void DrawSidebar(float H) {
+    Gui& g = g_gui;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float w = Px(kUiSideW);
+    dl->AddRectFilled(ImVec2(0, 0), ImVec2(w, H), Col(kUiSide));
+    dl->AddLine(ImVec2(w, 0), ImVec2(w, H), Col(kUiLine), Px(1));
+    DrawIcon(kIcoMark, ImVec2(w * 0.5f, Px(38)), Px(13), Col(kUiBlue));
+    auto nav = [&](const char* id, Icon icon, float cy, bool active) {
+        const float s = Px(40);
+        const ImVec2 p(w * 0.5f - s * 0.5f, cy - s * 0.5f);
+        ImGui::SetCursorScreenPos(p);
+        const bool clicked = ImGui::InvisibleButton(id, ImVec2(s, s));
+        const ImGuiID key = ImGui::GetID(id);
+        const float h = Anim(key, ImGui::IsItemHovered() ? 1.0f : 0.0f), on = Anim(key + 1, active ? 1.0f : 0.0f);
+        dl->AddRectFilled(p, p + ImVec2(s, s), Col(kUiRow, (std::max)(on, h * 0.6f)), Px(10));
+        dl->AddRectFilled(ImVec2(0, cy - Px(10)), ImVec2(Px(3), cy + Px(10)), Col(kUiBlue, on), Px(2));
+        DrawIcon(icon, ImVec2(w * 0.5f, cy), Px(8), Col(Mix(Mix(kUiTextDim, kUiTextBody, h), kUiBlue, on)));
+        return clicked;
+    };
+    if (nav("##home", kIcoHome, H * 0.5f - Px(26), g.page == 0)) ShowPage(0);
+    if (nav("##output", kIcoOutput, H * 0.5f + Px(26), g.page == 1)) ShowPage(1);
+    if (nav("##settings", kIcoSettings, H - Px(84), false)) g.action = kActSettings;
+    if (nav("##logs", kIcoFolder, H - Px(38), false)) g.action = kActLogs;
+}
+
+static void DrawControls(float W) {
+    Gui& g = g_gui;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float s = Px(28), y = Px(9);
+    g.controlsX = W - Px(10) - 2 * s;
+    for (int i = 0; i < 2; ++i) {
+        const char* id = i ? "##close" : "##minimize";
+        const ImVec2 p(g.controlsX + i * s, y);
+        ImGui::SetCursorScreenPos(p);
+        if (ImGui::InvisibleButton(id, ImVec2(s, s))) g.action = i ? kActClose : kActMinimize;
+        const float h = Anim(ImGui::GetID(id), ImGui::IsItemHovered() ? 1.0f : 0.0f);
+        dl->AddRectFilled(p, p + ImVec2(s, s), Col(i ? kUiRed : kUiRow, h), Px(6));
+        const ImVec2 c = p + ImVec2(s, s) * 0.5f;
+        const ImU32 ic = Col(Mix(kUiTextBody, kUiText, h));
+        const float r = Px(5);
+        if (i) {
+            dl->AddLine(c - ImVec2(r, r), c + ImVec2(r, r), ic, Px(1.4f));
+            dl->AddLine(c + ImVec2(-r, r), c + ImVec2(r, -r), ic, Px(1.4f));
+        } else {
+            dl->AddLine(c - ImVec2(r, 0), c + ImVec2(r, 0), ic, Px(1.4f));
+        }
+    }
+}
+
+static void DrawHome(float x0, float y0, float x1) {
+    Gui& g = g_gui;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float gap = Px(kUiGap), lw = std::floor((x1 - x0 - gap) * 0.52f), rx = x0 + lw + gap;
+    const float bannerH = Px(64), sBot = y0 + Px(44) + Px(14) + bannerH + Px(14);
+    const float aTop = sBot + gap, aBot = aTop + Px(44) + Px(14) + Px(42) + Px(14);
+
+    const float y = UiCard(ImVec2(x0, y0), ImVec2(x0 + lw, aBot), kIcoPad, "Launcher") + Px(10);
+    const float rh = Px(42), step = Px(48), rowX = x0 + Px(12), rowW = lw - Px(24);
+    const float hy = Anim(ImGui::GetID("##pick"), y + float(g.sel) * step, 20.0f);
+    dl->AddRectFilled(ImVec2(rowX, hy), ImVec2(rowX + rowW, hy + rh), Col(kUiRow), Px(8));
+    for (int i = 0; i < kGuiCommandCount; ++i) {
+        const GuiCommand& c = kGuiCommands[i];
+        const bool on = CommandEnabled(c.act);
+        if (UiRow(c, ImVec2(rowX, y + float(i) * step), ImVec2(rowW, rh), g.sel == i, on)) g.sel = i;
+        if (on && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) g.action = c.act;
+    }
+
+    const float by = UiCard(ImVec2(rx, y0), ImVec2(x1, sBot), kIcoShield, "Status") + Px(14);
+    {
+        const ImVec2 lo(rx + Px(14), by), hi(x1 - Px(14), by + bannerH);
+        const int v0 = dl->VtxBuffer.Size;
+        dl->AddRectFilled(lo, hi, Col(IM_COL32_WHITE), Px(8));
+        ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, lo, ImVec2(hi.x, lo.y), kUiBannerFrom, kUiBannerTo);
+        DrawIcon(kIcoMark, ImVec2(hi.x - Px(36), (lo.y + hi.y) * 0.5f), Px(20), Col(kUiBlue, 0.22f));
+        const float fs = ImGui::GetFontSize();
+        { UseFont f(g.bold); Label(ImVec2(lo.x + Px(14), lo.y + Px(13)), kUiText, "Star Citizen"); }
+        Label(ImVec2(lo.x + Px(14), lo.y + Px(16) + fs), kUiTextBody, g.lightTitle.c_str());
+    }
+
+    const float bw = x1 - rx - Px(28);
+    std::string title = "Actions";
+    if (!g.question.empty()) { UseFont f(g.bold); title = Fit(g.question, bw - Px(28), false); }
+    const float ay = UiCard(ImVec2(rx, aTop), ImVec2(x1, aBot), kIcoBolt, title.c_str()) + Px(14);
+    if (!g.question.empty()) {
+        const float hw = (bw - Px(10)) * 0.5f;
+        if (UiButton("Yes", ImVec2(rx + Px(14), ay), ImVec2(hw, Px(42)), kAction, true, kIcoCheck)) g.action = kActYes;
+        if (UiButton("No", ImVec2(rx + Px(14) + hw + Px(10), ay), ImVec2(hw, Px(42)), kPlain)) g.action = kActNo;
+    } else if (!g.running.empty()) {
+        const std::string label = "Running " + Narrow(g.running) + "##act";
+        UiButton(label.c_str(), ImVec2(rx + Px(14), ay), ImVec2(bw, Px(42)), kAction, false);
+        UiSpinner(ImVec2(rx + Px(34), ay + Px(21)), Px(7), Px(2.0f), kUiActionText);
+    } else {
+        const GuiCommand& c = kGuiCommands[g.sel];
+        const std::string label = std::string(c.label) + "##act";
+        if (UiButton(label.c_str(), ImVec2(rx + Px(14), ay), ImVec2(bw, Px(42)), kAction, CommandEnabled(c.act), c.icon)) g.action = c.act;
+    }
+}
+
+static void DrawOutputPage(float x0, float y0, float x1, float y1) {
+    Gui& g = g_gui;
+    float y = UiCard(ImVec2(x0, y0), ImVec2(x1, y1), kIcoOutput, "Output") + Px(12);
+    const float cw = Px(56);
+    if (UiButton("Copy", ImVec2(x1 - Px(12) - cw, y0 + Px(9)), ImVec2(cw, Px(26)), kQuiet, !g.log.empty())) g.action = kActCopy;
+    if (!g.running.empty()) UiSpinner(ImVec2(x1 - Px(12) - cw - Px(10), y0 + Px(22)), Px(6), Px(1.8f), kUiBlue);
+    if (!g.question.empty()) y = DrawQuestion(ImVec2(x0 + Px(14), y), x1 - x0 - Px(28)) + Px(12);
+    ImGui::SetCursorScreenPos(ImVec2(x0 + Px(14), y));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Px(12), Px(10)));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::ColorConvertU32ToFloat4(kUiSide));
+    if (ImGui::BeginChild("##log", ImVec2(x1 - x0 - Px(28), (std::max)(y1 - Px(14) - y, Px(40))), ImGuiChildFlags_AlwaysUseWindowPadding)) {
+        UseFont f(g.mono, 13.0f);
+        const bool atEnd = ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.0f;
+        ImGui::PushTextWrapPos(0.0f);
+        for (size_t i = 0; i < g.lines.size(); ++i) {
+            const char* b = g.log.data() + g.lines[i];
+            const char* e = g.log.data() + (i + 1 < g.lines.size() ? g.lines[i + 1] - 1 : g.log.size());
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(LineColour(b, e)));
+            ImGui::TextUnformatted(b, e);
+            ImGui::PopStyleColor();
+        }
+        ImGui::PopTextWrapPos();
+        if ((g.newOutput && atEnd) || g.jumpToEnd) { ImGui::SetScrollHereY(1.0f); g.jumpToEnd = false; }
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+}
+
+static void DrawUi() {
+    Gui& g = g_gui;
+    const ImGuiIO& io = ImGui::GetIO();
+    const float W = io.DisplaySize.x, H = io.DisplaySize.y;
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGui::Begin("##sc-offline", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                 ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollWithMouse);
+
+    if (!g.introDone) g.animating = true;
+    const float t = float(Seconds() - g.introStart);
+    const float card = Clamp01(t / 0.15f) * (1.0f - Clamp01(float((t - kIntroSpin) / (kIntroGrow * 0.5))));
+    if (card > 0.0f) {
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, card);
+        UiSpinner(ImVec2(W * 0.5f, H * 0.5f), Px(13), Px(2.4f), kUiBlue);
+        ImGui::PopStyleVar();
+        g.animating = true;
+    }
+
+    const float show = g.introDone ? Since(g.contentSince, kIntroFade) : 0.0f;
+    if (show > 0.0f) {
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, show);
+        DrawSidebar(H);
+        DrawControls(W);
+        const float pf = Since(g.pageSince, 0.22);
+        const float slide = (1.0f - show) * Px(8) + (1.0f - pf) * Px(6);
+        const float x0 = Px(kUiSideW) + Px(20), x1 = W - Px(kUiPad), y0 = Px(kUiTop) + slide, y1 = H - Px(kUiPad) + slide;
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, show * pf);
+        if (g.page == 0) DrawHome(x0, y0, x1); else DrawOutputPage(x0, y0, x1, y1);
+        ImGui::PopStyleVar();
+        ImGui::PopStyleVar();
+    }
+    g.newOutput = false;
+    if (!g.question.empty() && g.action == kActNone) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Y, false)) g.action = kActYes;
+        else if (ImGui::IsKeyPressed(ImGuiKey_N, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) g.action = kActNo;
+    }
+
+    if (!g.dwmBorder) ImGui::GetForegroundDrawList()->AddRect(ImVec2(0, 0), ImVec2(W, H), kUiLine, 0, 0, 1.0f);
+    ImGui::End();
+}
+
+static void CreateTarget() {
+    Gui& g = g_gui;
+    ID3D11Texture2D* back = nullptr;
+    if (SUCCEEDED(g.swap->GetBuffer(0, IID_PPV_ARGS(&back))) && back) {
+        g.dev->CreateRenderTargetView(back, nullptr, &g.rtv);
+        back->Release();
+    }
+}
+
+static void DropTarget() {
+    Gui& g = g_gui;
+    if (g.rtv) { g.rtv->Release(); g.rtv = nullptr; }
+}
+
+static bool CreateDevice(HWND wnd) {
+    Gui& g = g_gui;
+    DXGI_SWAP_CHAIN_DESC sd{};
+    sd.BufferCount = 2;
+    sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    sd.BufferDesc.RefreshRate = { 60, 1 };
+    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    sd.OutputWindow = wnd;
+    sd.SampleDesc.Count = 1;
+    sd.Windowed = TRUE;
+    sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+    const D3D_FEATURE_LEVEL levels[] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0 };
+    D3D_FEATURE_LEVEL got;
+    HRESULT hr = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, levels, 2, D3D11_SDK_VERSION,
+                                               &sd, &g.swap, &g.dev, &got, &g.ctx);
+    if (FAILED(hr))
+        hr = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, levels, 2, D3D11_SDK_VERSION,
+                                           &sd, &g.swap, &g.dev, &got, &g.ctx);
+    if (FAILED(hr)) return false;
+    CreateTarget();
+    return g.rtv != nullptr;
+}
+
+static void DropDevice() {
+    Gui& g = g_gui;
+    DropTarget();
+    if (g.swap) { g.swap->Release(); g.swap = nullptr; }
+    if (g.ctx) { g.ctx->Release(); g.ctx = nullptr; }
+    if (g.dev) { g.dev->Release(); g.dev = nullptr; }
+}
+
+static void RenderFrame() {
+    Gui& g = g_gui;
+    if (g.inFrame || !g.swap) return;
+    g.inFrame = true;
+    if (!g.introDone) {
+        const double t = Seconds() - g.introStart;
+        if (t > kIntroSpin) {
+            const float k = EaseOut(float((t - kIntroSpin) / kIntroGrow));
+            auto mix = [k](LONG a, LONG b) { return int(a + (b - a) * k + 0.5f); };
+            SetWindowPos(g.wnd, nullptr, mix(g.splash.left, g.full.left), mix(g.splash.top, g.full.top),
+                         mix(g.splash.right - g.splash.left, g.full.right - g.full.left),
+                         mix(g.splash.bottom - g.splash.top, g.full.bottom - g.full.top), SWP_NOZORDER | SWP_NOACTIVATE);
+            if (k >= 1.0f) { g.introDone = true; g.contentSince = Seconds(); }
+        }
+    }
+    if (g.resizeW && g.resizeH) {
+        DropTarget();
+        g.swap->ResizeBuffers(0, g.resizeW, g.resizeH, DXGI_FORMAT_UNKNOWN, 0);
+        g.resizeW = g.resizeH = 0;
+        CreateTarget();
+    }
+    g.animating = false;
+    g.focused = GetForegroundWindow() == g.wnd;
+    ImGui_ImplDX11_NewFrame();
+    ImGui_ImplWin32_NewFrame();
+    ImGui::NewFrame();
+    DrawUi();
+    ImGui::Render();
+    const ImVec4 bg = ImGui::ColorConvertU32ToFloat4(kUiBg);
+    const float clear[4] = { bg.x, bg.y, bg.z, 1.0f };
+    g.ctx->OMSetRenderTargets(1, &g.rtv, nullptr);
+    g.ctx->ClearRenderTargetView(g.rtv, clear);
+    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+    g.occluded = g.swap->Present(1, 0) == DXGI_STATUS_OCCLUDED;
+    g.inFrame = false;
+}
+
+static void RunAction() {
+    Gui& g = g_gui;
+    const Action a = g.action;
+    g.action = kActNone;
+    for (const GuiCommand& c : kGuiCommands) if (c.act == a && c.cmd) { RunCommand(c.cmd); return; }
+    switch (a) {
+    case kActRepo: ShellExecuteW(g.wnd, L"open", kRepoUrl, nullptr, nullptr, SW_SHOWNORMAL); break;
+    case kActSettings: ShellExecuteW(g.wnd, L"open", L"notepad.exe", (L"\"" + g.here + L"\\sc-offline.ini\"").c_str(), nullptr, SW_SHOWNORMAL); break;
+    case kActLogs: {
+        const wstring d = g.here + L"\\data"; CreateDirectoryW(d.c_str(), nullptr);
+        ShellExecuteW(g.wnd, L"open", d.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        break;
+    }
+    case kActYes: Answer(true); break;
+    case kActNo: Answer(false); break;
+    case kActCopy: ImGui::SetClipboardText(g.log.c_str()); break;
+    case kActMinimize: ShowWindow(g.wnd, SW_MINIMIZE); break;
+    case kActClose: PostMessageW(g.wnd, WM_CLOSE, 0, 0); break;
+    default: break;
+    }
 }
 
 static LRESULT CALLBACK GuiProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     Gui& g = g_gui;
+    if (ImGui_ImplWin32_WndProcHandler(wnd, msg, wp, lp)) return 1;
     switch (msg) {
-    case WM_CREATE: {
-        g.wnd = wnd;
-        auto mk = [&](const wchar_t* cls, const wchar_t* text, DWORD style, int id) {
-            HWND h = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style, 0, 0, 10, 10, wnd, (HMENU)(INT_PTR)id, nullptr, nullptr);
-            SendMessageW(h, WM_SETFONT, (WPARAM)g.font, TRUE);
-            return h;
-        };
-        g.light = mk(L"STATIC", L"", SS_NOTIFY, kIdLight);
-        g.lightText = mk(L"STATIC", L"", 0, kIdLightText);
-        const wchar_t* names[] = { L"Play", L"Status", L"Update", L"Install", L"Uninstall" };
-        for (int i = 0; i < 5; ++i) g.buttons[i] = mk(L"BUTTON", names[i], BS_PUSHBUTTON | WS_TABSTOP, kIdPlay + i);
-        SendMessageW(g.buttons[0], BM_SETSTYLE, BS_DEFPUSHBUTTON, TRUE);
-        mk(L"BUTTON", L"Open settings", BS_PUSHBUTTON | WS_TABSTOP, kIdSettings);
-        mk(L"BUTTON", L"Open logs", BS_PUSHBUTTON | WS_TABSTOP, kIdLogs);
-        {   // Discord status toggle: writes discord_presence to sc-offline.ini; the next Play uses it.
-            Config cfg;
-            FILE* saved = g_log; g_log = nullptr; ReadConfig(g.here + L"\\sc-offline.ini", cfg); g_log = saved;
-            HWND cb = mk(L"BUTTON", L"Show on Discord", BS_AUTOCHECKBOX | WS_TABSTOP, kIdDiscord);
-            SendMessageW(cb, BM_SETCHECK, cfg.discordPresence ? BST_CHECKED : BST_UNCHECKED, 0);
-        }
-        g.out = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
-                                0, 0, 10, 10, wnd, (HMENU)(INT_PTR)kIdOutput, nullptr, nullptr);
-        SendMessageW(g.out, WM_SETFONT, (WPARAM)g.mono, TRUE);
-        SendMessageW(g.out, EM_SETLIMITTEXT, 0, 0);
-        g.prompt = mk(L"STATIC", L"", 0, kIdPrompt);
-        g.yes = mk(L"BUTTON", L"Yes", BS_PUSHBUTTON | WS_TABSTOP, kIdYes);
-        g.no = mk(L"BUTTON", L"No", BS_PUSHBUTTON | WS_TABSTOP, kIdNo);
-        ShowWindow(g.prompt, SW_HIDE); ShowWindow(g.yes, SW_HIDE); ShowWindow(g.no, SW_HIDE);
-        SetWindowTextW(g.out, (L"sc-offline " + Wide(SCO_VERSION) + L" - Star Citizen offline mod\r\n\r\n"
-            L"Play       add the mod, start the game, take the mod out when it closes\r\n"
-            L"Status     check the setup; changes nothing\r\n"
-            L"Update     check GitHub for a newer sc-offline\r\n"
-            L"Install    add the mod and leave it (Uninstall before going online)\r\n"
-            L"Uninstall  take the mod out and undo the PC changes\r\n\r\n"
-            L"The light above tells you whether it is safe to go back online.\r\n").c_str());
-        SetTimer(wnd, kTimerLight, 1500, nullptr);
-        RefreshLight();
-        return 0;
-    }
-    case WM_SIZE: Layout(wnd); InvalidateRect(wnd, nullptr, TRUE); return 0;
-    case WM_PAINT: {
-        // SCUBAMOUNT watermark, top right, in a grey just darker than the background.
-        PAINTSTRUCT ps; HDC dc = BeginPaint(wnd, &ps);
-        if (!g.mark) g.mark = CreateFontW(-26, 0, 0, 0, FW_HEAVY, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, VARIABLE_PITCH | FF_SWISS, L"Segoe UI");
-        RECT r; GetClientRect(wnd, &r); r.right -= 12; r.top = 6; r.bottom = 44;
-        HGDIOBJ old = SelectObject(dc, g.mark);
-        SetBkMode(dc, TRANSPARENT);
-        const COLORREF bg = GetSysColor(COLOR_BTNFACE);
-        SetTextColor(dc, RGB(GetRValue(bg) * 4 / 5, GetGValue(bg) * 4 / 5, GetBValue(bg) * 4 / 5));
-        DrawTextW(dc, L"SCUBAMOUNT", -1, &r, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-        SelectObject(dc, old);
-        EndPaint(wnd, &ps);
-        return 0;
-    }
-    case WM_GETMINMAXINFO: ((MINMAXINFO*)lp)->ptMinTrackSize = { 900, 460 }; return 0;
-    // Refresh during a command too (issue #22): `play` runs for the whole session, and the light must
-    // turn as soon as the mod is copied in and the game starts, not only when play returns.
-    case WM_TIMER: RefreshLight(); return 0;
-    case WM_CTLCOLORSTATIC:
-        if ((HWND)lp == g.light) {
-            static const COLORREF c[3] = { RGB(150, 150, 150), RGB(40, 170, 70), RGB(210, 50, 50) };
-            if (!g.brushes[0]) for (int i = 0; i < 3; ++i) g.brushes[i] = CreateSolidBrush(c[i]);
-            return (LRESULT)g.brushes[g.state];
-        }
-        break;
-    case WM_COMMAND:
-        switch (LOWORD(wp)) {
-        case kIdPlay: RunCommand(L"play"); return 0;
-        case kIdStatus: RunCommand(L"status"); return 0;
-        case kIdUpdate: RunCommand(L"update"); return 0;
-        case kIdInstall: RunCommand(L"install"); return 0;
-        case kIdUninstall: RunCommand(L"uninstall"); return 0;
-        case kIdYes: Answer(true); return 0;
-        case kIdNo: Answer(false); return 0;
-        case kIdSettings: ShellExecuteW(wnd, L"open", L"notepad.exe", (L"\"" + g.here + L"\\sc-offline.ini\"").c_str(), nullptr, SW_SHOWNORMAL); return 0;
-        case kIdDiscord: {
-            const bool on = SendMessageW(GetDlgItem(wnd, kIdDiscord), BM_GETCHECK, 0, 0) == BST_CHECKED;
-            if (SetIniValue(g.here + L"\\sc-offline.ini", "discord_presence", on ? "on" : "off"))
-                AppendOutput(on ? L"\nDiscord status on: your profile shows \"Playing sc-offline\" from the next Play.\n"
-                                : L"\nDiscord status off: from the next Play, nothing is shown on Discord.\n");
-            else AppendOutput(L"\n[!] couldn't write sc-offline.ini; set discord_presence there by hand.\n");
+    case WM_NCCALCSIZE:
+        if (wp) {
+            if (IsZoomed(wnd)) {
+                RECT& r = reinterpret_cast<NCCALCSIZE_PARAMS*>(lp)->rgrc[0];
+                const int fx = GetSystemMetrics(SM_CXFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+                const int fy = GetSystemMetrics(SM_CYFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+                r.left += fx; r.right -= fx; r.top += fy; r.bottom -= fy;
+            }
             return 0;
         }
-        case kIdLogs: { const wstring d = g.here + L"\\data"; CreateDirectoryW(d.c_str(), nullptr);
-                        ShellExecuteW(wnd, L"open", d.c_str(), nullptr, nullptr, SW_SHOWNORMAL); return 0; }
+        break;
+    case WM_NCHITTEST: {
+        POINT p{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        ScreenToClient(wnd, &p);
+        if (g.introDone && p.x > LONG(Px(kUiSideW)) && p.y < LONG(Px(kUiTop)) && p.x < LONG(g.controlsX)) return HTCAPTION;
+        return HTCLIENT;
+    }
+    case WM_GETMINMAXINFO:
+        if (g.introDone) {
+            MINMAXINFO* m = reinterpret_cast<MINMAXINFO*>(lp);
+            m->ptMinTrackSize = m->ptMaxTrackSize = { g.fullW, g.fullH };
         }
+        return 0;
+    case WM_SIZE:
+        if (wp != SIZE_MINIMIZED) { g.resizeW = LOWORD(lp); g.resizeH = HIWORD(lp); }
+        return 0;
+    case WM_ENTERSIZEMOVE: g.sizing = true; return 0;
+    case WM_EXITSIZEMOVE: g.sizing = false; return 0;
+    case WM_PAINT:
+        ValidateRect(wnd, nullptr);
+        if (g.sizing) RenderFrame();
+        return 0;
+    case WM_SYSCOMMAND:
+        if ((wp & 0xfff0) == SC_KEYMENU) return 0;
         break;
     case kMsgOutput: { std::wstring* w = (std::wstring*)lp; AppendOutput(*w); delete w; return 0; }
     case kMsgDone: {
         const DWORD code = (DWORD)wp;
         if (g.child) { CloseHandle(g.child); g.child = nullptr; }
         if (g.childIn) { CloseHandle(g.childIn); g.childIn = nullptr; }
-        ShowWindow(g.prompt, SW_HIDE); ShowWindow(g.yes, SW_HIDE); ShowWindow(g.no, SW_HIDE);
+        g.question.clear();
         g.running.clear();
         if (code == kExitRestart) {
             wchar_t self[MAX_PATH * 2]; GetModuleFileNameW(nullptr, self, ARRAYSIZE(self));
@@ -2631,29 +3056,136 @@ static LRESULT CALLBACK GuiProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(wnd, msg, wp, lp);
 }
 
+static void LoadFonts() {
+    Gui& g = g_gui;
+    ImGuiIO& io = ImGui::GetIO();
+    const wstring dir = EnvOr(L"WINDIR", L"C:\\Windows") + L"\\Fonts\\";
+    auto load = [&](const wchar_t* file) -> ImFont* {
+        const wstring p = dir + file;
+        return IsFile(p) ? io.Fonts->AddFontFromFileTTF(Narrow(p).c_str(), 15.0f) : nullptr;
+    };
+    g.font = load(L"segoeui.ttf");
+    g.bold = load(L"seguisb.ttf");
+    if (!g.bold) g.bold = load(L"segoeuib.ttf");
+    g.mono = load(L"consola.ttf");
+    ImFont* fallback = (!g.font || !g.bold || !g.mono) ? io.Fonts->AddFontDefault() : nullptr;
+    if (!g.font) g.font = fallback;
+    if (!g.bold) g.bold = g.font;
+    if (!g.mono) g.mono = fallback;
+    io.FontDefault = g.font;
+}
+
+static void StyleUi() {
+    ImGuiStyle& s = ImGui::GetStyle();
+    s.WindowPadding = ImVec2(0, 0);
+    s.WindowBorderSize = 0;
+    s.WindowRounding = 0;
+    s.ChildRounding = 8;
+    s.ChildBorderSize = 0;
+    s.ScrollbarSize = 6;
+    s.ScrollbarRounding = 3;
+    s.ItemSpacing = ImVec2(8, 3);
+    s.DisabledAlpha = 1.0f;
+    s.ScaleAllSizes(g_gui.dpi);
+    s.FontSizeBase = 15.0f;
+    s.FontScaleDpi = g_gui.dpi;
+    ImVec4* c = s.Colors;
+    auto v = [](ImU32 x) { return ImGui::ColorConvertU32ToFloat4(x); };
+    c[ImGuiCol_Text] = v(kUiText);
+    c[ImGuiCol_TextDisabled] = v(kUiTextDim);
+    c[ImGuiCol_WindowBg] = v(kUiBg);
+    c[ImGuiCol_ChildBg] = v(kUiSide);
+    c[ImGuiCol_Border] = v(kUiLine);
+    c[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0);
+    c[ImGuiCol_ScrollbarGrab] = v(kUiRow);
+    c[ImGuiCol_ScrollbarGrabHovered] = v(kUiRowHover);
+    c[ImGuiCol_ScrollbarGrabActive] = v(kUiAction);
+    c[ImGuiCol_TextSelectedBg] = v(IM_COL32(24, 40, 82, 160));
+}
+
 static int RunGui() {
-    g_gui.here = ExeDir();
-    INITCOMMONCONTROLSEX icc{ sizeof(icc), ICC_STANDARD_CLASSES };
-    InitCommonControlsEx(&icc);
-    NONCLIENTMETRICSW ncm{}; ncm.cbSize = sizeof(ncm);
-    SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
-    g_gui.font = CreateFontIndirectW(&ncm.lfMessageFont);
-    g_gui.mono = CreateFontW(-14, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, FIXED_PITCH, L"Consolas");
+    Gui& g = g_gui;
+    g.here = ExeDir();
+    ImGui_ImplWin32_EnableDpiAwareness();
+    RefreshLight();
+
+    POINT cur{}; GetCursorPos(&cur);
+    const HMONITOR mon = MonitorFromPoint(cur, MONITOR_DEFAULTTOPRIMARY);
+    MONITORINFO mi{}; mi.cbSize = sizeof(mi);
+    GetMonitorInfoW(mon, &mi);
+    g.dpi = ImGui_ImplWin32_GetDpiScaleForMonitor(mon);
+    const RECT& wa = mi.rcWork;
+    const int cx = (wa.left + wa.right) / 2, cy = (wa.top + wa.bottom) / 2;
+    const int fw = std::min<int>(int(Px(kUiW)), wa.right - wa.left - 40), fh = std::min<int>(int(Px(kUiH)), wa.bottom - wa.top - 40);
+    const int sw = int(Px(280)), sh = int(Px(190));
+    g.full = { cx - fw / 2, cy - fh / 2, cx - fw / 2 + fw, cy - fh / 2 + fh };
+    g.splash = { cx - sw / 2, cy - sh / 2, cx - sw / 2 + sw, cy - sh / 2 + sh };
+    g.fullW = fw; g.fullH = fh;
+
     WNDCLASSW wc{};
     wc.lpfnWndProc = GuiProc; wc.hInstance = GetModuleHandleW(nullptr); wc.lpszClassName = L"sc-offline";
-    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW); wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW); wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
     wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
     RegisterClassW(&wc);
     const wstring title = L"sc-offline " + Wide(SCO_VERSION) + L" - Star Citizen offline mod";
-    HWND wnd = CreateWindowExW(0, L"sc-offline", title.c_str(), WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1160, 640,
-                               nullptr, nullptr, wc.hInstance, nullptr);
+    HWND wnd = CreateWindowExW(0, L"sc-offline", title.c_str(), WS_POPUP | WS_THICKFRAME | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+                               g.splash.left, g.splash.top, sw, sh, nullptr, nullptr, wc.hInstance, nullptr);
     if (!wnd) return kExitError;
-    ShowWindow(wnd, SW_SHOWNORMAL);
-    MSG m;
-    while (GetMessageW(&m, nullptr, 0, 0) > 0) {
-        if (IsDialogMessageW(wnd, &m)) continue;
-        TranslateMessage(&m); DispatchMessageW(&m);
+    g.wnd = wnd;
+    const BOOL dark = TRUE;
+    DwmSetWindowAttribute(wnd, 20, &dark, sizeof(dark));
+    const int round = 2;
+    DwmSetWindowAttribute(wnd, 33, &round, sizeof(round));
+    const COLORREF edge = RGB(40, 40, 44);
+    g.dwmBorder = SUCCEEDED(DwmSetWindowAttribute(wnd, 34, &edge, sizeof(edge)));
+    const MARGINS shadow{ 1, 1, 1, 1 };
+    DwmExtendFrameIntoClientArea(wnd, &shadow);
+    SetWindowPos(wnd, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+    if (!CreateDevice(wnd)) {
+        DropDevice();
+        DestroyWindow(wnd);
+        MessageBoxW(nullptr, L"sc-offline couldn't open its window (Direct3D 11 isn't available).\n\n"
+                             L"Run it from a terminal instead, for example: sc-offline.exe play", L"sc-offline", MB_ICONERROR);
+        return kExitError;
     }
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.LogFilename = nullptr;
+    LoadFonts();
+    StyleUi();
+    ImGui_ImplWin32_Init(wnd);
+    ImGui_ImplDX11_Init(g.dev, g.ctx);
+
+    g.introStart = Seconds();
+    RenderFrame();
+    ShowWindow(wnd, SW_SHOWNORMAL);
+    g.introStart = Seconds();
+
+    bool quit = false;
+    while (!quit) {
+        DWORD wait = 0;
+        if (IsIconic(wnd) || g.occluded) wait = 250;
+        else if (!g.animating) wait = 500;
+        else if (!g.focused) wait = 66;
+        if (wait) MsgWaitForMultipleObjectsEx(0, nullptr, wait, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        MSG m;
+        while (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {
+            if (m.message == WM_QUIT) quit = true;
+            TranslateMessage(&m);
+            DispatchMessageW(&m);
+        }
+        if (quit) break;
+        if (GetTickCount64() - g.lastRefresh >= 1500) RefreshLight();
+        if (!IsIconic(wnd)) RenderFrame();
+        RunAction();
+    }
+    ImGui_ImplDX11_Shutdown();
+    ImGui_ImplWin32_Shutdown();
+    ImGui::DestroyContext();
+    DropDevice();
     return kExitOk;
 }
 
@@ -2688,10 +3220,6 @@ int wmain(int argc, wchar_t** argv) {
     // `--window` opens it from a terminal or under Wine/Proton too.
     if (argc == 2 && !_wcsicmp(argv[1], L"--window") && !GuiChild()) return RunGui();
     if (GuiChild()) { std::setvbuf(stdout, nullptr, _IONBF, 0); SetConsoleOutputCP(CP_UTF8); }
-    if (argc == 4 && !_wcsicmp(argv[1], L"--delete-logs"))
-        return DeleteSessionLogs(argv[2], _wcstoui64(argv[3], nullptr, 10));
-    if (argc == 4 && !_wcsicmp(argv[1], L"--elevated-update"))
-        return ElevatedUpdate(ExeDir(), argv[2], argv[3]);   // S4: no network as administrator
 
     wstring command = L"play", gameArg;
     bool dry = false, skipEac = false, sawCommand = false;
@@ -2714,7 +3242,7 @@ int wmain(int argc, wchar_t** argv) {
         }
     }
     for (wchar_t& c : command) c = towlower(c);
-    if (command == L"help") { std::printf("sc-offline launcher %s (%s)\n\n%s", SCO_VERSION, SCO_BASED_ON, kUsage); return kExitOk; }
+    if (command == L"help") { std::printf("sc-offline launcher %s\n\n%s", SCO_VERSION, kUsage); return kExitOk; }
 
     const wstring here = ExeDir();
     const wstring data = here + L"\\data";
@@ -2795,6 +3323,14 @@ int wmain(int argc, wchar_t** argv) {
 
     PcWanted pc;
     pc.firewall = cfg.firewall; pc.eacHosts = cfg.eacHosts; pc.eacRename = cfg.eacRename;
+    if (!IsElevated()) {
+        if (command == L"play" && !OnWine()) {
+            if (pc.firewall) Out("[i] block_network skipped: Windows Firewall rules need administrator rights\n");
+            if (pc.eacHosts && !HostsBlocksEac()) Out("[i] eac_hosts skipped: the hosts file needs administrator rights\n");
+            if (pc.eacRename && IsFile(EacExe())) Out("[i] eac_rename skipped: renaming EasyAntiCheat_EOS.exe needs administrator rights\n");
+        }
+        pc = PcWanted{};
+    }
 
     // 2. Self-checks.
     const CheckResult checks = SelfChecks(here, cfg, g);
@@ -2818,7 +3354,7 @@ int wmain(int argc, wchar_t** argv) {
             return FailCode(kExitEac, "stopped: Easy Anti-Cheat is active (see above). --skip-eac-check overrides this.");
     }
 
-    // 3. What the mod reads (the SC_OFFLINE_* variables, see docs/data-files.md).
+    // 3. What the mod reads (the SC_OFFLINE_* variables).
     const bool play = command == L"play";
     if (play) {
         SetVar(L"SC_OFFLINE_BOOT_MAP", cfg.bootMap);
@@ -2849,7 +3385,7 @@ int wmain(int argc, wchar_t** argv) {
     const wstring eventName = L"Local\\sc-offline-ready-" + std::to_wstring(GetCurrentProcessId());
     HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, eventName.c_str());
     HANDLE helper = ready ? StartHelper(command.c_str(), g, eventName, pc) : nullptr;
-    if (!helper) return Fail("couldn't start the mod helper (error %lu); administrator rights refused?", GetLastError());
+    if (!helper) return Fail("couldn't start the mod helper (error %lu)", GetLastError());
 
     if (!play) {   // install / uninstall: the helper does the whole job
         WaitForSingleObject(helper, INFINITE);
@@ -2863,8 +3399,6 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     HANDLE waitOn[2] = { ready, helper };
-    // No timeout: a UAC prompt can sit there as long as the player likes. The helper either
-    // signals (copied) or exits (copy failed; it undid nothing because nothing was left half-done).
     if (WaitForMultipleObjects(2, waitOn, FALSE, INFINITE) != WAIT_OBJECT_0) {
         DWORD code = 0; GetExitCodeProcess(helper, &code);
         return Fail("couldn't copy the mod into %ls (helper exit %lu); see data\\launcher.log", bin.c_str(), code);
