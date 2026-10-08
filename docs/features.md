@@ -61,7 +61,15 @@ Background image settings. Save a picture as `data/menu_background.png` (or `.jp
 
 ## Logging
 
-Everything the mod does is written to `data/mod.log`. The first line of the file is the version.
+Everything the mod does is written to `data/mod.log`. The first line of the file is the version. Each line starts with a tag for the part of the mod that wrote it:
+
+| Tag | Means |
+| --- | --- |
+| `[+]` | A patch or feature is ready |
+| `[!]` | Something couldn't start or failed; the rest of the line says what |
+| `[core] signatures: N/M OK` | How many of the game addresses handled by [sco-core](https://github.com/scubamount/sco-core) were found. Each one that wasn't gets its own `FAILED`, `MISSING`, `AMBIG` or `BLOCKED` line |
+| `[status]` | The message shown in the menu's status line (ship spawns, seating, travel) |
+| `[tp]`, `[ship]`, `[contracts]`, ... | One feature's own notes |
 
 ## Not available offline
 

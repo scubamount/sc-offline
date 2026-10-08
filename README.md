@@ -169,7 +169,7 @@ Run `sc-offline.exe uninstall` before you play online. It removes the mod and un
 <details>
 <summary><b>A game update broke the mod</b></summary>
 
-That's expected until the mod is updated for the new game version.
+That's expected until the mod is updated for the new game version. `data/mod.log` says what broke: lines starting `[!]` name features that couldn't start, and a `[core] signatures: N/M OK` line followed by `FAILED` or `BLOCKED` lines names the game addresses the mod couldn't find. Include those lines in your bug report.
 </details>
 
 **Reporting a bug:** open an [Issue](https://github.com/scubamount/sc-offline/issues) and attach `data/launcher.log`, `data/mod.log`, and the game's `Game.log`.
@@ -189,6 +189,7 @@ That's expected until the mod is updated for the new game version.
 | [Data files](docs/data-files.md) | The text files in `data/` and the environment variables |
 | [Linux](docs/linux.md) | Running under Wine (experimental) |
 | [Build](docs/build.md) | Building from source, checks, CI and releases |
+| [sco-core](https://github.com/scubamount/sco-core) | The game-facing core: how the mod finds game addresses, and checking a new game build |
 | [Changelog](CHANGELOG.md) | What changed in each release |
 
 ## Star history

@@ -27,7 +27,9 @@ This runs in a few seconds. It parses every `src/*.cpp`, `launcher/*.cpp` and `e
 
 ### Game addresses
 
-Every game address the mod uses is becoming a named row in sco-core's signature tables (`external/sco-core/src/game/`). Teleport is the first; the other features still look theirs up in `src/`. At startup `mod.log` gets a `[core] signatures: N/M OK` line plus one line for each row that failed. To check a game build without starting the game, run `external/sco-core/tools/sigcheck.sh <path to StarCitizen.exe>`; see sco-core's README.
+Every game address the mod uses is becoming a named row in sco-core's signature tables (`external/sco-core/src/game/`). Teleport is the first; the other features still look theirs up in `src/`. At startup `mod.log` gets a `[core] signatures: N/M OK` line plus one line for each row that failed. To check a game build without starting the game, run `external/sco-core/tools/sigcheck.sh <path to StarCitizen.exe>` ([Checking a game build](https://github.com/scubamount/sco-core/blob/main/docs/sigcheck.md)). To move a feature's addresses into sco-core, follow [Adding a signature](https://github.com/scubamount/sco-core/blob/main/docs/adding-signatures.md).
+
+To change sco-core itself, open the PR in [sco-core](https://github.com/scubamount/sco-core), then move the submodule pin here in a sc-offline PR: `git -C external/sco-core checkout <sha>` and commit `external/sco-core`.
 
 ### Self-update tests under Wine
 
