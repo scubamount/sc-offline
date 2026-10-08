@@ -32,6 +32,7 @@
 #include <shobjidl.h>
 #include <tlhelp32.h>
 #include <winhttp.h>
+#include <winsafer.h>
 #include <commctrl.h>
 #include <cctype>
 #include <cstdarg>
@@ -883,7 +884,13 @@ static bool StageUpdate(const wstring& here, const UpdateInfo& u) {
 }
 
 // Swaps the staged files in. Re-checks the staged manifest (tag, version) and every file first.
+static bool GameRunning();
+static bool SelfTestPasses(const wstring& here, const std::string& tag);
+
 static bool SwapStaged(const wstring& here, const wstring& staged, const std::string& tag) {
+    // D4: never swap files under a running game (it may hold dinput8.dll, and the player would get
+    // a half-updated mod on the next start).
+    if (GameRunning()) { Out("[!] %ls is running; close it before updating. Nothing changed\n", kGameExe); return false; }
     Manifest man; std::string why;
     if (!LoadManifest(staged, tag, man, why) || !VerifyAgainstManifest(staged, man, why)) {
         Out("[!] the staged update doesn't match its manifest (%s); nothing changed\n", why.c_str());
@@ -929,6 +936,14 @@ static bool SwapStaged(const wstring& here, const wstring& staged, const std::st
         DeleteFileW(Journal(here).c_str());
         return false;
     }
+    // D5: the new launcher must start. If its --self-test fails, the old files go back; the
+    // .update-old copies stay until the next good start (SettlePreviousUpdate) either way.
+    if (!SelfTestPasses(here, tag)) {
+        Out("[!] the new sc-offline.exe failed its self-test; putting the old files back\n");
+        RollBackUpdate(here);
+        DeleteFileW(Journal(here).c_str());
+        return false;
+    }
     if (IsFile(staged + L"\\sc-offline.ini")) MergeIni(here, staged + L"\\sc-offline.ini", tag);
     JournalLine(here, "done");
     Out("[+] updated to %s: %d files replaced, %d added; your saves and sc-offline.ini were kept\n", tag.c_str(), replaced, added);
@@ -963,13 +978,81 @@ static int ElevatedUpdate(const wstring& here, const wstring& tag, const wstring
     return SwapStaged(here, StripSlashes(staged), Narrow(tag)) ? kExitOk : kExitError;
 }
 
-static bool ApplyUpdate(const wstring& here, const UpdateInfo& u) {
-    if (!StageUpdate(here, u)) return false;
+// Swaps a staged update in (as administrator only when needed); the staging folder goes either way.
+static bool InstallStaged(const wstring& here, const std::string& tag) {
     const wstring staged = StageRoot(here) + L"\\staged";
-    const bool ok = SwapMaybeElevated(here, staged, u.tag);
-    if (!ok) RemoveTree(staged);
+    const bool ok = SwapMaybeElevated(here, staged, tag);
+    RemoveTree(staged);
     return ok;
 }
+
+static bool ApplyUpdate(const wstring& here, const UpdateInfo& u) {
+    return StageUpdate(here, u) && InstallStaged(here, u.tag);
+}
+
+// D5: runs `<here>\sc-offline.exe --self-test <tag>` and waits up to 30 s. When this process is
+// elevated, the new exe still runs with normal rights (a Safer "normal user" token).
+static bool SelfTestPasses(const wstring& here, const std::string& tag) {
+    const wstring exe = here + L"\\sc-offline.exe";
+    wstring cmd = L"\"" + exe + L"\" --self-test " + Wide(tag);
+    STARTUPINFOW si{}; si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    bool started = false;
+    SAFER_LEVEL_HANDLE level = nullptr; HANDLE token = nullptr;
+    if (SaferCreateLevel(SAFER_SCOPEID_USER, SAFER_LEVELID_NORMALUSER, SAFER_LEVEL_OPEN, &level, nullptr)) {
+        if (SaferComputeTokenFromLevel(level, nullptr, &token, 0, nullptr))
+            started = CreateProcessAsUserW(token, exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, here.c_str(), &si, &pi) != 0;
+        if (token) CloseHandle(token);
+        SaferCloseLevel(level);
+    }
+    if (!started) started = CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, here.c_str(), &si, &pi) != 0;
+    if (!started) { Out("[!] couldn't start the new sc-offline.exe (error %lu)\n", GetLastError()); return false; }
+    DWORD code = 1;
+    if (WaitForSingleObject(pi.hProcess, 30000) != WAIT_OBJECT_0) { TerminateProcess(pi.hProcess, 1); WaitForSingleObject(pi.hProcess, 5000); Out("[!] the new sc-offline.exe hung in its self-test\n"); }
+    else GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    if (code) { Out("[!] the new sc-offline.exe --self-test exited %lu\n", code); return false; }
+    Out("[+] the new sc-offline.exe passed its self-test\n");
+    return true;
+}
+
+// --self-test <tag>: what an update runs on the new launcher before keeping it. Checks this exe is
+// the version the manifest promised, that SHA-256 works and that dinput8.dll is beside it. Writes
+// nothing, reads no network.
+static int SelfTest(const std::string& tag) {
+    const wstring here = ExeDir();
+    if (tag != std::string("v") + SCO_VERSION) { std::printf("self-test: this is %s, expected %s\n", SCO_VERSION, tag.c_str()); return 2; }
+    if (Sha256("abc") != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad") { std::printf("self-test: SHA-256 broken\n"); return 3; }
+    if (!IsFile(here + L"\\dinput8.dll")) { std::printf("self-test: no dinput8.dll beside sc-offline.exe\n"); return 4; }
+    std::printf("self-test: sc-offline %s ok\n", SCO_VERSION);
+    return 0;
+}
+
+#ifdef SCO_UPDATE_TEST
+// D6 test hook, test builds only: --apply-zip <zip> <tag> <sha256> runs the real stage, verify,
+// swap and self-test path against a local zip instead of a download. Exit 0 applied, 1 refused or
+// rolled back. SCO_TEST_FAIL_AFTER=N fails the swap after N files.
+static int ApplyZipForTest(const wstring& zipPath, const wstring& tagW, const wstring& shaW) {
+    const wstring here = ExeDir();
+    CreateDirectoryW((here + L"\\data").c_str(), nullptr);
+    OpenLog(here + L"\\data", true, "test --apply-zip");
+    SettlePreviousUpdate(here);
+    const std::string tag = Narrow(tagW);
+    std::string sha = Narrow(shaW), zip;
+    for (char& c : sha) c = (char)tolower((unsigned char)c);
+    if (!ReadAll(zipPath, zip)) { Out("[!] can't read %ls\n", zipPath.c_str()); return kExitError; }
+    if (Sha256(zip) != sha) { Out("[!] the zip doesn't match the given SHA-256; nothing changed\n"); return kExitError; }
+    const wstring root = StageRoot(here);
+    RemoveTree(root + L"\\staged"); RemoveTree(root + L"\\new");
+    CreateDirectoryW(root.c_str(), nullptr);
+    const wstring copy = root + L"\\sc-offline-" + tagW + L".zip";
+    if (!WriteAll(copy, zip)) { Out("[!] couldn't copy the zip\n"); return kExitError; }
+    const bool staged = StageZip(root, copy, tag);
+    DeleteFileW(copy.c_str());
+    if (!staged) { RemoveTree(root + L"\\staged"); RemoveTree(root + L"\\new"); return kExitError; }
+    return InstallStaged(here, tag) ? kExitOk : kExitError;
+}
+#endif
 
 // Starts the new launcher with the same arguments and waits for it, so a double-clicked window
 // stays open; this process then exits with its code. (While this old exe waits, its .update-old
@@ -2589,6 +2672,10 @@ static const char* kUsage =
     "exit codes: 0 ok, 1 error, 2 Easy Anti-Cheat active, 3 the game is running\n";
 
 int wmain(int argc, wchar_t** argv) {
+    if (argc == 3 && !_wcsicmp(argv[1], L"--self-test")) return SelfTest(Narrow(argv[2]));
+#ifdef SCO_UPDATE_TEST
+    if (argc == 5 && !_wcsicmp(argv[1], L"--apply-zip")) return ApplyZipForTest(argv[2], argv[3], argv[4]);
+#endif
     if (argc == 7 && !_wcsicmp(argv[1], L"--helper"))
         return Helper(argv[2], argv[3], wcstoul(argv[4], nullptr, 10), argv[5], argv[6]);
     // Double-clicked with no arguments: the window (issue #20). From a terminal, or with any
