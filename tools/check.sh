@@ -31,13 +31,14 @@ command -v python3 >/dev/null || { echo "check: python3 not found"; exit 2; }
 n=0; broken=0
 TMP=$(mktemp)
 shopt -s nullglob
-for f in "$ROOT"/src/*.cpp "$ROOT"/launcher/*.cpp; do
+[ -f "$ROOT/external/sco-core/include/sco/scan.h" ] || { echo "check: external/sco-core is empty (run: git submodule update --init)"; exit 2; }
+for f in "$ROOT"/src/*.cpp "$ROOT"/launcher/*.cpp "$ROOT"/external/sco-core/src/*.cpp "$ROOT"/external/sco-core/src/game/*.cpp; do
   n=$((n+1))
   out=$("$CLANG" -fsyntax-only -std=c++20 --target=x86_64-w64-windows-gnu \
      -fms-extensions \
      -D_WIN32 -D_WIN64 -DUNICODE -D_UNICODE -DNDEBUG -D_WINDLL \
      -nostdinc++ -isystem "$CXXINC" -isystem "$CXXINC/x86_64-w64-mingw32" -isystem "$CXXINC/backward" \
-     -isystem "$MWINC" -I "$ROOT/src" -I "$ROOT/src/third_party/imgui" \
+     -isystem "$MWINC" -I "$ROOT/src" -I "$ROOT/external/sco-core/include" -I "$ROOT/src/third_party/imgui" \
      -Wno-everything "$f" 2>&1)
   rc=$?
   errs=$(printf '%s\n' "$out" | grep -E "error:")

@@ -1,7 +1,7 @@
 #include "travel.h"
 #include "teleport.h"
 #include "spawner.h"
-#include "menu.h"
+#include "sco/status.h"
 #include <share.h>
 #include <cctype>
 #include <algorithm>
@@ -385,7 +385,7 @@ bool Travel_Scanning(float& progress) {
 }
 
 static void StartScan(DWORD now) {
-    if (g_scan.active) { SetMenuStatus("A scan is already running."); return; }
+    if (g_scan.active) { sco::Status("A scan is already running."); return; }
     g_scan = {};
     g_scan.active = true;
     g_scan.next = g_scan.lastHit = kStaticIdBase;
@@ -393,7 +393,7 @@ static void StartScan(DWORD now) {
     AcquireSRWLockShared(&g_travelLock);
     g_scan.newFrom = g_placeCount;
     ReleaseSRWLockShared(&g_travelLock);
-    SetMenuStatus("Scanning for places...");
+    sco::Status("Scanning for places...");
 }
 
 // What the scan learns about one entity. Kept apart from the bookkeeping so the fenced reads have
@@ -444,7 +444,7 @@ static void FinishScan(DWORD now) {
     Log("[travel] scan: ids %llu..%llu, %d entities, %d zone hosts (%d ships skipped, %d too deep), %d new places, %.1f s",
         static_cast<unsigned long long>(kStaticIdBase), static_cast<unsigned long long>(g_scan.lastHit), g_scan.entities,
         g_scan.zones, g_scan.ships, g_scan.deep, n, (now - g_scan.start) / 1000.0);
-    SetMenuStatus("Scan finished: %d new place%s.", n, n == 1 ? "" : "s");
+    sco::Status("Scan finished: %d new place%s.", n, n == 1 ? "" : "s");
 }
 
 static void StepScan(DWORD now) {
@@ -513,26 +513,26 @@ static void HandleRequest(DWORD now) {
 
     switch (req.kind) {
     case Req_Place: {
-        if (const char* err = GoToPlace(req.place, req.altitude)) SetMenuStatus("%s %s.", req.place.name, err);
+        if (const char* err = GoToPlace(req.place, req.altitude)) sco::Status("%s %s.", req.place.name, err);
         else if (req.place.radius > 0)
-            SetMenuStatus("Teleported to %s, %.0f m above the surface.", req.place.name, req.altitude);
+            sco::Status("Teleported to %s, %.0f m above the surface.", req.place.name, req.altitude);
         else if (req.place.kind != Place_Other)
-            SetMenuStatus("Teleported to %s. Its size isn't known, so you're in orbit - fly in from here.", req.place.name);
+            sco::Status("Teleported to %s. Its size isn't known, so you're in orbit - fly in from here.", req.place.name);
         else
-            SetMenuStatus("Teleported to %s.", req.place.name);
+            sco::Status("Teleported to %s.", req.place.name);
         break;
     }
     case Req_Bookmark: {
         if (req.index < 0 || req.index >= g_markCount) break;
         const TravelBookmark mark = g_marks[req.index];
-        if (const char* err = GoToSpot(g_markSpots[req.index], now, "bookmark")) SetMenuStatus("Can't go to '%s': %s.", mark.name, err);
-        else SetMenuStatus("Teleported to '%s'.", mark.name);
+        if (const char* err = GoToSpot(g_markSpots[req.index], now, "bookmark")) sco::Status("Can't go to '%s': %s.", mark.name, err);
+        else sco::Status("Teleported to '%s'.", mark.name);
         break;
     }
     case Req_Save: {
         Spot s;
-        if (const char* err = CaptureCurrentSpot(s)) { SetMenuStatus("Couldn't save this spot: %s.", err); break; }
-        if (g_markCount >= kMaxBookmarks) { SetMenuStatus("You have %d saved spots; delete one first.", kMaxBookmarks); break; }
+        if (const char* err = CaptureCurrentSpot(s)) { sco::Status("Couldn't save this spot: %s.", err); break; }
+        if (g_markCount >= kMaxBookmarks) { sco::Status("You have %d saved spots; delete one first.", kMaxBookmarks); break; }
         TravelBookmark mark = {};
         SpotSystemName(s, mark.system, sizeof(mark.system));
         if (!mark.system[0]) strcpy_s(mark.system, "Unknown system");
@@ -544,7 +544,7 @@ static void HandleRequest(DWORD now) {
         ++g_markCount;
         ReleaseSRWLockExclusive(&g_travelLock);
         SaveBookmarks();
-        SetMenuStatus("Saved '%s' (%s).", mark.name, mark.system);
+        sco::Status("Saved '%s' (%s).", mark.name, mark.system);
         break;
     }
     case Req_Delete: {
@@ -556,7 +556,7 @@ static void HandleRequest(DWORD now) {
         --g_markCount;
         ReleaseSRWLockExclusive(&g_travelLock);
         SaveBookmarks();
-        SetMenuStatus("Deleted '%s'.", name);
+        sco::Status("Deleted '%s'.", name);
         break;
     }
     case Req_Scan:

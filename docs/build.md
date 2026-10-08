@@ -2,6 +2,8 @@
 
 ## Build on Windows
 
+The game-facing core lives in a separate repository, [sco-core](https://github.com/scubamount/sco-core), checked out at `external/sco-core`. Clone with `git clone --recurse-submodules`, or run `git submodule update --init` in an existing clone. The build compiles sco-core's sources into the same `dinput8.dll`.
+
 1. Install **Visual Studio 2026** with the **Desktop development with C++** workload. The projects use the `v145` toolset. On VS 2022, retarget them to `v143` first (Project → Retarget).
 2. Open `sc-offline.slnx`, select **Release | x64**, and build. Or from the command line:
 
@@ -21,7 +23,11 @@ No Visual Studio? CI builds both on every push to `main`. Download the `dinput8-
 tools/check.sh
 ```
 
-This runs in a few seconds. It parses every `src/*.cpp` and `launcher/*.cpp` file with clang against mingw-w64's Windows headers. It also screens `src/` for MSVC error C2712 (`__try` in a function that owns an object needing unwinding, such as a `std::string`). It is not a build: only MSVC's build is. Known clang-only diagnostics are listed in `tools/check-baseline.txt`, and only new ones fail the check. You need clang and mingw-w64 (`brew install llvm mingw-w64` on macOS).
+This runs in a few seconds. It parses every `src/*.cpp`, `launcher/*.cpp` and `external/sco-core/src/` file with clang against mingw-w64's Windows headers. It also screens `src/` for MSVC error C2712 (`__try` in a function that owns an object needing unwinding, such as a `std::string`). It is not a build: only MSVC's build is. Known clang-only diagnostics are listed in `tools/check-baseline.txt`, and only new ones fail the check. You need clang and mingw-w64 (`brew install llvm mingw-w64` on macOS).
+
+### Game addresses
+
+Every game address the mod uses is becoming a named row in sco-core's signature tables (`external/sco-core/src/game/`). Teleport is the first; the other features still look theirs up in `src/`. At startup `mod.log` gets a `[core] signatures: N/M OK` line plus one line for each row that failed. To check a game build without starting the game, run `external/sco-core/tools/sigcheck.sh <path to StarCitizen.exe>`; see sco-core's README.
 
 ### Self-update tests under Wine
 

@@ -1,5 +1,6 @@
 #include "menu.h"
 #include "common.h"
+#include "sco/status.h"
 #include "travel.h"
 #include "version.h"
 #include <algorithm>
@@ -934,7 +935,7 @@ static void DrawMenuTab() {
 
 static void DrawStatusStrip(float height) {
     char status[256];
-    Menu_GetStatus(status, sizeof(status));
+    if (!sco::GetStatus(status, sizeof(status))) strcpy_s(status, "Pick a ship and press Spawn.");
     ImGui::PushStyleColor(ImGuiCol_ChildBg, Hex(0x0B140D, 0.92f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16, 8));
     ImGui::BeginChild("##status", ImVec2(0, height), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoScrollbar);

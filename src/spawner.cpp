@@ -3,6 +3,7 @@
 #include "teleport.h"
 #include "menu.h"
 #include "npc.h"
+#include "sco/status.h"
 #include <algorithm>
 #include <cctype>
 #include <cstdarg>
@@ -249,7 +250,6 @@ static MenuShip      g_menuShips[kMaxMenuShips];
 static volatile LONG g_menuShipCount = -1;
 static volatile LONG g_menuWantShips = 0;
 static SRWLOCK       g_menuLock = SRWLOCK_INIT;
-static char          g_menuStatus[256] = "Pick a ship and press Spawn.";
 static struct { bool pending; int index; MenuSpawnOptions opt; } g_spawnRequest;
 static struct { bool pending; bool enemyWing; char cls[64]; float height; bool sit; bool flightReady; } g_classRequest;
 
@@ -270,18 +270,6 @@ void ReadStartOptions() {
 
 bool SpawnerReady() { return g_sp.ok; }
 bool StartingOverDaymar() { return g_startDaymarPending; }
-
-void SetMenuStatus(const char* fmt, ...) {
-    char buf[256];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
-    AcquireSRWLockExclusive(&g_menuLock);
-    strcpy_s(g_menuStatus, buf);
-    ReleaseSRWLockExclusive(&g_menuLock);
-    Log("[ship] %s", buf);
-}
 
 int Menu_ShipCount() {
     const LONG n = g_menuShipCount;
@@ -318,12 +306,6 @@ void Menu_SetNoclipSpeed(float speed) {
 static volatile LONG g_godModeOn = 1;
 
 void Menu_SetGodMode(bool on) { InterlockedExchange(&g_godModeOn, on ? 1 : 0); }
-
-void Menu_GetStatus(char* out, size_t n) {
-    AcquireSRWLockShared(&g_menuLock);
-    strncpy_s(out, n, g_menuStatus, _TRUNCATE);
-    ReleaseSRWLockShared(&g_menuLock);
-}
 
 static uintptr_t ClassRegistry() { return VCall<uintptr_t>(*g_tp.entitySystem, 0xC0); }
 
@@ -1348,7 +1330,7 @@ static void RunPowerJob(DWORD now) {
     if (!g_powerJob.shipId || static_cast<LONG>(now - g_powerJob.at) < 0) return;
     const uintptr_t dashboard = g_sp.toggleFlightReady ? FindDashboard(g_powerJob.shipId, g_powerJob.seatId) : 0;
     if (dashboard && SendDashEvent(g_sp.toggleFlightReady, dashboard)) {
-        SetMenuStatus("%s powered on - sent the game's Flight Ready event to the pilot dashboard.", g_powerJob.name);
+        sco::Status("%s powered on - sent the game's Flight Ready event to the pilot dashboard.", g_powerJob.name);
         g_powerJob.shipId = 0;
         return;
     }
@@ -1360,9 +1342,9 @@ static void RunPowerJob(DWORD now) {
     if (g_sp.toggleFlightReady) Log("[ship] no seat dashboard on the %s; falling back to the R key", g_powerJob.name);
     if (GameHasFocus()) {
         PressFlightReadyKey();
-        SetMenuStatus("Couldn't reach the %s's dashboard directly - pressed Flight Ready (R) for you.", g_powerJob.name);
+        sco::Status("Couldn't reach the %s's dashboard directly - pressed Flight Ready (R) for you.", g_powerJob.name);
     } else {
-        SetMenuStatus("Couldn't reach the %s's dashboard. Press R (Flight Ready) to power up.", g_powerJob.name);
+        sco::Status("Couldn't reach the %s's dashboard. Press R (Flight Ready) to power up.", g_powerJob.name);
     }
     g_powerJob.shipId = 0;
 }
@@ -1372,16 +1354,16 @@ static void FinishSeatJob(DWORD now) {
     const bool pilot = have && g_lastSeat.priority >= kPilotPriority;
     if (pilot && g_seatJob.flightReady) {
         StartPowerJob(g_seatJob.id, g_lastSeat.seatId, g_seatJob.name, now + 1500, 20000);
-        SetMenuStatus("You're in the %s's pilot seat - powering up...", g_seatJob.name);
+        sco::Status("You're in the %s's pilot seat - powering up...", g_seatJob.name);
     } else if (pilot) {
-        SetMenuStatus("You're in the %s's pilot seat ('%s'). Press R (Flight Ready) to power up.", g_seatJob.name, g_lastSeat.name);
+        sco::Status("You're in the %s's pilot seat ('%s'). Press R (Flight Ready) to power up.", g_seatJob.name, g_lastSeat.name);
     } else if (have && g_seatJob.mode == SeatMode_Pilot && !g_seatJob.wantSeat) {
-        SetMenuStatus("You're in the %s, but its pilot seat wasn't free%s - you got '%s'.", g_seatJob.name,
+        sco::Status("You're in the %s, but its pilot seat wasn't free%s - you got '%s'.", g_seatJob.name,
                       g_seatJob.replaceNpc ? "" : " (tick 'replace NPC' to take it)", g_lastSeat.name);
     } else if (have) {
-        SetMenuStatus("You're in '%s' on the %s.", g_lastSeat.name, g_seatJob.name);
+        sco::Status("You're in '%s' on the %s.", g_lastSeat.name, g_seatJob.name);
     } else {
-        SetMenuStatus("You're in the %s. Have fun!", g_seatJob.name);
+        sco::Status("You're in the %s. Have fun!", g_seatJob.name);
     }
     g_seatJob.id = 0;
     RefreshTargetSeats();
@@ -1395,7 +1377,7 @@ static void UpdateSeatJob(DWORD now) {
         if (SeatJobDone()) { FinishSeatJob(now); return; }
     }
     if (now - g_seatJob.since > 180000) {
-        SetMenuStatus("%s spawned, but I couldn't get you aboard within 3 minutes.", g_seatJob.name);
+        sco::Status("%s spawned, but I couldn't get you aboard within 3 minutes.", g_seatJob.name);
         g_seatJob.id = 0;
         return;
     }
@@ -1405,26 +1387,26 @@ static void UpdateSeatJob(DWORD now) {
     case SeatStep::NoSeat:   g_seatJob.lastSend = now; g_seatJob.lastWasEvict = false; break;
     case SeatStep::Blocked:
         if (!g_haveLastSeat)
-            SetMenuStatus("That seat isn't on the %s any more - refresh the list.", g_seatJob.name);
+            sco::Status("That seat isn't on the %s any more - refresh the list.", g_seatJob.name);
         else if (g_lastSeat.state == SeatState_Npc && g_seatJob.evictions > 3)
-            SetMenuStatus("The NPC in '%s' keeps coming back - try another seat.", g_lastSeat.name);
+            sco::Status("The NPC in '%s' keeps coming back - try another seat.", g_lastSeat.name);
         else if (g_lastSeat.state == SeatState_Npc)
-            SetMenuStatus("'%s' has an NPC in it - tick 'replace NPC' or kick it first.", g_lastSeat.name);
+            sco::Status("'%s' has an NPC in it - tick 'replace NPC' or kick it first.", g_lastSeat.name);
         else
-            SetMenuStatus("'%s' is taken by someone I can't identify, so I left it.", g_lastSeat.name);
+            sco::Status("'%s' is taken by someone I can't identify, so I left it.", g_lastSeat.name);
         g_seatJob.id = 0;
         RefreshTargetSeats();
         break;
     case SeatStep::Evicting:
         g_seatJob.lastSend = now;
         g_seatJob.lastWasEvict = true;
-        SetMenuStatus("Removing the NPC from '%s' on the %s...", g_lastSeat.name, g_seatJob.name);
+        sco::Status("Removing the NPC from '%s' on the %s...", g_lastSeat.name, g_seatJob.name);
         break;
-    case SeatStep::Fault:    SetMenuStatus("Seating failed (fault)."); g_seatJob.id = 0; break;
+    case SeatStep::Fault:    sco::Status("Seating failed (fault)."); g_seatJob.id = 0; break;
     case SeatStep::Sent:
         g_seatJob.lastSend = now;
         g_seatJob.lastWasEvict = false;
-        if (++g_seatJob.sends > 8) { SetMenuStatus("Asked %s to seat you 8 times; it didn't take.", g_seatJob.name); g_seatJob.id = 0; }
+        if (++g_seatJob.sends > 8) { sco::Status("Asked %s to seat you 8 times; it didn't take.", g_seatJob.name); g_seatJob.id = 0; }
         else Log("[ship] seat request %d sent to %s", g_seatJob.sends, g_seatJob.name);
         break;
     }
@@ -1440,40 +1422,40 @@ static void ProcessSeatAction(DWORD now) {
     if (act.kind == SA_None) return;
 
     if (act.kind == SA_TargetMine) {
-        if (const char* err = TargetShipImIn()) SetMenuStatus("Can't pick your ship: %s", err);
-        else SetMenuStatus("Crew & seats now shows the %s.", g_target.name);
+        if (const char* err = TargetShipImIn()) sco::Status("Can't pick your ship: %s", err);
+        else sco::Status("Crew & seats now shows the %s.", g_target.name);
         return;
     }
-    if (!SeatControl()) { SetMenuStatus("Seat control isn't available in this game version."); return; }
-    if (!g_target.shipId) { SetMenuStatus("Spawn a ship first (or press 'Use the ship I'm in')."); return; }
+    if (!SeatControl()) { sco::Status("Seat control isn't available in this game version."); return; }
+    if (!g_target.shipId) { sco::Status("Spawn a ship first (or press 'Use the ship I'm in')."); return; }
     const int n = EnumerateShipSeats(g_target.shipId);
-    if (n <= 0) { SetMenuStatus("The %s isn't loaded (or has no seats).", g_target.name); PublishSeats(n); return; }
+    if (n <= 0) { sco::Status("The %s isn't loaded (or has no seats).", g_target.name); PublishSeats(n); return; }
     const SeatInfo* seat = act.seatId ? SeatById(act.seatId) : nullptr;
 
     switch (act.kind) {
     case SA_Sit:
-        if (!seat) { SetMenuStatus("That seat is gone - refresh the list."); break; }
+        if (!seat) { sco::Status("That seat is gone - refresh the list."); break; }
         StartSeatJob(g_target.shipId, g_target.name, SeatMode_Pilot, "", act.replace, false, seat->seatId, now);
-        SetMenuStatus("Moving you to '%s'...", seat->name);
+        sco::Status("Moving you to '%s'...", seat->name);
         break;
     case SA_Kick:
-        if (!seat) { SetMenuStatus("That seat is gone - refresh the list."); break; }
-        if (seat->state == SeatState_Npc) { const SeatInfo copy = *seat; EvictSeat(copy); SetMenuStatus("Removed the NPC from '%s'.", copy.name); }
-        else if (seat->state == SeatState_Taken) SetMenuStatus("Can't tell who is in '%s', so I left them.", seat->name);
-        else SetMenuStatus("There's no NPC in '%s'.", seat->name);
+        if (!seat) { sco::Status("That seat is gone - refresh the list."); break; }
+        if (seat->state == SeatState_Npc) { const SeatInfo copy = *seat; EvictSeat(copy); sco::Status("Removed the NPC from '%s'.", copy.name); }
+        else if (seat->state == SeatState_Taken) sco::Status("Can't tell who is in '%s', so I left them.", seat->name);
+        else sco::Status("There's no NPC in '%s'.", seat->name);
         break;
     case SA_StandUp:
-        if (!seat) { SetMenuStatus("That seat is gone - refresh the list."); break; }
+        if (!seat) { sco::Status("That seat is gone - refresh the list."); break; }
         if (seat->state == SeatState_You)
-            SetMenuStatus(UnlinkEntity(LocalPlayerEntity()) ? "You got out of '%s'." : "Couldn't get you out of '%s'.", seat->name);
+            sco::Status(UnlinkEntity(LocalPlayerEntity()) ? "You got out of '%s'." : "Couldn't get you out of '%s'.", seat->name);
         else if (seat->state == SeatState_Npc) {
             const SeatInfo copy = *seat;
             const bool ok = UnlinkEntity(EntityByIdSafe(copy.occupant));
             if (ok) ForgetPlacedCrew(copy.occupant);
-            SetMenuStatus(ok ? "The NPC in '%s' stood up." : "Couldn't get the NPC out of '%s'.", copy.name);
+            sco::Status(ok ? "The NPC in '%s' stood up." : "Couldn't get the NPC out of '%s'.", copy.name);
         }
-        else if (seat->state == SeatState_Taken) SetMenuStatus("Can't tell who is in '%s', so I left them.", seat->name);
-        else SetMenuStatus("'%s' is already empty.", seat->name);
+        else if (seat->state == SeatState_Taken) sco::Status("Can't tell who is in '%s', so I left them.", seat->name);
+        else sco::Status("'%s' is already empty.", seat->name);
         break;
     case SA_StandAll: {
         uint64_t npcs[kMaxSeats];
@@ -1482,15 +1464,15 @@ static void ProcessSeatAction(DWORD now) {
             if (g_seatList[i].state == SeatState_Npc) npcs[count++] = g_seatList[i].occupant;
         for (int i = 0; i < count; ++i)
             if (UnlinkEntity(EntityByIdSafe(npcs[i]))) { ForgetPlacedCrew(npcs[i]); ++stood; }
-        SetMenuStatus("%d of %d NPCs on the %s stood up.", stood, count, g_target.name);
+        sco::Status("%d of %d NPCs on the %s stood up.", stood, count, g_target.name);
         break;
     }
     case SA_AddCrew: {
-        if (!seat) { SetMenuStatus("That seat is gone - refresh the list."); break; }
-        if (seat->state != SeatState_Empty) { SetMenuStatus("'%s' isn't empty - kick its occupant first.", seat->name); break; }
+        if (!seat) { sco::Status("That seat is gone - refresh the list."); break; }
+        if (seat->state != SeatState_Empty) { sco::Status("'%s' isn't empty - kick its occupant first.", seat->name); break; }
         const SeatInfo copy = *seat;
-        if (const char* err = AddCrew(g_target.shipId, copy.seatId, act.npc, now)) SetMenuStatus("Adding crew failed: %s", err);
-        else SetMenuStatus("Seating %s in '%s'...", Menu_NpcName(act.npc), copy.name);
+        if (const char* err = AddCrew(g_target.shipId, copy.seatId, act.npc, now)) sco::Status("Adding crew failed: %s", err);
+        else sco::Status("Seating %s in '%s'...", Menu_NpcName(act.npc), copy.name);
         break;
     }
     case SA_FillCrew: {
@@ -1501,8 +1483,8 @@ static void ProcessSeatAction(DWORD now) {
         const char* err = nullptr;
         for (int i = 0; i < count && !err; ++i)
             if (!(err = AddCrew(g_target.shipId, empty[i], act.npc, now))) ++added;
-        if (err && !added) SetMenuStatus("Filling seats failed: %s", err);
-        else SetMenuStatus("Seating %d x %s on the %s...", added, Menu_NpcName(act.npc), g_target.name);
+        if (err && !added) sco::Status("Filling seats failed: %s", err);
+        else sco::Status("Seating %d x %s on the %s...", added, Menu_NpcName(act.npc), g_target.name);
         break;
     }
     case SA_ClearCrew: {
@@ -1511,12 +1493,12 @@ static void ProcessSeatAction(DWORD now) {
         for (int i = 0; i < g_seatListCount; ++i)
             if (g_seatList[i].state == SeatState_Npc) npcs[count++] = g_seatList[i];
         for (int i = 0; i < count; ++i) EvictSeat(npcs[i]);
-        SetMenuStatus("Removed %d NPC crew from the %s.", count, g_target.name);
+        sco::Status("Removed %d NPC crew from the %s.", count, g_target.name);
         break;
     }
     case SA_FlightReady: {
         const SeatInfo* pilot = PilotSeat();
-        if (!pilot || !g_sp.toggleFlightReady) { SetMenuStatus("Flight Ready event not available - press R in the pilot seat."); break; }
+        if (!pilot || !g_sp.toggleFlightReady) { sco::Status("Flight Ready event not available - press R in the pilot seat."); break; }
         StartPowerJob(g_target.shipId, pilot->seatId, g_target.name, now, 3000);
         break;
     }
@@ -1528,12 +1510,12 @@ static void ProcessSeatAction(DWORD now) {
 static void StartDaymarArrival(const char* shipClass, DWORD now) {
     uint64_t id = 0;
     if (const char* err = SpawnShipAboveDaymar(shipClass, id)) {
-        SetMenuStatus("Going to Daymar failed: %s", err);
+        sco::Status("Going to Daymar failed: %s", err);
         return;
     }
     SetTarget(id, shipClass);
     StartSeatJob(id, shipClass, SeatMode_Pilot, "", true, true, 0, now);
-    SetMenuStatus("Spawning %s %.0f km over Daymar - you'll be put in its pilot seat, then fly down and land.",
+    sco::Status("Spawning %s %.0f km over Daymar - you'll be put in its pilot seat, then fly down and land.",
                   shipClass, kArrivalAltitude / 1000);
 }
 
@@ -1548,7 +1530,7 @@ static void ProcessNoclip() {
         } __except (EXCEPTION_EXECUTE_HANDLER) {}
     }
     if (!req.modePending) return;
-    if (!g_sp.requestFlyMode || !g_sp.actorLink) { SetMenuStatus("Noclip isn't available (fly mode not found)."); return; }
+    if (!g_sp.requestFlyMode || !g_sp.actorLink) { sco::Status("Noclip isn't available (fly mode not found)."); return; }
     const char* err = nullptr;
     __try {
         uintptr_t actor, entity;
@@ -1556,8 +1538,8 @@ static void ProcessNoclip() {
         else if (const uintptr_t comp = EntityComponent(entity, "Actor")) g_sp.requestFlyMode(g_sp.actorLink(comp), req.on ? 2 : 0);
         else err = "no Actor component";
     } __except (EXCEPTION_EXECUTE_HANDLER) { err = "fault"; }
-    if (err) SetMenuStatus("Noclip %s failed: %s", req.on ? "on" : "off", err);
-    else SetMenuStatus("Noclip %s (speed %.0f).", req.on ? "on" : "off", req.speed);
+    if (err) sco::Status("Noclip %s failed: %s", req.on ? "on" : "off", err);
+    else sco::Status("Noclip %s (speed %.0f).", req.on ? "on" : "off", req.speed);
 }
 
 static void ProcessGodMode(DWORD now) {
@@ -1609,7 +1591,7 @@ void ProcessShipMenu(DWORD now) {
     if (classReq.pending && classReq.cls[0]) {
         uint64_t id = 0;
         if (const char* err = SpawnShipAbovePlayer(classReq.cls, classReq.height, id))
-            SetMenuStatus("Spawning %s failed: %s", classReq.cls, err);
+            sco::Status("Spawning %s failed: %s", classReq.cls, err);
         else if (classReq.enemyWing) {
             SetTarget(id, classReq.cls);   // the Bengal itself, like the plain Bengal row; the wing ships are not targeted
             // The wing goes 300 m up — the height the menu's own hint promises for
@@ -1621,36 +1603,36 @@ void ProcessShipMenu(DWORD now) {
                 if (const char* err = SpawnShipAbovePlayer(c, 300.0, wingId)) { Log("[ship] enemy wing: %s failed: %s", c, err); continue; }
                 ++wing;
             }
-            SetMenuStatus("%s spawned %.0f m above you; %d of 3 enemy wing ships came in at 300 m.",
+            sco::Status("%s spawned %.0f m above you; %d of 3 enemy wing ships came in at 300 m.",
                           classReq.cls, classReq.height, wing);
         } else if (!classReq.sit) {
             SetTarget(id, classReq.cls);
-            SetMenuStatus("Spawning %s %.0f m above you (big ships take up to a minute).", classReq.cls, classReq.height);
+            sco::Status("Spawning %s %.0f m above you (big ships take up to a minute).", classReq.cls, classReq.height);
         } else {
             SetTarget(id, classReq.cls);
             StartSeatJob(id, classReq.cls, SeatMode_Pilot, nullptr, true, classReq.flightReady, 0, now);
-            SetMenuStatus("Spawning %s - you'll be put in the pilot seat as soon as it's there (big ships take up to a minute).", classReq.cls);
+            sco::Status("Spawning %s - you'll be put in the pilot seat as soon as it's there (big ships take up to a minute).", classReq.cls);
         }
     } else if (req.pending && req.index >= 0 && req.index < g_menuShipCount) {
         const char* name = g_menuShips[req.index].name;
         const MenuSpawnOptions& o = req.opt;
         uint64_t id = 0;
         if (const char* err = SpawnShipAbovePlayer(name, o.height, id)) {
-            SetMenuStatus("Spawning %s failed: %s", name, err);
+            sco::Status("Spawning %s failed: %s", name, err);
         } else {
             SetTarget(id, name);
             switch (o.seatMode) {
             case SeatMode_None:
-                SetMenuStatus("Spawning %s %.0f m above you (big ships take up to a minute).", name, o.height);
+                sco::Status("Spawning %s %.0f m above you (big ships take up to a minute).", name, o.height);
                 break;
             case SeatMode_PickLater:
-                SetMenuStatus("Spawning %s - pick a seat under Crew & seats once it has loaded.", name);
+                sco::Status("Spawning %s - pick a seat under Crew & seats once it has loaded.", name);
                 break;
             default: {
                 const bool named = o.seatMode == SeatMode_Named && o.seatName[0];
                 StartSeatJob(id, name, named ? SeatMode_Named : SeatMode_Pilot, o.seatName, o.replaceNpc, o.flightReady, 0, now);
-                if (named) SetMenuStatus("Spawning %s - you'll be put in a '%s' seat as soon as it's there.", name, o.seatName);
-                else SetMenuStatus("Spawning %s - you'll be put in the pilot seat as soon as it's there (big ships take up to a minute).", name);
+                if (named) sco::Status("Spawning %s - you'll be put in a '%s' seat as soon as it's there.", name, o.seatName);
+                else sco::Status("Spawning %s - you'll be put in the pilot seat as soon as it's there (big ships take up to a minute).", name);
                 break;
             }
             }

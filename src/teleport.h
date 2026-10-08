@@ -9,7 +9,7 @@ struct TeleportApi {
 };
 extern TeleportApi g_tp;
 
-bool ResolveTeleportApi(const Section& text, const Section& rdata);
+bool ResolveTeleportApi();   // after sco::ResolveAll(); reads the teleport.* rows
 
 bool        GetLocalPlayer(uintptr_t& actor, uintptr_t& entity);
 const char* ZoneName(uintptr_t zone);
