@@ -117,26 +117,36 @@ While you play, the helper changes three things outside the game folder and undo
 
 ### Updates
 
-On `play` and `status` the launcher asks GitHub for the latest full release of `scubamount/sc-offline`
-(3-second timeout; no network just skips it). Pre-releases, drafts, older versions and tags that aren't plain
-numbers are never offered. If a newer one exists, `play` asks **"Update now?"** and `status` tells you to run
-`sc-offline.exe update`.
+On `play` and `status` the launcher asks GitHub for the newest release of `scubamount/sc-offline`
+(3-second timeout; no network just skips it). With `update_channel = stable` (the default) only full
+releases are offered; `update_channel = prerelease` also offers pre-releases (test builds). Drafts, older
+versions and tags that aren't plain numbers are never offered. If a newer one exists, `play` asks
+**"Update now?"** and `status` tells you to run `sc-offline.exe update`. It won't update while
+`StarCitizen.exe` is running.
 
 An update:
-1. downloads `sc-offline-<tag>.zip` into `data\update\` and checks its SHA-256 against the `digest` GitHub
-   publishes for that asset. A mismatch or a missing digest stops it with nothing changed;
-2. unpacks it with Windows' own `tar.exe` and checks that `sc-offline.exe` and `dinput8.dll` are in it;
-3. replaces every shipped file except `sc-offline.ini` and the player files in `data\` (`wallet.txt`,
+1. checks there's free disk space, then downloads `sc-offline-<tag>.zip`. The download only times out when
+   it stalls, and is tried once more. The zip's SHA-256 must match the `digest` GitHub publishes for that
+   asset; a mismatch or a missing digest stops it with nothing changed;
+2. unpacks it with Windows' own `tar.exe` and checks it against its `manifest.json` (see below). Any
+   problem stops it with nothing changed;
+3. stages the listed files in `data\update\staged\`. This runs with normal rights. When the install folder
+   isn't writable (Program Files), it stages in `%LOCALAPPDATA%\sc-offline\update\` instead, and only the
+   next step asks Windows for administrator rights. That step uses no network: it checks every staged
+   file against the manifest again before using it;
+4. replaces every listed file except `sc-offline.ini` and the player files in `data\` (`wallet.txt`,
    `spawn.txt`, `bookmarks.txt`, `locations_found.txt`, `game-path.txt`, `game-build.txt`, the logs).
-   Each replaced file is first renamed to `<name>.update-old`, and the step is written to
-   `data\update\applied.txt` before it happens;
-4. appends settings that are new in the release's `sc-offline.ini` to yours, commented out, so their
+   Each file is written as `<name>.update-new`, flushed to disk, the old one renamed to `<name>.update-old`,
+   and the new one moved into place and checked again. Each step is written to `data\update\applied.txt`
+   before it happens. A file that antivirus is scanning is retried for a few seconds;
+5. appends settings that are new in the release's `sc-offline.ini` to yours, commented out, so their
    defaults apply;
-5. starts the new launcher with the same arguments.
+6. runs `sc-offline.exe --self-test` from the new files, then starts the new launcher with the same arguments.
 
-If a step fails, the old files are put back at once. If the PC dies mid-update, the next run of
-`sc-offline.exe` reads `applied.txt` and puts them back. `check_updates = off` turns the check off;
-`sc-offline.exe update` checks on demand.
+If a step fails, or the new launcher fails its self-test, the old files are put back at once. If the PC dies
+mid-update, the next run of `sc-offline.exe` reads `applied.txt` and puts them back. The `.update-old` files
+are deleted on the next good start. `check_updates = off` turns the check off; `sc-offline.exe update`
+checks on demand.
 
 #### What an update is checked against
 
@@ -235,6 +245,7 @@ There is no wallet setting: your aUEC balance is kept in `data\wallet.txt` (see 
 | `game` | (found automatically) | Your Star Citizen folder. You can point at `Roberts Space Industries`, at `StarCitizen`, at the channel folder, or at the folder that holds `StarCitizen`. |
 | `discord_presence` | `on` | While the game runs, your Discord profile shows **Playing sc-offline** with the version, time played and two buttons (the sc-offline Discord, the download page). Your Discord friends and servers see it. Also the **Show on Discord** box in the window. See [Discord status](#discord-status). |
 | `check_updates` | `on` | Check GitHub for a newer release on `play` and `status` and offer to install it. |
+| `update_channel` | `stable` | `stable`: only full releases are offered. `prerelease`: pre-releases (test builds) are offered too. |
 | `crash_reports` | `on` | After a crash, offer a redacted log bundle and the bug form. See [Crash reports](#crash-reports). |
 | `clean_logs` | `ask` | After the game closes, list this session's game logs and ask (twice) before deleting them. `off` skips it. |
 | `channel` | `LIVE` | Which install to use when `game` points above it: `LIVE`, `PTU`, `EPTU`, and so on. |
