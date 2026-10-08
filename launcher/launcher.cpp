@@ -662,6 +662,43 @@ static bool JournalLine(const wstring& here, const std::string& line) {
     return ok;
 }
 
+// D2: antivirus (Defender scanning a new exe or DLL) and indexers hold files open for a moment.
+// Retry sharing / access-denied / lock errors with growing waits instead of giving up at once.
+static bool TransientLock(DWORD e) { return e == ERROR_SHARING_VIOLATION || e == ERROR_ACCESS_DENIED || e == ERROR_LOCK_VIOLATION; }
+
+static bool MoveRetrying(const wstring& from, const wstring& to, DWORD flags) {
+    static const DWORD kWaits[] = { 100, 250, 500, 1000, 2000, 4000 };
+    for (int i = 0;; ++i) {
+        if (MoveFileExW(from.c_str(), to.c_str(), flags)) return true;
+        const DWORD e = GetLastError();
+        if (!TransientLock(e) || i == ARRAYSIZE(kWaits)) { SetLastError(e); return false; }
+        Out("[i] %ls is in use (error %lu, antivirus?); trying again in %lu ms\n", from.c_str(), e, kWaits[i]);
+        Sleep(kWaits[i]);
+    }
+}
+
+// D1: copies src to dst and flushes dst to disk before returning.
+static bool CopyFlushed(const wstring& src, const wstring& dst) {
+    std::string bytes;
+    if (!ReadAll(src, bytes)) return false;
+    static const DWORD kWaits[] = { 100, 250, 500, 1000, 2000, 4000 };
+    HANDLE f = INVALID_HANDLE_VALUE;
+    for (int i = 0;; ++i) {
+        f = CreateFileW(dst.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (f != INVALID_HANDLE_VALUE) break;
+        const DWORD e = GetLastError();
+        if (!TransientLock(e) || i == ARRAYSIZE(kWaits)) { SetLastError(e); return false; }
+        Sleep(kWaits[i]);
+    }
+    DWORD put = 0;
+    bool ok = WriteFile(f, bytes.data(), (DWORD)bytes.size(), &put, nullptr) && put == bytes.size();
+    ok = FlushFileBuffers(f) && ok;
+    const DWORD e = GetLastError();
+    CloseHandle(f);
+    SetLastError(e);
+    return ok;
+}
+
 // Undo an unfinished swap from its journal: "R <rel>" = the old file was moved to <rel>.update-old,
 // "N <rel>" = a new file was created where none was. Processed newest first.
 static void RollBackUpdate(const wstring& here) {
@@ -672,10 +709,12 @@ static void RollBackUpdate(const wstring& here) {
     for (auto it = lines.rbegin(); it != lines.rend(); ++it) {
         if (it->size() < 3) continue;
         const wstring path = here + L"\\" + Wide(it->substr(2));
+        DeleteFileW((path + L".update-new").c_str());
         if ((*it)[0] == 'N') DeleteFileW(path.c_str());
         else if ((*it)[0] == 'R' && IsFile(path + L".update-old")) {
-            if (IsFile(path) && !DeleteFileW(path.c_str())) MoveFileExW(path.c_str(), (path + L".update-failed").c_str(), MOVEFILE_REPLACE_EXISTING);
-            MoveFileExW((path + L".update-old").c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING);
+            // A running new sc-offline.exe can't be deleted, but it can be renamed out of the way.
+            if (IsFile(path) && !DeleteFileW(path.c_str())) MoveRetrying(path, path + L".update-failed", MOVEFILE_REPLACE_EXISTING);
+            MoveRetrying(path + L".update-old", path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
         }
     }
 }
@@ -838,24 +877,35 @@ static bool SwapStaged(const wstring& here, const wstring& staged, const std::st
     CreateDirectoryW(UpdateDir(here).c_str(), nullptr);
     DeleteFileW(Journal(here).c_str());
     // Swap, journaling each step before it happens. Only files the manifest lists are copied.
-    int replaced = 0, added = 0;
+    int replaced = 0, added = 0, done = 0;
     bool ok = true;
+#ifdef SCO_UPDATE_TEST
+    // Test hook (D6): SCO_TEST_FAIL_AFTER=N fails the swap after N files, as a crash or a full disk would.
+    wchar_t failEnv[16] = {};
+    const int failAfter = GetEnvironmentVariableW(L"SCO_TEST_FAIL_AFTER", failEnv, ARRAYSIZE(failEnv)) ? _wtoi(failEnv) : -1;
+#endif
     for (const ManifestFile& mf : man.files) {
         const wstring rel = SafeRelPath(mf.path);
         if (PlayerOwned(rel)) continue;
-        const wstring dst = here + L"\\" + rel, src = staged + L"\\" + rel;
+#ifdef SCO_UPDATE_TEST
+        if (failAfter >= 0 && done >= failAfter) { Out("[!] SCO_TEST_FAIL_AFTER=%d: failing the swap here\n", failAfter); ok = false; break; }
+#endif
+        const wstring dst = here + L"\\" + rel, src = staged + L"\\" + rel, fresh = dst + L".update-new";
         const size_t cut = rel.find_last_of(L'\\');
         if (cut != wstring::npos) SHCreateDirectoryExW(nullptr, (here + L"\\" + rel.substr(0, cut)).c_str(), nullptr);
-        if (IsFile(dst)) {
-            if (!JournalLine(here, "R " + Narrow(rel)) || !MoveFileExW(dst.c_str(), (dst + L".update-old").c_str(), MOVEFILE_REPLACE_EXISTING)) {
-                Out("[!] couldn't move %ls aside (error %lu)\n", rel.c_str(), GetLastError()); ok = false; break;
-            }
-            ++replaced;
-        } else {
-            if (!JournalLine(here, "N " + Narrow(rel))) { ok = false; break; }
-            ++added;
+        // D1: write the new file beside its target, flushed to disk, and check it before anything moves.
+        if (!CopyFlushed(src, fresh) || FileSha256(fresh) != mf.sha256) {
+            Out("[!] couldn't write %ls (error %lu)\n", rel.c_str(), GetLastError()); DeleteFileW(fresh.c_str()); ok = false; break;
         }
-        if (!CopyFileW(src.c_str(), dst.c_str(), FALSE)) { Out("[!] couldn't write %ls (error %lu)\n", rel.c_str(), GetLastError()); ok = false; break; }
+        const bool had = IsFile(dst);
+        if (!JournalLine(here, std::string(had ? "R " : "N ") + Narrow(rel))) { DeleteFileW(fresh.c_str()); ok = false; break; }
+        if (had && !MoveRetrying(dst, dst + L".update-old", MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            Out("[!] couldn't move %ls aside (error %lu)\n", rel.c_str(), GetLastError()); DeleteFileW(fresh.c_str()); ok = false; break;
+        }
+        if (!MoveRetrying(fresh, dst, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) || FileSha256(dst) != mf.sha256) {
+            Out("[!] couldn't put %ls in place (error %lu)\n", rel.c_str(), GetLastError()); DeleteFileW(fresh.c_str()); ok = false; break;
+        }
+        ++(had ? replaced : added); ++done;
     }
     if (!ok) {
         Out("[!] update failed; putting the old files back\n");
