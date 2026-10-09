@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Merged into dinput8.dll's embedded manifest. Carries over EnableSegmentHeap from the former
+     src/sc-offline-dll.vcxproj, which wrote this element. -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <heapType xmlns="http://schemas.microsoft.com/SMI/2020/WindowsSettings">SegmentHeap</heapType>
+    </windowsSettings>
+  </application>
+</assembly>

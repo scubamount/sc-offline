@@ -1,4 +1,5 @@
 .vs/
+build/
 x64/
 src/x64/
 launcher/x64/
