@@ -1,48 +1,19 @@
 #include "hooks.h"
 #include "teleport.h"
-#include <initializer_list>
+#include "sco/hook.h"
 #include <nmmintrin.h>
 #include <share.h>
 
-static uint8_t* g_cave    = nullptr;
-static uint8_t* g_caveEnd = nullptr;
 bool            g_hooksInstalled = false;
 
-static bool AllocCaveNear(const uint8_t* anchor) {
-    if (g_cave) return true;
-    SYSTEM_INFO si; GetSystemInfo(&si);
-    const uintptr_t gran = si.dwAllocationGranularity;
-    const uintptr_t a = reinterpret_cast<uintptr_t>(anchor) & ~(gran - 1);
-    for (uintptr_t d = gran; d < 0x70000000; d += gran) {
-        for (uintptr_t cand : { a - d, a + d }) {
-            void* p = VirtualAlloc(reinterpret_cast<void*>(cand), 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-            if (p) { g_cave = static_cast<uint8_t*>(p); g_caveEnd = g_cave + 0x1000; return true; }
-        }
-    }
+// Every detour goes through sco-core's one patcher (sco/hook.h): caves near the target, the relay
+// and trampoline, and a registry that refuses a second detour on one function.
+static bool Detour(uint8_t* target, size_t stolen, void* detour, void** original, DWORD& err) {
+    const sco::hook::Error e = sco::hook::InstallDetour(target, stolen, detour, original);
+    if (e == sco::hook::Error::None) return true;
+    err = e == sco::hook::Error::Protect ? sco::hook::LastOsError() : 0;
+    Log("[!] detour at 0x%p: %s", static_cast<void*>(target), sco::hook::ErrorName(e));
     return false;
-}
-
-static bool InstallDetour(uint8_t* target, size_t stolen, void* detour, void** original, DWORD& err) {
-    const size_t need = 14 + stolen + 14;
-    if (!g_cave || g_cave + need > g_caveEnd || stolen < 5 || stolen > 16) return false;
-    uint8_t* relay = g_cave;
-    relay[0] = 0xFF; relay[1] = 0x25; memset(relay + 2, 0, 4); memcpy(relay + 6, &detour, 8);
-    uint8_t* tramp = relay + 14;
-    memcpy(tramp, target, stolen);
-    uint8_t* back = target + stolen;
-    tramp[stolen] = 0xFF; tramp[stolen + 1] = 0x25; memset(tramp + stolen + 2, 0, 4); memcpy(tramp + stolen + 6, &back, 8);
-    g_cave = tramp + stolen + 14;
-    g_cave += (16 - reinterpret_cast<uintptr_t>(g_cave) % 16) % 16;
-
-    const int64_t rel = relay - (target + 5);
-    if (rel < INT32_MIN || rel > INT32_MAX) return false;
-    uint8_t patch[16];
-    patch[0] = 0xE9;
-    const int32_t rel32 = static_cast<int32_t>(rel);
-    memcpy(patch + 1, &rel32, 4);
-    memset(patch + 5, 0x90, stolen - 5);
-    *original = tramp;
-    return WriteCode(target, patch, stolen, err);
 }
 
 using ValidateFilterFn     = uint64_t(__fastcall*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
@@ -247,10 +218,6 @@ static const HookSpec kHooks[] = {
 static PatchStatus g_hookStatus[sizeof(kHooks) / sizeof(kHooks[0])];
 
 void InstallHooks(const Section& text) {
-    if (!AllocCaveNear(text.base)) {
-        for (PatchStatus& st : g_hookStatus) st.result = PatchResult::ProtectFailed;
-        return;
-    }
     for (size_t i = 0; i < sizeof(kHooks) / sizeof(kHooks[0]); ++i) {
         const HookSpec& h = kHooks[i];
         PatchStatus& st = g_hookStatus[i];
@@ -258,7 +225,7 @@ void InstallHooks(const Section& text) {
         uint8_t* target = FindUniquePattern(text, h.pattern, st.sites);
         if (!target) { st.result = st.sites ? PatchResult::WrongMatchCount : PatchResult::NotFound; continue; }
         if (h.prepare && !h.prepare(target)) { st.result = PatchResult::NotFound; continue; }
-        if (!InstallDetour(target, h.stolen, h.detour, h.original, st.err)) { st.result = PatchResult::ProtectFailed; continue; }
+        if (!Detour(target, h.stolen, h.detour, h.original, st.err)) { st.result = PatchResult::ProtectFailed; continue; }
         st.result = PatchResult::Applied;
         st.at = target;
         g_hooksInstalled = true;
@@ -272,17 +239,14 @@ void LogHooks() {
 
 bool HookFunction(uint8_t* target, size_t stolen, void* detour, void** original) {
     DWORD err = 0;
-    if (!target || !InstallDetour(target, stolen, detour, original, err)) return false;
+    if (!target || !Detour(target, stolen, detour, original, err)) return false;
     g_hooksInstalled = true;
     return true;
 }
 
+// Memory near .text (within rel32 reach of the code that points at it), from sco-core's caves.
 uint8_t* NearData(size_t n) {
-    if (!g_text.base || !AllocCaveNear(g_text.base) || g_cave + n > g_caveEnd) return nullptr;
-    uint8_t* p = g_cave;
-    g_cave += n;
-    g_cave += (16 - reinterpret_cast<uintptr_t>(g_cave) % 16) % 16;
-    return p;
+    return g_text.base ? sco::hook::AllocateNear(g_text.base, n) : nullptr;
 }
 
 constexpr size_t   kEntitlementSize = 0x150;

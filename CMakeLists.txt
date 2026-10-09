@@ -10,7 +10,7 @@
 #   dinput8     shared   src/*.cpp, src/builtins/*.cpp -> dinput8.dll
 #   sc-offline  exe      launcher/launcher.cpp -> sc-offline.exe
 #   sco-core    static   external/sco-core (submodule): scanners, signatures, host kit, plugin
-#                        loader and sco-lua; dinput8 links sco_app and sco_lua
+#                        loader and sco-lua; dinput8 links sco_app, sco_lua and sco_hook
 #
 # Every setting below carries over from the former src/sc-offline-dll.vcxproj and
 # launcher/sc-offline.vcxproj (Release|x64 and Debug|x64).
@@ -112,6 +112,7 @@ add_library(dinput8 SHARED
   src/travel.cpp
   # Built-in plugins (src/builtins/builtins.h).
   src/builtins/teleport_plugin.cpp
+  src/builtins/spawn_plugin.cpp
   # Manifest EnableSegmentHeap.
   src/dinput8.manifest
 )
@@ -125,7 +126,7 @@ target_link_options(dinput8 PRIVATE /SUBSYSTEM:WINDOWS "$<$<CONFIG:Release>:/OPT
 # Also named by #pragma comment(lib) in dllmain.cpp and menu.cpp.
 target_link_libraries(dinput8 PRIVATE imgui d3d11 shlwapi advapi32 windowscodecs ole32)
 # The host kit (sco/app.h, with sco/scan.h, signatures, caps, the plugin loader) and sco-lua.
-target_link_libraries(dinput8 PRIVATE sco_app sco_lua)
+target_link_libraries(dinput8 PRIVATE sco_app sco_lua sco_hook)
 
 # WholeProgramOptimization + LinkTimeCodeGeneration in Release (/GL, /LTCG).
 set_target_properties(imgui dinput8 PROPERTIES INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
