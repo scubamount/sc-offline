@@ -218,8 +218,9 @@ static LRESULT CALLBACK GetMsgProc(int code, WPARAM wp, LPARAM lp) {
     if (code >= 0) {
         OnMainThreadTick();
         // GetMessage hands the game's main loop WM_QUIT when the game closes: the last point we
-        // reliably see on the game thread. Peeks that leave it queued don't count.
-        if (wp == PM_REMOVE && reinterpret_cast<const MSG*>(lp)->message == WM_QUIT) StopHostKit();
+        // reliably see on the game thread. Peeks that leave it queued don't count; a PeekMessage
+        // that removes it may add PM_NOYIELD, so test the PM_REMOVE bit.
+        if ((wp & PM_REMOVE) && reinterpret_cast<const MSG*>(lp)->message == WM_QUIT) StopHostKit();
     }
     return CallNextHookEx(g_msgHook, code, wp, lp);
 }
