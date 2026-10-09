@@ -182,7 +182,7 @@ That's expected until the mod is updated for the new game version.
 
 ## How it's built
 
-sc-offline is the game-specific bootstrap: it loads as `dinput8.dll`, applies the offline patches, hooks the game's main thread and draws the menu. Underneath it runs on [sco-core](https://github.com/scubamount/sco-core)'s host kit, which brings the signature scanner, the plugin loader and the plugin API. sc-offline's own features are becoming built-in plugins one at a time, on the same API that plugins made with the [sco SDK](https://github.com/scubamount/sco-core/blob/main/sdk/README.md) use. Teleport (F7/F8) is the first. Building from source: [docs/build.md](docs/build.md).
+sc-offline is the game-specific bootstrap: it loads as `dinput8.dll`, applies the offline patches, hooks the game's main thread and draws the menu. Underneath it runs on [sco-core](https://github.com/scubamount/sco-core)'s host kit, which brings the signature scanner, the plugin loader and the plugin API. sc-offline's own features are becoming built-in plugins one at a time, on the same API that plugins made with the [sco SDK](https://github.com/scubamount/sco-core/blob/main/sdk/README.md) use. Teleport (F7/F8) was the first and the ship spawner the second; the spawner also offers other plugins a service to spawn entities near you. All of sc-offline's detours go through sco-core's one patcher. Building from source: [docs/build.md](docs/build.md).
 
 ## More docs
 

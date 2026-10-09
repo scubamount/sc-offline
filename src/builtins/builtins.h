@@ -6,6 +6,11 @@
 #include "sco/plugins.h"
 
 extern const sco::plugins::Builtin kTeleportBuiltin;   // teleport_plugin.cpp: teleport.save, teleport.go
+extern const sco::plugins::Builtin kSpawnBuiltin;      // spawn_plugin.cpp: spawn.ship, spawn.entities, the spawner tick
+
+// True while the spawn built-in is loaded (or crashed): its tick subscription runs ProcessShipMenu,
+// so dllmain doesn't. False when it never loaded, and dllmain runs the spawner tick itself.
+bool SpawnBuiltinOwnsTick();
 
 // Every built-in, in load order.
-inline const sco::plugins::Builtin kBuiltins[] = { kTeleportBuiltin };
+inline const sco::plugins::Builtin kBuiltins[] = { kTeleportBuiltin, kSpawnBuiltin };

@@ -262,7 +262,9 @@ static void InstallQuitHook() {
 }
 
 static void RunFeatureTicks(DWORD now) {
-    ProcessShipMenu(now);
+    // The spawn built-in runs the spawner from its tick subscription; this is the fallback when it
+    // didn't load.
+    if (!SpawnBuiltinOwnsTick()) ProcessShipMenu(now);
     ProcessLoadout();
     ProcessNpcs();
     ProcessBuild();

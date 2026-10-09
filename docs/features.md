@@ -74,26 +74,30 @@ sc-offline can load plugins built with the [sco SDK](https://github.com/scubamou
 3. Start the game. `mod.log` reports what was found, after the startup lines:
 
    ```
-   [plugin] 4 found, 4 loaded (plugins = on)
+   [plugin] 5 found, 5 loaded (plugins = on)
    [plugin] teleport <version> builtin loaded
+   [plugin] spawn <version> builtin loaded
    [plugin] greeter 1.0.0 lua loaded
    ...
    ```
 
    A plugin that can't load is listed with the reason (`refused: built for api 2.0`, `missing capability 'teleport'`, ...); the others still load. To switch one plugin off, put an empty file named `disabled` in its folder.
 
-With `plugins = off`, `mod.log` shows `[plugin] 1 found, 1 loaded (plugins = off)`: only the built-in plugins load.
+With `plugins = off`, `mod.log` shows `[plugin] 2 found, 2 loaded (plugins = off)`: only the built-in plugins load.
 
 ### Built-in plugins
 
-Some of sc-offline's own features are plugins compiled into `dinput8.dll`. They load first, with `plugins` on or off, and are listed as `builtin` in the `[plugin]` report (`[plugin] loaded teleport <version> (api 1.0) built in`). Their commands are the ones plugins call through the SDK's `invoke`:
+Some of sc-offline's own features are plugins compiled into `dinput8.dll`. They load first, with `plugins` on or off, and are listed as `builtin` in the `[plugin]` report (`[plugin] loaded teleport <version> (api 1.1) built in`). Their commands are the ones plugins call through the SDK's `invoke`:
 
 | Command | Does | Key |
 | --- | --- | --- |
 | `teleport.save` | Saves where you're standing to `spawn.txt`; the reply names the spot | **F7** |
 | `teleport.go` | Teleports to the saved spot; the reply says where you went, or why not | **F8** |
+| `spawn.ship <class> <height>` | Spawns a ship `<height>` m (0 to 10000) above you, as the Vehicles tab does, and makes it the Crew & seats target; the status strip says when it's there. An unknown class answers `failed` | |
 
-Both need the `teleport` capability, which is missing when this game build's teleport addresses aren't found; the rest of the plugin system still starts. A built-in owns its id and command prefix, so a native or Lua plugin folder named `teleport` is refused. A plugin runs its own code in the game, so only install plugins you trust.
+The teleport commands need the `teleport` capability and `spawn.ship` needs `spawn.ship`; each is missing when this game build's addresses for it aren't found, and the rest of the plugin system still starts. A built-in owns its id, command prefix and services, so a plugin folder named `teleport` or `spawn` is refused (`the id belongs to a built-in plugin`), whatever its kind.
+
+The `spawn` built-in also runs the spawner's own work every tick (the Vehicles tab's spawns, seat jobs, crew), so a fault there switches off the spawner (`[plugin] spawn ... crashed`) instead of the game. For plugin authors it publishes a service, `spawn.entities` 1.0: a C function table to spawn an entity class near you and look up your entity and ship ids, without going through command replies. Its header is [`src/builtins/spawn_service.h`](../src/builtins/spawn_service.h); find it with `query_service` (sco_api 1.1). A plugin runs its own code in the game, so only install plugins you trust.
 
 When you quit the game (the menu's Quit, or the `quit` console command), plugins get `game.exit` and are then unloaded, newest first and built-ins last, before the game exits. `mod.log` shows `[app] game closing (CSystem::Quit): game.exit, unloading plugins` followed by one `[plugin] unloaded <id>` line per plugin. If the game crashes or is killed (Task Manager, `taskkill`), plugins get no `game.exit` and aren't unloaded; don't rely on it to save anything that matters.
 
