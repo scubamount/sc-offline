@@ -1,6 +1,7 @@
 #include "hooks.h"
 #include "teleport.h"
 #include "sco/hook.h"
+#include <initializer_list>
 #include <nmmintrin.h>
 #include <share.h>
 
