@@ -152,6 +152,8 @@ struct Config {
     bool crashReports = true;
     // Show "Playing sc-offline" on the player's Discord profile while the game runs (issue #34).
     bool discordPresence = true;
+    // Load plugins from data\plugins (sco-core's plugin loader). Off by default.
+    bool plugins = false;
 };
 
 static bool ParseOnOff(const wstring& v, bool& out) {
@@ -192,6 +194,9 @@ static bool ReadConfig(const wstring& path, Config& c) {
         }
         else if (!_wcsicmp(k.c_str(), L"discord_presence")) {
             if (!ParseOnOff(v, c.discordPresence)) Out("[!] sc-offline.ini line %d: discord_presence must be on or off\n", lineNo);
+        }
+        else if (!_wcsicmp(k.c_str(), L"plugins")) {
+            if (!ParseOnOff(v, c.plugins)) Out("[!] sc-offline.ini line %d: plugins must be on or off\n", lineNo);
         }
         else if (!_wcsicmp(k.c_str(), L"check_updates")) {
             if (!ParseOnOff(v, c.checkUpdates)) Out("[!] sc-offline.ini line %d: check_updates must be on or off\n", lineNo);
@@ -2827,11 +2832,13 @@ int wmain(int argc, wchar_t** argv) {
         SetVar(L"SC_OFFLINE_SHIPS_FILE", data + L"\\ships.txt");
         SetVar(L"SC_OFFLINE_START", cfg.start);
         SetVar(L"SC_OFFLINE_START_SHIP", cfg.startShip);
+        SetVar(L"SC_OFFLINE_PLUGINS", cfg.plugins ? L"on" : L"off");
         SetVar(L"SC_USER", g.userDir);
         if (dry)
-            Out("[dry-run] would set SC_OFFLINE_BOOT_MAP=%ls SC_OFFLINE_START_SHIP=%ls SC_OFFLINE_START=%ls\n"
+            Out("[dry-run] would set SC_OFFLINE_BOOT_MAP=%ls SC_OFFLINE_START_SHIP=%ls SC_OFFLINE_START=%ls SC_OFFLINE_PLUGINS=%ls\n"
                 "          SC_OFFLINE_MOD_LOG, _SPAWN_FILE, _SHIPS_FILE under %ls; SC_USER=%ls\n",
-                cfg.bootMap.c_str(), cfg.startShip.c_str(), cfg.start.c_str(), data.c_str(), g.userDir.c_str());
+                cfg.bootMap.c_str(), cfg.startShip.c_str(), cfg.start.c_str(), cfg.plugins ? L"on" : L"off",
+                data.c_str(), g.userDir.c_str());
     }
 
     // 4. Change the game folder, through the helper (see the top of this file).
