@@ -140,3 +140,16 @@ target_compile_definitions(sc-offline PRIVATE ${SCO_COMMON_DEFINES})
 target_compile_options(sc-offline PRIVATE ${SCO_COMMON_OPTIONS} /W3)
 # Also named by #pragma comment(lib) in launcher.cpp.
 target_link_libraries(sc-offline PRIVATE bcrypt shell32 shlwapi advapi32 ole32 winhttp user32 gdi32 comctl32)
+
+# --- test plugins (CI artifact "test-plugins"; never part of a release) ---------------------------
+# spawn_probe exercises the spawn built-in's command and service in game (tools/test-plugins).
+# Built into build/test-plugins/<id>/ with its plugin.ini, ready to copy into data/plugins/.
+add_library(spawn_probe SHARED tools/test-plugins/spawn_probe/spawn_probe.c)
+target_include_directories(spawn_probe PRIVATE external/sco-core/include src/builtins)
+target_link_libraries(spawn_probe PRIVATE user32)
+set(_probe_dir "${CMAKE_BINARY_DIR}/test-plugins/spawn_probe")
+set_target_properties(spawn_probe PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${_probe_dir}/$<0:>"   # $<0:> keeps the config name out of the path
+  LIBRARY_OUTPUT_DIRECTORY "${_probe_dir}/$<0:>"
+  ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib/test-plugins")
+configure_file(tools/test-plugins/spawn_probe/plugin.ini "${_probe_dir}/plugin.ini" COPYONLY)
