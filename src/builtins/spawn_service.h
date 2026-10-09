@@ -3,7 +3,7 @@
  *
  *   const sc_spawn_service_v1* spawn = NULL;
  *   if (api->size > offsetof(sco_api, query_service) &&
- *       api->query_service(self, SC_SPAWN_SERVICE_NAME, SC_SPAWN_SERVICE_VERSION,
+ *       api->query_service(SC_SPAWN_SERVICE_NAME, SC_SPAWN_SERVICE_VERSION,
  *                          (const void**)&spawn) == SCO_OK) { ... }
  *
  * Every function: game thread only (a command, a tick or a run_on_game_thread task); called

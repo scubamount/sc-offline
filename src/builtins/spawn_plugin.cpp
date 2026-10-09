@@ -116,10 +116,7 @@ sco_result SpawnLoad(const sco_api* api, sco_plugin* self) {
     c.arg_def_size = sizeof(sco_arg_def);
     c.fn = Ship;
     sco_result r = api->register_command(self, &c);
-    if (r == SCO_OK) {
-        const sco_service_def def = { sizeof(sco_service_def), SC_SPAWN_SERVICE_NAME, SC_SPAWN_SERVICE_VERSION, &kService };
-        r = api->provide_service(self, &def);
-    }
+    if (r == SCO_OK) r = api->provide_service(self, SC_SPAWN_SERVICE_NAME, SC_SPAWN_SERVICE_VERSION, &kService);
     if (r == SCO_OK) r = api->subscribe(self, "tick", OnTick, nullptr);
     if (r != SCO_OK) { g_api = nullptr; g_self = nullptr; return r; }   // the host releases what was registered
     g_ticking = true;
