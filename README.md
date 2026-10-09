@@ -180,6 +180,10 @@ That's expected until the mod is updated for the new game version.
 2. In the sc-offline window, check the light at the top. **Green** means the mod is out of the game folder and every PC change is undone. **Red** lists what is left: click **Uninstall**, which is enabled only then. (From a terminal: `sc-offline.exe status`, then `sc-offline.exe uninstall` if needed.)
 3. If you set `eac_hosts` or `eac_rename` to `off` and made those changes by hand, undo them by hand: rename `EasyAntiCheat_EOS.exe.bak` back, delete the `modules-cdn.eac-prod.on.epicgames.com` line from your hosts file, and run `ipconfig /flushdns`.
 
+## How it's built
+
+sc-offline is the game-specific bootstrap: it loads as `dinput8.dll`, applies the offline patches, hooks the game's main thread and draws the menu. Underneath it runs on [sco-core](https://github.com/scubamount/sco-core)'s host kit, which brings the signature scanner, the plugin loader and the plugin API. sc-offline's own features are becoming built-in plugins one at a time, on the same API that plugins made with the [sco SDK](https://github.com/scubamount/sco-core/blob/main/sdk/README.md) use. Teleport (F7/F8) is the first. Building from source: [docs/build.md](docs/build.md).
+
 ## More docs
 
 | Doc | For |

@@ -4,6 +4,8 @@
 
 - The build is now CMake instead of a Visual Studio solution: open the folder in Visual Studio 2026, or `cmake -S . -B build -A x64` and `cmake --build build --config Release`. `sc-offline.slnx` and the `.vcxproj` files are gone; nothing changes for players. See `docs/build.md`.
 - sc-offline now runs on [sco-core](https://github.com/scubamount/sco-core)'s host kit (a git submodule in `external/sco-core`: clone with `--recurse-submodules`). The features work as before. `mod.log` gains a `[core] signatures: N/N OK` line and a `[plugin]` report, and status-strip messages are logged as `[status]` instead of `[ship]`.
+- F7 and F8 are now the `teleport.save` and `teleport.go` commands of a built-in `teleport` plugin, the first of sc-offline's features on sco-core's plugin API; plugins can call them too. They work as before. `mod.log`'s `[plugin]` report lists `teleport <version> builtin loaded`, with plugins on or off.
+- The plugin system no longer depends on teleport: on a game build where teleport's addresses aren't found, the host kit and plugins still start.
 - **Plugins**, off by default: with `plugins = on` in `sc-offline.ini`, plugins in `data\plugins\<id>\` built with the sco SDK (native, Lua or data packs) are loaded and listed in `mod.log`. See `docs/features.md`.
 
 ## 0.7.0 (2026-10-07)

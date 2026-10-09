@@ -28,13 +28,17 @@ The targets are `dinput8` (the DLL), `sc-offline` (the launcher), `imgui` (the v
 
 No Visual Studio? CI builds both on every push to `main`. Download the `dinput8-release` artifact from [Actions](https://github.com/scubamount/sc-offline/actions).
 
+## How the code is organized
+
+`src/` is the game-specific bootstrap: the `dinput8.dll` proxy (`dllmain.cpp`), the anti-cheat check, the offline patches, the `WH_GETMESSAGE` hook that runs code on the game's main thread, and the ImGui menu. On the hook's first tick it starts sco-core's host kit (`sco::app::Start`): capabilities from `SetFeatureCaps`, the `sco_api` table, the built-in plugins, then the plugins in `data/plugins/`. That happens whether or not a feature resolved on this game build. sc-offline's features move into built-in plugins one at a time (sco-core's `docs/framework.md`, Phase 4): each is a `sco::plugins::Builtin` in `src/builtins/`, listed in `src/builtins/builtins.h`, and talks through `sco_api` like any plugin. Teleport is the first (`src/builtins/teleport_plugin.cpp`): it registers `teleport.save` and `teleport.go`, F7 and F8 invoke them, and the mechanics stay in `src/teleport.cpp`. Built-ins are a table, not DLL exports.
+
 ## Check on macOS or Linux
 
 ```bash
 tools/check.sh
 ```
 
-This runs in a few seconds. It parses every `src/*.cpp` and `launcher/*.cpp` file with clang against mingw-w64's Windows headers. It also screens `src/` for MSVC error C2712 (`__try` in a function that owns an object needing unwinding, such as a `std::string`). It is not a build: only MSVC's build is. Known clang-only diagnostics are listed in `tools/check-baseline.txt`, and only new ones fail the check. You need clang and mingw-w64 (`brew install llvm mingw-w64` on macOS).
+This runs in a few seconds. It parses every `src/*.cpp`, `src/builtins/*.cpp` and `launcher/*.cpp` file with clang against mingw-w64's Windows headers. It also screens `src/` for MSVC error C2712 (`__try` in a function that owns an object needing unwinding, such as a `std::string`). It is not a build: only MSVC's build is. Known clang-only diagnostics are listed in `tools/check-baseline.txt`, and only new ones fail the check. You need clang and mingw-w64 (`brew install llvm mingw-w64` on macOS).
 
 ### Self-update tests under Wine
 

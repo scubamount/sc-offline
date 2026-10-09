@@ -14,7 +14,7 @@ Most of the lists below are plain text files in `data/`, and the counts are take
 
 - Teleport to planets, moons, stations, Lagrange points and jump points, grouped by star system (`locations.txt`).
 - **Scan** lists everything the game has loaded and writes it to `locations_found.txt`. Interiors and small zones are hidden unless you ask to see them.
-- Save named spots of your own (`bookmarks.txt`). **F7** saves one quick position and **F8** takes you back to it (`spawn.txt`).
+- Save named spots of your own (`bookmarks.txt`). **F7** saves one quick position and **F8** takes you back to it (`spawn.txt`). F7 and F8 run the built-in teleport plugin's commands; see [Plugins](#plugins).
 - A teleport won't take you into another star system. Pyro and Nyx can only be reached with the default `boot_map = PU_All`.
 - Some Pyro places drop you in orbit, because `locations.txt` doesn't have their radius yet.
 
@@ -74,14 +74,26 @@ sc-offline can load plugins built with the [sco SDK](https://github.com/scubamou
 3. Start the game. `mod.log` reports what was found, after the startup lines:
 
    ```
-   [plugin] 3 found, 3 loaded (plugins = on)
+   [plugin] 4 found, 4 loaded (plugins = on)
+   [plugin] teleport <version> builtin loaded
    [plugin] greeter 1.0.0 lua loaded
    ...
    ```
 
    A plugin that can't load is listed with the reason (`refused: built for api 2.0`, `missing capability 'teleport'`, ...); the others still load. To switch one plugin off, put an empty file named `disabled` in its folder.
 
-With `plugins = off`, `mod.log` shows `[plugin] 0 found, 0 loaded (plugins = off)` and nothing is loaded. A plugin runs its own code in the game, so only install plugins you trust. When the game closes, plugins get `game.exit` and are unloaded.
+With `plugins = off`, `mod.log` shows `[plugin] 1 found, 1 loaded (plugins = off)`: only the built-in plugins load.
+
+### Built-in plugins
+
+Some of sc-offline's own features are plugins compiled into `dinput8.dll`. They load first, with `plugins` on or off, and are listed as `builtin` in the `[plugin]` report (`[plugin] loaded teleport <version> (api 1.0) built in`). Their commands are the ones plugins call through the SDK's `invoke`:
+
+| Command | Does | Key |
+| --- | --- | --- |
+| `teleport.save` | Saves where you're standing to `spawn.txt`; the reply names the spot | **F7** |
+| `teleport.go` | Teleports to the saved spot; the reply says where you went, or why not | **F8** |
+
+Both need the `teleport` capability, which is missing when this game build's teleport addresses aren't found; the rest of the plugin system still starts. A built-in owns its id and command prefix, so a native or Lua plugin folder named `teleport` is refused. A plugin runs its own code in the game, so only install plugins you trust. When the game closes, plugins get `game.exit` and are unloaded.
 
 ## Not available offline
 
