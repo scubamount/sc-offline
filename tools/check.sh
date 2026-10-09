@@ -3,7 +3,7 @@
 #
 #   tools/check.sh            # from the repo root
 #
-# 1. Parses every src/*.cpp and launcher/*.cpp with clang against mingw-w64's Windows headers (-fsyntax-only).
+# 1. Parses every src/*.cpp, src/builtins/*.cpp and launcher/*.cpp with clang against mingw-w64's Windows headers (-fsyntax-only).
 #    MSVC accepts a few things clang rejects; those are listed in tools/check-baseline.txt and
 #    only NEW diagnostics fail the check.
 # 2. MSVC error C2712 screen: a function containing __try may not own an object that needs
@@ -35,7 +35,7 @@ SCOLUA=$ROOT/external/sco-core/plugins/lua
 n=0; broken=0
 TMP=$(mktemp)
 shopt -s nullglob
-for f in "$ROOT"/src/*.cpp "$ROOT"/launcher/*.cpp; do
+for f in "$ROOT"/src/*.cpp "$ROOT"/src/builtins/*.cpp "$ROOT"/launcher/*.cpp; do
   n=$((n+1))
   out=$("$CLANG" -fsyntax-only -std=c++20 --target=x86_64-w64-windows-gnu \
      -fms-extensions \
@@ -57,7 +57,7 @@ done
 # MSVC C2712 screen (clang does not enforce it): a function containing __try may not own
 # an object that needs unwinding. Flags __try functions that construct std:: objects or call
 # a function returning one by value.
-python3 - "$ROOT/src" "$ROOT/launcher" <<'PY' >> "$TMP"
+python3 - "$ROOT/src" "$ROOT/src/builtins" "$ROOT/launcher" <<'PY' >> "$TMP"
 import os, re, sys
 src = {f: open(os.path.join(S, f), encoding="utf-8", errors="replace").read()
        for S in sys.argv[1:] for f in os.listdir(S) if f.endswith((".cpp", ".h"))}

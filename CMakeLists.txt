@@ -7,7 +7,7 @@
 #
 # Layout:
 #   imgui       static   src/third_party/imgui (vendored, its own warnings off)
-#   dinput8     shared   src/*.cpp -> dinput8.dll
+#   dinput8     shared   src/*.cpp, src/builtins/*.cpp -> dinput8.dll
 #   sc-offline  exe      launcher/launcher.cpp -> sc-offline.exe
 #   sco-core    static   external/sco-core (submodule): scanners, signatures, host kit, plugin
 #                        loader and sco-lua; dinput8 links sco_app and sco_lua
@@ -110,6 +110,8 @@ add_library(dinput8 SHARED
   src/outfits.cpp
   src/menu.cpp
   src/travel.cpp
+  # Built-in plugins (src/builtins/builtins.h).
+  src/builtins/teleport_plugin.cpp
   # Manifest EnableSegmentHeap.
   src/dinput8.manifest
 )

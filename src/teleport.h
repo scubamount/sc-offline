@@ -35,5 +35,12 @@ void        CurrentSystemName(char* out, size_t n);               // the system 
 uintptr_t   SystemZoneOf(uintptr_t zone);
 void        CurrentSystemZoneName(char* out, size_t n);           // "SolarSystem_<id>" you're in, or ""                         // the SolarSystem_* zone above a zone, or 0
 
+// F7 and F8: save where you're standing (spawn.txt) / go to the saved spot. The teleport built-in's
+// commands teleport.save and teleport.go run these (src/builtins/teleport_plugin.cpp). `why` names
+// the caller in mod.log ("F7", "teleport.go"); reply gets a short message either way. False when it
+// didn't happen. Game thread.
+bool SaveSpotHere(const char* why, char* reply, size_t n);
+bool GoToSavedSpot(const char* why, char* reply, size_t n);
+
 void LoadSavedSpot(bool startingOverDaymar);
 void TeleportTick(DWORD now);

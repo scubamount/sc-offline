@@ -302,6 +302,48 @@ const char* CaptureCurrentSpot(Spot& s) {
     return CaptureSpot(s, world);
 }
 
+bool SaveSpotHere(const char* why, char* reply, size_t n) {
+    Spot s;
+    double world[3] = {};
+    if (const char* err = CaptureSpot(s, world)) {
+        Log("[tp] %s save failed: %s", why, err);
+        snprintf(reply, n, "Couldn't save the spot: %s", err);
+        return false;
+    }
+    if (!SaveSpot(s)) {
+        Log("[tp] %s: could not write the spawn file (SC_OFFLINE_SPAWN_FILE)", why);
+        snprintf(reply, n, "Couldn't write the spawn file (SC_OFFLINE_SPAWN_FILE)");
+        return false;
+    }
+    g_spot = s;
+    char chain[512];
+    DescribeChain(s, chain, sizeof(chain));
+    Log("[tp] %s saved spot: '%s' pos (%.2f, %.2f, %.2f) m; zones: %s", why, s.z[0].name,
+        s.z[0].local[0], s.z[0].local[1], s.z[0].local[2], chain);
+    snprintf(reply, n, "Saved spot: '%s' pos (%.2f, %.2f, %.2f) m; zones: %s", s.z[0].name,
+             s.z[0].local[0], s.z[0].local[1], s.z[0].local[2], chain);
+    return true;
+}
+
+bool GoToSavedSpot(const char* why, char* reply, size_t n) {
+    if (!g_spot.n) {
+        Log("[tp] %s: no saved spot yet (stand somewhere and press F7)", why);
+        snprintf(reply, n, "No saved spot yet (stand somewhere and press F7)");
+        return false;
+    }
+    if (const char* err = GoToSpot(g_spot, GetTickCount(), why)) {
+        Log("[tp] %s teleport failed: %s", why, err);
+        SetMenuStatus("%s: %s.", why, err);
+        snprintf(reply, n, "%s", err);
+        return false;
+    }
+    if (g_refineLevel > 0)
+        snprintf(reply, n, "Teleported via '%s' (waiting for '%s' to stream in)", g_spot.z[g_refineLevel].name, g_spot.z[0].name);
+    else
+        snprintf(reply, n, "Teleported to saved spot in '%s'", g_spot.z[0].name);
+    return true;
+}
+
 static void SystemFromZoneName(const char* name, char* out, size_t n) {
     // OOC_Stanton_2b_Daymar -> Stanton
     if (!name || _strnicmp(name, "OOC_", 4) != 0) return;
@@ -396,23 +438,9 @@ void LoadSavedSpot(bool startingOverDaymar) {
 
 void TeleportTick(DWORD now) {
     const bool focus = GameHasFocus();
-    if (KeyPressed(VK_F7, g_keyWasDown[0]) && focus) {
-        Spot s;
-        double world[3] = {};
-        if (const char* err = CaptureSpot(s, world)) Log("[tp] F7 save failed: %s", err);
-        else if (!SaveSpot(s)) Log("[tp] F7: could not write the spawn file (SC_OFFLINE_SPAWN_FILE)");
-        else {
-            g_spot = s;
-            char chain[512];
-            DescribeChain(s, chain, sizeof(chain));
-            Log("[tp] F7 saved spot: '%s' pos (%.2f, %.2f, %.2f) m; zones: %s", s.z[0].name,
-                s.z[0].local[0], s.z[0].local[1], s.z[0].local[2], chain);
-        }
-    }
-    if (KeyPressed(VK_F8, g_keyWasDown[1]) && focus) {
-        if (!g_spot.n) Log("[tp] F8: no saved spot yet (stand somewhere and press F7)");
-        else if (const char* err = GoToSpot(g_spot, now, "F8")) { Log("[tp] F8 teleport failed: %s", err); SetMenuStatus("F8: %s.", err); }
-    }
+    char reply[256];
+    if (KeyPressed(VK_F7, g_keyWasDown[0]) && focus) SaveSpotHere("F7", reply, sizeof(reply));
+    if (KeyPressed(VK_F8, g_keyWasDown[1]) && focus) GoToSavedSpot("F8", reply, sizeof(reply));
 
     if (g_autoTeleportPending) {
         uintptr_t actor, entity;
