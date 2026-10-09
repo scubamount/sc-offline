@@ -4,6 +4,14 @@
 
 The build is CMake (`CMakeLists.txt` at the root), x64 only, with MSVC.
 
+[sco-core](https://github.com/scubamount/sco-core) (the scanners, signature rows, host kit, plugin loader and sco-lua) is a git submodule in `external/sco-core`, built into `dinput8.dll`. Clone with it:
+
+```
+git clone --recurse-submodules https://github.com/scubamount/sc-offline.git
+```
+
+In an existing clone, or after a pull that moves the pin, run `git submodule update --init`. Without it, CMake configure and `tools/check.sh` stop and say so.
+
 1. Install **Visual Studio 2026** with the **Desktop development with C++** workload. It includes CMake.
 2. In Visual Studio, use **File → Open → Folder** on the repository root. Visual Studio reads `CMakeLists.txt`; pick an x64 **Release** configuration and build. Or from a Developer PowerShell:
 
@@ -16,7 +24,7 @@ The build is CMake (`CMakeLists.txt` at the root), x64 only, with MSVC.
 
 3. The build produces `dinput8.dll` (the mod, from `src/`) and `sc-offline.exe` (the launcher, from `launcher/`) in `build\bin\Release\` (`build\bin\Debug\` for Debug; directly in `bin\` of the build folder with a single-configuration generator such as Ninja, which Visual Studio's Open Folder uses by default). To play, put both in a folder together with `data/` and `launcher/sc-offline.ini`.
 
-The targets are `dinput8` (the DLL), `sc-offline` (the launcher) and `imgui` (the vendored Dear ImGui under `src/third_party/imgui`, built as a static library with its warnings off). Both binaries link the C runtime statically, so they don't need the Visual C++ redistributable installed. Release builds use whole-program optimization and carry no debug information.
+The targets are `dinput8` (the DLL), `sc-offline` (the launcher), `imgui` (the vendored Dear ImGui under `src/third_party/imgui`, built as a static library with its warnings off) and sco-core's libraries (`sco_app` and `sco_lua` with what they link). sco-core is built without its tests and without warnings-as-errors; sco-core's own CI runs those. Both binaries link the C runtime statically, so they don't need the Visual C++ redistributable installed. Release builds use whole-program optimization and carry no debug information.
 
 No Visual Studio? CI builds both on every push to `main`. Download the `dinput8-release` artifact from [Actions](https://github.com/scubamount/sc-offline/actions).
 
@@ -39,6 +47,8 @@ Builds the launcher with `-DSCO_UPDATE_TEST` and runs 14 update scenarios (good 
 ## CI
 
 [`.github/workflows/build.yml`](../.github/workflows/build.yml) runs on pushes to `main`, on pull requests, and on `v*` tags:
+
+Both jobs check out `external/sco-core` (`submodules: true`).
 
 1. `check` runs `tools/check.sh` and the release manifest tests (`python3 tools/test_release_manifest.py`) on Linux.
 2. `build` configures and builds Release x64 with CMake and MSVC on Windows, then checks the binaries with `dumpbin` and `mt`: `dinput8.dll` exports `DirectInput8Create` forwarded to System32's `dinput8.dll`, both files are x64, neither imports the dynamic C runtime, and `sc-offline.exe`'s manifest asks for `asInvoker` (the launcher asks for administrator rights itself when it needs them). It uploads both as `dinput8-release`.

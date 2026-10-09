@@ -41,13 +41,14 @@ When one of these files is present, `src/contracts.cpp` or `src/spawner.cpp` cha
 
 ## Environment variables
 
-`sc-offline.exe` sets these before it starts the game. `sc-offline.ini` supplies the first three.
+`sc-offline.exe` sets these before it starts the game. `sc-offline.ini` supplies the first four.
 
 | Variable | Effect |
 | --- | --- |
 | `SC_OFFLINE_BOOT_MAP` | The boot map, from `boot_map` (default `PU_All`). |
 | `SC_OFFLINE_START_SHIP` | The ship you start in, from `start_ship` |
 | `SC_OFFLINE_START` | From `start`. `Daymar` starts you over Daymar |
+| `SC_OFFLINE_PLUGINS` | From `plugins`: `on` loads plugins from `plugins\` beside the ship list (`data\plugins`); anything else is off |
 | `SC_OFFLINE_SHIPS_FILE` | Where the ship list is read from |
 | `SC_OFFLINE_SPAWN_FILE` | Where the F7 position is stored |
 | `SC_OFFLINE_MOD_LOG` | Where `mod.log` is written |

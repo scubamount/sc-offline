@@ -63,6 +63,26 @@ Background image settings. Save a picture as `data/menu_background.png` (or `.jp
 
 Everything the mod does is written to `data/mod.log`. The first line of the file is the version.
 
+The startup lines include sco-core's signature report: `[core] signatures: N/N OK`, then one line for each game address that wasn't found (`MISSING`, `AMBIG`, `FAILED` or `BLOCKED`, with the reason). Messages shown in the menu's status strip are also logged, as `[status] ...`.
+
+## Plugins
+
+sc-offline can load plugins built with the [sco SDK](https://github.com/scubamount/sco-core/blob/main/sdk/README.md): native DLLs, Lua scripts and data packs. Loading is **off by default**.
+
+1. Set `plugins = on` in `sc-offline.ini`.
+2. Put each plugin in its own folder, `data/plugins/<id>/`, with its `plugin.ini` (for example `data/plugins/hello/plugin.ini` and `hello.dll`). The SDK's examples (`hello`, `greeter`, `travel_pack`) are ready to copy.
+3. Start the game. `mod.log` reports what was found, after the startup lines:
+
+   ```
+   [plugin] 3 found, 3 loaded (plugins = on)
+   [plugin] greeter 1.0.0 lua loaded
+   ...
+   ```
+
+   A plugin that can't load is listed with the reason (`refused: built for api 2.0`, `missing capability 'teleport'`, ...); the others still load. To switch one plugin off, put an empty file named `disabled` in its folder.
+
+With `plugins = off`, `mod.log` shows `[plugin] 0 found, 0 loaded (plugins = off)` and nothing is loaded. A plugin runs its own code in the game, so only install plugins you trust. When the game closes, plugins get `game.exit` and are unloaded.
+
 ## Not available offline
 
 These need RSI's servers, and the mod doesn't replace them:
