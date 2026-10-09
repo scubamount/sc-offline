@@ -28,6 +28,10 @@ CLANG=${CLANG:-$(command -v /opt/homebrew/opt/llvm/bin/clang++ || command -v cla
 [ -n "${CLANG:-}" ] && [ -x "$CLANG" ] || { echo "check: clang++ not found (set CLANG)"; exit 2; }
 command -v python3 >/dev/null || { echo "check: python3 not found"; exit 2; }
 [ -d "${MWINC:-}" ] && [ -f "${CXXINC:-}/string" ] || { echo "check: mingw-w64 headers not found (set MINGW_INCLUDE / MINGW_CXX_INCLUDE)"; exit 2; }
+# src/ includes sco-core's headers (sco/*.h, sco_api.h, sco_lua.h) from the submodule.
+SCOINC=$ROOT/external/sco-core/include
+SCOLUA=$ROOT/external/sco-core/plugins/lua
+[ -f "$SCOINC/sco/scan.h" ] && [ -f "$SCOLUA/sco_lua.h" ] || { echo "check: external/sco-core is missing; run: git submodule update --init"; exit 2; }
 n=0; broken=0
 TMP=$(mktemp)
 shopt -s nullglob
@@ -37,7 +41,7 @@ for f in "$ROOT"/src/*.cpp "$ROOT"/launcher/*.cpp; do
      -fms-extensions \
      -D_WIN32 -D_WIN64 -DUNICODE -D_UNICODE -DNDEBUG -D_WINDLL \
      -nostdinc++ -isystem "$CXXINC" -isystem "$CXXINC/x86_64-w64-mingw32" -isystem "$CXXINC/backward" \
-     -isystem "$MWINC" -I "$ROOT/src" -I "$ROOT/src/third_party/imgui" \
+     -isystem "$MWINC" -isystem "$SCOINC" -isystem "$SCOLUA" -I "$ROOT/src" -I "$ROOT/src/third_party/imgui" \
      -Wno-everything "$f" 2>&1)
   rc=$?
   errs=$(printf '%s\n' "$out" | grep -E "error:")
