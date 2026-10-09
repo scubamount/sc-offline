@@ -93,7 +93,9 @@ Some of sc-offline's own features are plugins compiled into `dinput8.dll`. They 
 | `teleport.save` | Saves where you're standing to `spawn.txt`; the reply names the spot | **F7** |
 | `teleport.go` | Teleports to the saved spot; the reply says where you went, or why not | **F8** |
 
-Both need the `teleport` capability, which is missing when this game build's teleport addresses aren't found; the rest of the plugin system still starts. A built-in owns its id and command prefix, so a native or Lua plugin folder named `teleport` is refused. A plugin runs its own code in the game, so only install plugins you trust. When the game closes, plugins get `game.exit` and are unloaded.
+Both need the `teleport` capability, which is missing when this game build's teleport addresses aren't found; the rest of the plugin system still starts. A built-in owns its id and command prefix, so a native or Lua plugin folder named `teleport` is refused. A plugin runs its own code in the game, so only install plugins you trust.
+
+When you quit the game (the menu's Quit, or the `quit` console command), plugins get `game.exit` and are then unloaded, newest first and built-ins last, before the game exits. `mod.log` shows `[app] game closing (CSystem::Quit): game.exit, unloading plugins` followed by one `[plugin] unloaded <id>` line per plugin. If the game crashes or is killed (Task Manager, `taskkill`), plugins get no `game.exit` and aren't unloaded; don't rely on it to save anything that matters.
 
 ## Not available offline
 

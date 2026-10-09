@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Plugins now get `game.exit` and are unloaded when you quit from the game's menu. The game ends itself there without the usual Windows quit message, so they never did before; sc-offline now runs the shutdown from the game's own Quit. `mod.log` shows `[app] game quit hook: installed` at startup and `[app] game closing (CSystem::Quit): ...` on quit. A crash or a killed game still sends no `game.exit`.
 - The build is now CMake instead of a Visual Studio solution: open the folder in Visual Studio 2026, or `cmake -S . -B build -A x64` and `cmake --build build --config Release`. `sc-offline.slnx` and the `.vcxproj` files are gone; nothing changes for players. See `docs/build.md`.
 - sc-offline now runs on [sco-core](https://github.com/scubamount/sco-core)'s host kit (a git submodule in `external/sco-core`: clone with `--recurse-submodules`). The features work as before. `mod.log` gains a `[core] signatures: N/N OK` line and a `[plugin]` report, and status-strip messages are logged as `[status]` instead of `[ship]`.
 - F7 and F8 are now the `teleport.save` and `teleport.go` commands of a built-in `teleport` plugin, the first of sc-offline's features on sco-core's plugin API; plugins can call them too. They work as before. `mod.log`'s `[plugin]` report lists `teleport <version> builtin loaded`, with plugins on or off.
