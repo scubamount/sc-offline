@@ -1,69 +1,26 @@
 #include "teleport.h"
 #include "menu.h"
+#include "sco/game/teleport.h"
+#include "sco/signatures.h"
 #include <cmath>
 #include <share.h>
 
 TeleportApi g_tp;
 
-static bool VerifyEntityPositionSlots(const Section& text, const Section& rdata) {
-    const uint8_t* fmt = FindCString(rdata, "Zone: %s, ZonePos:(%f.2,%f.2,%f.2), WorldPos((%f.2,%f.2,%f.2)");
-    const uint8_t* lea = fmt ? FindRipLea(text, 0x4C, 0x8D, 0x05, fmt) : nullptr;
-    if (!lea) return false;
-    static const uint8_t callWorld[] = { 0xFF, 0x90, 0x18, 0x03, 0x00, 0x00 };
-    static const uint8_t callLocal[] = { 0xFF, 0x90, 0xB8, 0x02, 0x00, 0x00 };
-    static const uint8_t callZone[]  = { 0xFF, 0x90, 0xB8, 0x06, 0x00, 0x00 };
-    static const uint8_t zoneName[]  = { 0x48, 0x8B, 0x91, 0x18, 0x02, 0x00, 0x00 };
-    static const struct { ptrdiff_t off; const uint8_t* bytes; size_t n; } kChecks[] = {
-        { -0xFA, callWorld, 6 }, { -0xD3, callWorld, 6 }, { -0xAC, callWorld, 6 },
-        { -0x86, callLocal, 6 }, { -0x5F, callLocal, 6 }, { -0x38, callLocal, 6 },
-        { -0x19, callZone, 6 },  { -0x10, zoneName, 7 },
-    };
-    for (const auto& c : kChecks)
-        if (memcmp(lea + c.off, c.bytes, c.n) != 0) return false;
-    return true;
-}
-
-static bool VerifyZoneSlots(const Section& text, const Section& rdata) {
-    const uint8_t* fmt = FindCString(rdata,
-        "Changing reference point to unstreamable parent zone: new zone: %s (%llu) old zone: %s (%llu)");
-    const uint8_t* lea = fmt ? FindRipLea(text, 0x48, 0x8D, 0x15, fmt) : nullptr;
-    return lea && BytesMatch(lea - 0x1D4, "FF 50 60") && BytesMatch(lea - 0x1B7, "FF 50 08")
-        && BytesMatch(lea - 0x1AB, "FF 50 08") && BytesMatch(lea - 0x2F, "FF 50 58");
-}
-
-bool ResolveTeleportApi(const Section& text, const Section& rdata) {
-    const uint8_t* name = FindCString(rdata, "CmdTeleportToCamera");
-    uint8_t* lea = name ? FindRipLea(text, 0x48, 0x8D, 0x15, name) : nullptr;
-    if (!lea) return false;
-    uint8_t* f = lea - 0x158;
-    static const struct { size_t off; const char* bytes; } kChecks[] = {
-        { 0x000, "40 55" },
-        { 0x024, "48 8B 05 ?? ?? ?? ??" },
-        { 0x02B, "48 8B 88 E0 00 00 00" },
-        { 0x035, "FF 90 E0 02 00 00" },
-        { 0x09F, "E8 ?? ?? ?? ??" },
-        { 0x136, "FF 90 08 0A 00 00" },
-        { 0x13F, "48 8B 51 28" },
-        { 0x151, "48 8B 83 08 02 00 00" },
-        { 0x17A, "C5 FA 10 B0 3C 6D 00 00" },
-        { 0x182, "C5 FA 10 B8 30 6D 00 00" },
-        { 0x1AC, "C5 78 10 90 18 6D 00 00" },
-        { 0x1BD, "C5 7B 10 98 28 6D 00 00" },
-        { 0x1FF, "FF 90 D8 06 00 00" },
-        { 0x2B0, "48 8B 0D ?? ?? ?? ??" },
-        { 0x2BA, "FF 90 20 01 00 00" },
-        { 0x2C8, "48 8B 91 E0 06 00 00" },
-        { 0x2E5, "4C 8B 89 98 01 00 00" },
-        { 0x368, "FF 90 D8 09 00 00" },
-        { 0x376, "4C 8B 81 58 01 00 00" },
-    };
-    for (const auto& c : kChecks)
-        if (!BytesMatch(f + c.off, c.bytes)) { Log("[tp] TeleportToCamera layout changed at +0x%zx; teleport disabled", c.off); return false; }
-    if (!VerifyEntityPositionSlots(text, rdata)) { Log("[tp] entity position slots not confirmed; teleport disabled"); return false; }
-    if (!VerifyZoneSlots(text, rdata)) { Log("[tp] zone parent/id slots not confirmed; teleport disabled"); return false; }
-    g_tp.clientMgr    = reinterpret_cast<uintptr_t*>(f + 0x024 + 7 + Rel32(f + 0x027));
-    g_tp.handleFromId = f + 0x09F + 5 + Rel32(f + 0x0A0);
-    g_tp.entitySystem = reinterpret_cast<uintptr_t*>(f + 0x2B0 + 7 + Rel32(f + 0x2B3));
+// The addresses are sco-core's teleport.* signature rows (src/game/teleport_sigs.cpp: the scan
+// and checks this file used to do, moved byte for byte), resolved by ResolveAll in StartOffline.
+bool ResolveTeleportApi() {
+    sco::game::TeleportAddrs a;
+    if (!sco::game::TeleportAddresses(a)) {
+        // to_camera holds the checks; the other rows only fail when it does.
+        const sco::SigResult* r = sco::SigLookup("teleport.to_camera");
+        Log("[tp] TeleportToCamera not found (teleport.to_camera %s: %s); teleport disabled",
+            r ? sco::SigStateName(r->state) : "unknown", r && r->why ? r->why : "see [core] below");
+        return false;
+    }
+    g_tp.clientMgr    = a.clientMgr;
+    g_tp.handleFromId = a.handleFromId;
+    g_tp.entitySystem = a.entitySystem;
     g_tp.ok = true;
     return true;
 }

@@ -20,6 +20,9 @@
 #include "outfits.h"
 #include "menu.h"
 #include "sco/log.h"
+#include "sco/scan.h"
+#include "sco/signatures.h"
+#include "sco/game/signatures.h"
 
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "advapi32.lib")
@@ -91,13 +94,19 @@ static bool AntiCheatPresent() {
 
 static bool g_offline = false;
 static bool g_outfitsOk = false;
+static bool g_signaturesResolved = false;
 
 static void StartOffline() {
     g_offline = ApplyOfflinePatches();
     if (!g_offline) return;
     InstallHooks(g_text);
     ResolveQuantumApi(g_text, g_rdata);
-    if (ResolveTeleportApi(g_text, g_rdata)) {
+    // sco-core's signature rows, resolved where teleport used to scan (after the patches and
+    // hooks, so the bytes scanned are the same as before). The report goes out with LogStartup.
+    if (!sco::game::RegisterGameSignatures()) Log("[!] sco-core's game signature tables did not all register");
+    sco::ResolveAll(sco::ModuleImage());
+    g_signaturesResolved = true;
+    if (ResolveTeleportApi()) {
         ResolveSpawnApi(g_text, g_rdata);
         g_outfitsOk = ResolveLoadoutApi(g_text, g_rdata);  // outfits ride the gear menu's loader
         ResolveNpcApi(g_text);
@@ -114,6 +123,7 @@ static void LogStartup() {
     LogOfflinePatches();
     LogHooks();
     LogQuantum();
+    if (g_signaturesResolved) sco::LogSignatureReport(false);
     if (g_tp.ok) Log("[+] teleport: ready (F7 = save spot, F8 = go there)");
     else         Log("[!] teleport: unavailable (see above)");
     if (SpawnerReady()) Log("[+] ship spawner: ready (M = menu)");
