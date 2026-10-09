@@ -22,7 +22,7 @@ Questions and ideas: open an issue or ask in the [Discord](https://discord.gg/NJ
 1. For anything bigger than a small fix, open an issue first so we can agree on the approach.
 2. Fork the repo and branch from `main`.
 3. Build and check as described in [docs/build.md](docs/build.md):
-   - Windows: build **Release | x64** with Visual Studio.
+   - Windows: build **Release** x64 with CMake (Visual Studio opens the folder, or `cmake` from the command line).
    - macOS or Linux: `tools/check.sh` must report `0 new` diagnostics. It isn't a build; CI's MSVC build is the real check.
    - Touching the self-update: run `tools/update-test/run.sh` under Wine (see [docs/build.md](docs/build.md#self-update-tests-under-wine)).
 4. Test in game if you can, and say in the PR what you tested and what you didn't.

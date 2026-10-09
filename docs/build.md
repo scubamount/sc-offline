@@ -2,16 +2,21 @@
 
 ## Build on Windows
 
-1. Install **Visual Studio 2026** with the **Desktop development with C++** workload. The projects use the `v145` toolset. On VS 2022, retarget them to `v143` first (Project → Retarget).
-2. Open `sc-offline.slnx`, select **Release | x64**, and build. Or from the command line:
+The build is CMake (`CMakeLists.txt` at the root), x64 only, with MSVC.
+
+1. Install **Visual Studio 2026** with the **Desktop development with C++** workload. It includes CMake.
+2. In Visual Studio, use **File → Open → Folder** on the repository root. Visual Studio reads `CMakeLists.txt`; pick an x64 **Release** configuration and build. Or from a Developer PowerShell:
 
    ```powershell
-   msbuild sc-offline.slnx /p:Configuration=Release /p:Platform=x64 /m
+   cmake -S . -B build -G "Visual Studio 18 2026" -A x64
+   cmake --build build --config Release --parallel
    ```
 
-3. The build produces `dinput8.dll` (the mod, from `src/`) and `sc-offline.exe` (the launcher, from `launcher/`) under `x64\Release\`. To play, put both in a folder together with `data/` and `launcher/sc-offline.ini`.
+   On Visual Studio 2022, configure with `-G "Visual Studio 17 2022" -A x64 -T v143` instead.
 
-Release builds link the C runtime statically, so they don't need the Visual C++ redistributable installed.
+3. The build produces `dinput8.dll` (the mod, from `src/`) and `sc-offline.exe` (the launcher, from `launcher/`) in `build\bin\Release\` (`build\bin\Debug\` for Debug; directly in `bin\` of the build folder with a single-configuration generator such as Ninja, which Visual Studio's Open Folder uses by default). To play, put both in a folder together with `data/` and `launcher/sc-offline.ini`.
+
+The targets are `dinput8` (the DLL), `sc-offline` (the launcher) and `imgui` (the vendored Dear ImGui under `src/third_party/imgui`, built as a static library with its warnings off). Both binaries link the C runtime statically, so they don't need the Visual C++ redistributable installed. Release builds use whole-program optimization and carry no debug information.
 
 No Visual Studio? CI builds both on every push to `main`. Download the `dinput8-release` artifact from [Actions](https://github.com/scubamount/sc-offline/actions).
 
@@ -36,7 +41,7 @@ Builds the launcher with `-DSCO_UPDATE_TEST` and runs 14 update scenarios (good 
 [`.github/workflows/build.yml`](../.github/workflows/build.yml) runs on pushes to `main`, on pull requests, and on `v*` tags:
 
 1. `check` runs `tools/check.sh` and the release manifest tests (`python3 tools/test_release_manifest.py`) on Linux.
-2. `build` runs MSVC Release x64 on Windows and uploads `dinput8-release`.
+2. `build` configures and builds Release x64 with CMake and MSVC on Windows, then checks the binaries with `dumpbin` and `mt`: `dinput8.dll` exports `DirectInput8Create` forwarded to System32's `dinput8.dll`, both files are x64, neither imports the dynamic C runtime, and `sc-offline.exe`'s manifest asks for `asInvoker` (the launcher asks for administrator rights itself when it needs them). It uploads both as `dinput8-release`.
 3. `release` runs on tags only. It publishes `sc-offline-<tag>.zip` and a standalone `dinput8.dll`, with notes generated from the commits. The zip contains the launcher, the DLL, `sc-offline.ini`, `sc-offline.sh`, `data/`, `docs/`, the README, the CHANGELOG, the LICENSE and `manifest.json`.
 
 ### `manifest.json`

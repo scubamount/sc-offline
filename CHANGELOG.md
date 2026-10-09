@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The build is now CMake instead of a Visual Studio solution: open the folder in Visual Studio 2026, or `cmake -S . -B build -A x64` and `cmake --build build --config Release`. `sc-offline.slnx` and the `.vcxproj` files are gone; nothing changes for players. See `docs/build.md`.
+
 ## 0.7.0 (2026-10-07)
 
 - **Safer self-update** ([#31](https://github.com/scubamount/sc-offline/issues/31)). Each release zip now carries `manifest.json`: the version, tag, commit and every shipped file with its SHA-256. CI writes it and checks the finished zip against it. The launcher only installs files the manifest lists, with matching hashes, from a release newer than itself; paths with `..` are refused. Downloading and checking run with normal rights; for a Program Files install only the file swap asks for administrator rights, with no network. Each file is flushed to disk and checked again after it's moved; files locked by antivirus are retried. The update waits while the game runs, checks free disk space, and only times out on a stalled download. The new launcher must pass `--self-test` or the old files go back. New setting `update_channel = stable | prerelease`. `docs/launcher.md` explains how to check a download by hand.
