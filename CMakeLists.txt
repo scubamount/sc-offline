@@ -9,8 +9,8 @@
 #   imgui       static   src/third_party/imgui (vendored, its own warnings off)
 #   dinput8     shared   src/*.cpp -> dinput8.dll
 #   sc-offline  exe      launcher/launcher.cpp -> sc-offline.exe
-# Next phase (docs/framework.md in sco-core): sco-core joins as a submodule with
-# add_subdirectory(external/sco-core) and dinput8 links its targets.
+#   sco-core    static   external/sco-core (submodule): scanners, signatures, host kit, plugin
+#                        loader and sco-lua; dinput8 links sco_app and sco_lua
 #
 # Every setting below carries over from the former src/sc-offline-dll.vcxproj and
 # launcher/sc-offline.vcxproj (Release|x64 and Debug|x64).
@@ -49,6 +49,22 @@ endforeach()
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+
+# --- sco-core (external/sco-core, a git submodule) -----------------------------------------------
+# Added after CMAKE_MSVC_RUNTIME_LIBRARY above, so its libraries get the static CRT too: they link
+# into dinput8.dll, and CI's verify step checks the DLL imports no dynamic CRT.
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/sco-core/CMakeLists.txt")
+  message(FATAL_ERROR "external/sco-core is empty: the sco-core submodule isn't checked out. "
+                      "Run `git submodule update --init` (or clone with --recurse-submodules).")
+endif()
+# sco-core's tests run in sco-core's own CI, not here.
+set(SCO_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+# sco-core's own CI builds it with /WX. Here a warning that only a newer toolset emits must not
+# break the product build, so sco-core's warnings stay warnings.
+set(SCO_WERROR OFF CACHE BOOL "" FORCE)
+# EXCLUDE_FROM_ALL: only the libraries dinput8 links are built, not sco-core's host tools
+# (sco-sigcheck, sco-host-sim).
+add_subdirectory(external/sco-core EXCLUDE_FROM_ALL)
 
 # Settings every target had: CharacterSet Unicode, ConformanceMode (/permissive-), SDLCheck (/sdl).
 # NDEBUG in Release comes from CMake's default Release flags (/O2 /Ob2 /DNDEBUG).
@@ -106,6 +122,8 @@ target_compile_options(dinput8 PRIVATE ${SCO_DLL_OPTIONS} /W3)
 target_link_options(dinput8 PRIVATE /SUBSYSTEM:WINDOWS "$<$<CONFIG:Release>:/OPT:REF;/OPT:ICF>")
 # Also named by #pragma comment(lib) in dllmain.cpp and menu.cpp.
 target_link_libraries(dinput8 PRIVATE imgui d3d11 shlwapi advapi32 windowscodecs ole32)
+# The host kit (sco/app.h, with sco/scan.h, signatures, caps, the plugin loader) and sco-lua.
+target_link_libraries(dinput8 PRIVATE sco_app sco_lua)
 
 # WholeProgramOptimization + LinkTimeCodeGeneration in Release (/GL, /LTCG).
 set_target_properties(imgui dinput8 PROPERTIES INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)

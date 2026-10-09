@@ -1,0 +1,3 @@
+[submodule "external/sco-core"]
+	path = external/sco-core
+	url = https://github.com/scubamount/sco-core.git
