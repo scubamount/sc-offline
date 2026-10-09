@@ -6,6 +6,9 @@ void ProcessBuild();
 bool PlaceNearPlayer(double ahead, double side, double lift, double pos[3], double rot[4]);
 bool GroundRay(uintptr_t zone, const double from[3], const double to[3], double hit[3]);
 bool MoveEntityLocal(uint64_t id, const double pos[3]);   // position within the entity's own zone
+// An entity's rotation in its own zone, (x, y, z, w). False when this build's entity slots don't
+// match. Game thread, inside __try.
+bool EntityRotation(uintptr_t entity, double rot[4]);
 
 // Squadron 42 tab: drop one buildable without entering build mode. It is recorded
 // in the base, so Undo / Clear base in the build section remove it too.

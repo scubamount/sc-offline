@@ -182,6 +182,15 @@ static bool EntitySlotsOk(uintptr_t entity) {
     return g_slotsOk > 0;
 }
 
+bool EntityRotation(uintptr_t entity, double rot[4]) {
+    if (!EntitySlotsOk(entity)) return false;
+    double buf[4] = {};
+    const double* r = VCall<const double*>(entity, 0x2C8, buf, static_cast<uint8_t>(0));
+    if (!r) return false;
+    memcpy(rot, r, 4 * sizeof(double));
+    return true;
+}
+
 static uintptr_t EntityById(uint64_t id) { return id ? VCall<uintptr_t>(*g_tp.entitySystem, 0x120, id) : 0; }
 
 static void QuatMul(const double a[4], const double b[4], double r[4]) {

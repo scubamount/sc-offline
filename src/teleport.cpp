@@ -84,10 +84,11 @@ void LocalToWorld(uintptr_t zone, const double local[3], double world[3]) {
 
 static double Dot(const double a[3], const double b[3]) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
 
-bool WorldToLocal(uintptr_t zone, const double world[3], double local[3]) {
+// A zone's frame in the world: its origin and the world directions of its x, y and z axes, probed
+// through LocalToWorld. False when the axes aren't orthonormal (a frame this code can't invert).
+static bool ZoneAxes(uintptr_t zone, double origin[3], double axis[3][3]) {
     constexpr double kArm = 1.0e6;
     const double zero[3] = {};
-    double origin[3], axis[3][3];
     LocalToWorld(zone, zero, origin);
     for (int i = 0; i < 3; ++i) {
         double probe[3] = {}, w[3];
@@ -100,9 +101,32 @@ bool WorldToLocal(uintptr_t zone, const double world[3], double local[3]) {
         for (int j = i + 1; j < 3; ++j)
             if (fabs(Dot(axis[i], axis[j])) > 1e-6) return false;
     }
+    return true;
+}
+
+bool WorldToLocal(uintptr_t zone, const double world[3], double local[3]) {
+    double origin[3], axis[3][3];
+    if (!ZoneAxes(zone, origin, axis)) return false;
     const double d[3] = { world[0] - origin[0], world[1] - origin[1], world[2] - origin[2] };
     for (int i = 0; i < 3; ++i) local[i] = Dot(axis[i], d);
     return PositionLooksValid(local);
+}
+
+int ReadZoneChain(uintptr_t zone, ZoneFrame* out, int max) {
+    int n = 0;
+    // steps bounds the walk on a parent cycle, since skipped zones don't count towards max.
+    int steps = 0;
+    for (uintptr_t z = zone; z && n < max && steps < 64; z = ZoneParent(z), ++steps) {
+        const uint64_t id = ZoneId(z);
+        if (!id || ZoneFromId(id) != z) continue;   // can't be named by id, so can't be queried
+        ZoneFrame& f = out[n];
+        if (!ZoneAxes(z, f.origin, f.axis)) continue;
+        f.id = id;
+        const char* name = ZoneName(z);
+        strncpy_s(f.name, name ? name : "", _TRUNCATE);
+        ++n;
+    }
+    return n;
 }
 
 static const char* CaptureSpot(Spot& s, double world[3]) {

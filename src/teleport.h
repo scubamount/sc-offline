@@ -20,6 +20,14 @@ void        Vec3Out(uintptr_t obj, size_t off, double out[3]);
 void        LocalToWorld(uintptr_t zone, const double local[3], double world[3]);
 bool        WorldToLocal(uintptr_t zone, const double world[3], double local[3]);
 
+// One zone as read from the game on this call (nothing here outlives it): its id, name and frame
+// in the game's world, the origin in metres and axis[i] the world direction of its local axis i.
+struct ZoneFrame { uint64_t id; char name[96]; double origin[3]; double axis[3][3]; };
+// The zone and its ancestors, innermost first, skipping any whose id doesn't lead back to it
+// (ZoneFromId) or whose frame isn't orthonormal. Returns how many (0 to max). Game thread; reads
+// game memory, so call it inside __try.
+int ReadZoneChain(uintptr_t zone, ZoneFrame* out, int max);
+
 const char* TeleportToEntity(uint64_t entityId, double up);
 
 // A saved position: where you were in each zone, innermost first.
