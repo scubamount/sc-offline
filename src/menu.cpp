@@ -337,7 +337,7 @@ static void DrawBackdrop() {
 
 // --- small building blocks ------------------------------------------------------------------
 
-static void Section(const char* title) {
+static void SectionHeading(const char* title) {
     ImGui::Dummy(ImVec2(0, 2));
     ImGui::PushFont(nullptr, kHeadingSize);
     ImGui::SeparatorText(title);
@@ -442,7 +442,7 @@ static void GearCombo(int slot, const char* label, const char* none, int& pick, 
 }
 
 static void DrawPlayerTab(bool& keepOpen) {
-    Section("Movement");
+    SectionHeading("Movement");
     static bool  noclip = false;
     static float speed = 30.0f;
     if (ImGui::Checkbox("Noclip", &noclip)) Menu_SetNoclip(noclip, speed);
@@ -452,13 +452,13 @@ static void DrawPlayerTab(bool& keepOpen) {
         Menu_SetNoclipSpeed(speed);
     Hint("F7 saves where you're standing and F8 takes you back. The Travel tab has named spots and places.");
 
-    Section("Protection");
+    SectionHeading("Protection");
     static bool god = true, ammo = false;
     if (ImGui::Checkbox("God mode", &god)) Menu_SetGodMode(god);
     ImGui::SameLine(0, 24);
     if (ImGui::Checkbox("Infinite ammo", &ammo)) Menu_SetInfiniteAmmo(ammo);
 
-    Section("Gear");
+    SectionHeading("Gear");
     static int  gear[Gear_SlotCount] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
     static char gearFilter[64] = "";
     static const struct { const char* label; const char* none; } kGear[Gear_SlotCount] = {
@@ -519,7 +519,7 @@ static void DrawTravelTab() {
 
     SearchBox("##travelFilter", "Search places and saved spots", filter, sizeof(filter));
 
-    Section("Places");
+    SectionHeading("Places");
     ImGui::SetNextItemWidth(-1);
     ImGui::SliderFloat("##altitude", &altitude, 100.0f, 20000.0f, "Arrive %.0f m above the ground", ImGuiSliderFlags_Logarithmic);
     ImGui::Checkbox("Show interiors and small zones", &showMinor);
@@ -592,7 +592,7 @@ static void DrawTravelTab() {
     Hint("The scan finds the planets, moons, stations, Lagrange points, comm arrays and jump points of every loaded "
          "system and adds them here. It only reads; it takes a few seconds.");
 
-    Section("Saved spots");
+    SectionHeading("Saved spots");
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 160 - ImGui::GetStyle().ItemSpacing.x);
     ImGui::InputTextWithHint("##markName", "Name this spot", markName, sizeof(markName));
     ImGui::SameLine();
@@ -633,7 +633,7 @@ static void DrawVehiclesTab(bool& keepOpen) {
     static char filter[64] = "";
     static MenuSpawnOptions opt;
 
-    Section("Spawn a ship");
+    SectionHeading("Spawn a ship");
     const int count = Menu_ShipCount();
     if (count < 0) {
         Hint("Loading ships (you need to be in the universe)...");
@@ -696,7 +696,7 @@ static void DrawVehiclesTab(bool& keepOpen) {
         }
     }
 
-    Section("Current ship");
+    SectionHeading("Current ship");
     static bool shipAmmo = false;
     if (ImGui::Checkbox("Infinite ship ammo", &shipAmmo)) Menu_SetInfiniteShipAmmo(shipAmmo);
     ImGui::SetItemTooltip("Refills the magazines of the ship you're aboard, and the ship in the Crew tab.");
@@ -737,7 +737,7 @@ static void PrettySeatNames(const MenuSeat* seats, int n, const char* ship, char
 
 static void DrawCrewTab() {
     if (!Menu_SeatControlAvailable()) {
-        Section("Crew");
+        SectionHeading("Crew");
         Hint("Seat control isn't available in this game version. mod.log has the details.");
         return;
     }
@@ -748,7 +748,7 @@ static void DrawCrewTab() {
     char ship[64] = "";
     const int count = Menu_GetSeats(seats, 128, ship, sizeof(ship));
 
-    Section("Ship");
+    SectionHeading("Ship");
     ImGui::TextUnformatted(count < 0 ? "No ship selected" : ship);
     ImGui::SameLine();
     const float button = 190;
@@ -757,7 +757,7 @@ static void DrawCrewTab() {
     if (count < 0) { Hint("Spawn a ship, or board one and press 'Use the ship I'm in'."); return; }
     if (count == 0) { Hint("Waiting for the ship to load..."); return; }
 
-    Section("Seats");
+    SectionHeading("Seats");
     PrettySeatNames(seats, count, ship, pretty);
     int sel = -1;
     const ImGuiTableFlags flags = ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter
@@ -807,7 +807,7 @@ static void DrawCrewTab() {
     ImGui::EndDisabled();
     ImGui::Checkbox("If an NPC is in the seat I pick, remove it", &replace);
 
-    Section("Crew");
+    SectionHeading("Crew");
     Hint("NPC to add to seats:");
     const bool haveNpcs = NpcPicker();
     const float third = Columns(3);
@@ -826,7 +826,7 @@ static void DrawCrewTab() {
 // =============================================================================================
 
 static void DrawNpcsTab(bool& keepOpen) {
-    Section("Spawn NPCs");
+    SectionHeading("Spawn NPCs");
     if (!NpcPicker()) return;
     static int howMany = 1;
     ImGui::SetNextItemWidth(-1);
@@ -844,7 +844,7 @@ static void DrawBuildTab(bool& keepOpen) {
     static int  build = 0, buildTab = 0;
     static char buildFilter[64] = "";
     const int buildables = Menu_BuildCount();
-    Section("Objects");
+    SectionHeading("Objects");
     if (buildables < 0) { Hint("Loading build objects (you need to be in the universe)..."); return; }
     if (buildables == 0) { Hint("No build objects found. Check data\\buildables.txt."); return; }
     if (build >= buildables) build = 0;
@@ -877,7 +877,7 @@ static void DrawBuildTab(bool& keepOpen) {
     }
     ImGui::EndChild();
 
-    Section("Placing");
+    SectionHeading("Placing");
     char picked[128];
     PrettyBuildName(picked, sizeof(picked), Menu_BuildName(build));
     ImGui::Text("Selected: %s", picked);
@@ -905,7 +905,7 @@ static void DrawBuildTab(bool& keepOpen) {
 // =============================================================================================
 
 static void DrawMenuTab() {
-    Section("Background");
+    SectionHeading("Background");
     if (g_bgSrv) {
         ImGui::Checkbox("Show background image", &g_bgShow);
         ImGui::BeginDisabled(!g_bgShow);
@@ -923,7 +923,7 @@ static void DrawMenuTab() {
         ImGui::TextWrapped("%s", g_bgPath[0] ? g_bgPath : "data\\menu_background.png");
     }
 
-    Section("About");
+    SectionHeading("About");
     Hint(SCO_TITLE " is a work in progress, " SCO_BASED_ON ".");
     Hint("Bug reports: github.com/scubamount/sc-offline/issues");
 }
