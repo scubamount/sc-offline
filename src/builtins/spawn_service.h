@@ -16,7 +16,7 @@
 #include <stdint.h>
 
 #define SC_SPAWN_SERVICE_NAME    "spawn.entities"
-#define SC_SPAWN_SERVICE_VERSION 0x00010000u /* 1.0 */
+#define SC_SPAWN_SERVICE_VERSION 0x00010001u /* 1.1: entity_alive */
 
 typedef struct sc_spawn_service_v1 {
     uint32_t size; /* sizeof(sc_spawn_service_v1) as sc-offline built it */
@@ -29,6 +29,10 @@ typedef struct sc_spawn_service_v1 {
     uint64_t (*local_player_id)(void);
     /* The ship you're aboard, or 0. */
     uint64_t (*player_ship_id)(void);
+    /* 1.1. 1 while the entity id resolves in the game (spawned and streamed in), else 0; 0 for
+     * id 0. Asked afresh on every call. A 1.0 table ends before this field: call it only when
+     * size > offsetof(sc_spawn_service_v1, entity_alive). */
+    int (*entity_alive)(uint64_t entity_id);
 } sc_spawn_service_v1;
 
 #endif

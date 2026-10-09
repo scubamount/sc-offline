@@ -59,9 +59,10 @@ int SvcClassExists(const char* cls) {
 }
 uint64_t SvcLocalPlayerId() { return sco::OnGameThread() && SpawnerReady() ? LocalPlayer() : 0; }
 uint64_t SvcPlayerShipId() { return sco::OnGameThread() && SpawnerReady() ? PlayerShip() : 0; }
+int SvcEntityAlive(uint64_t id) { return sco::OnGameThread() && SpawnerReady() && EntityAlive(id) ? 1 : 0; }
 
 const sc_spawn_service_v1 kService = {
-    sizeof(sc_spawn_service_v1), SvcSpawnNearPlayer, SvcClassExists, SvcLocalPlayerId, SvcPlayerShipId,
+    sizeof(sc_spawn_service_v1), SvcSpawnNearPlayer, SvcClassExists, SvcLocalPlayerId, SvcPlayerShipId, SvcEntityAlive,
 };
 
 // ---- spawn.ship -------------------------------------------------------------------------------

@@ -657,6 +657,8 @@ static uintptr_t EntityByIdSafe(uint64_t id) {
     __try { return EntityById(id); } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
 }
 
+bool EntityAlive(uint64_t id) { return g_tp.ok && EntityByIdSafe(id) != 0; }
+
 static uintptr_t LocalPlayerEntity() {
     __try {
         uintptr_t actor = 0, entity = 0;
