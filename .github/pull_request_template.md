@@ -13,6 +13,6 @@ Not tested: <!-- say what you couldn't test -->
 
 ## Checklist
 
-- [ ] Offline, single-player only; no game files, secrets or personal data
+- [ ] In scope: offline, no CIG servers or online play, connections only through local IPC or LAN/VPN co-presence ([CONTRIBUTING](../CONTRIBUTING.md#what-fits-this-project)); no game files, secrets or personal data
 - [ ] PC changes the launcher makes are still listed and undone
 - [ ] Docs, `sc-offline.ini` comments and `CHANGELOG.md` updated where players would notice

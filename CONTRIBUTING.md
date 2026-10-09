@@ -1,10 +1,10 @@
 # Contributing to sc-offline
 
-Thanks for helping. sc-offline is a Star Citizen offline mod: a single-player mod menu plus a launcher that keeps the game offline while you play. Bug reports, fixes, docs and testing on your PC all help.
+Thanks for helping. sc-offline is a Star Citizen offline mod: a mod menu plus a launcher that keeps the game offline while you play. Bug reports, fixes, docs and testing on your PC all help.
 
 ## What fits this project
 
-- **Offline, single-player only.** Nothing that connects to Star Citizen's servers, changes online play, or helps anyone cheat, bypass anti-cheat while online, or hurt other players. PRs like that are closed.
+- **Offline, never CIG's servers.** Two kinds of connection are allowed: local IPC with other processes on the same PC (bridges such as Titanfall 2/Northstar or Minecraft), and private co-presence between sc-offline players over a LAN or VPN through sco-core's `sco.net`. Never: connecting to Star Citizen's servers or online services, public or official online play, getting around anti-cheat or skipping its steps, signature-check bypass, account or entitlement tampering, forcing the game's host type or network context, unauthenticated remote commands between peers, telemetry, or anything that helps anyone cheat in the official game or hurt other players. The same rules bind plugins: [Plugin rules](https://github.com/scubamount/sco-core/blob/main/sdk/docs/plugin-rules.md). PRs like that are closed.
 - **No game files.** Don't commit Star Citizen files, extracted game data, or anything copied from Cloud Imperium Games. Ship class names and other identifiers in `data/` are fine.
 - **No secrets or personal data.** Strip account names, Windows user paths and tokens from logs before you post them.
 - **Undo what you change.** Anything the launcher changes on the PC (hosts file, firewall rules, renamed files) must be listed and undone afterwards; see [PC changes](docs/launcher.md#pc-changes).

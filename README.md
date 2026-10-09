@@ -27,7 +27,7 @@ Spawn ships, NPCs and buildings, travel the star systems and wear Squadron 42 ou
 </div>
 
 > [!WARNING]
-> This mod may get your account banned. Use it at your own risk, and **only offline, in single player**.
+> This mod may get your account banned. Use it at your own risk, and **only offline**, never on Cloud Imperium Games' servers.
 
 > [!NOTE]
 > **Played in game on Windows with 0.6.1** (October 2026): the launcher, the menu and its features worked. Other PCs and game patches can still behave differently; known problems are tracked in [Issues](https://github.com/scubamount/sc-offline/issues). If something breaks, see [Troubleshooting](#troubleshooting) and [report it](https://github.com/scubamount/sc-offline/issues). Linux through Wine is still untested.
@@ -183,6 +183,15 @@ That's expected until the mod is updated for the new game version.
 ## How it's built
 
 sc-offline is the game-specific bootstrap: it loads as `dinput8.dll`, applies the offline patches, hooks the game's main thread and draws the menu. Underneath it runs on [sco-core](https://github.com/scubamount/sco-core)'s host kit, which brings the signature scanner, the plugin loader and the plugin API. sc-offline's own features are built-in plugins, on the same API that plugins made with the [sco SDK](https://github.com/scubamount/sco-core/blob/main/sdk/README.md) use. There are nine: teleport (F7/F8), the ship spawner, crew & seats, loadout (gear and outfits), NPCs, infinite ammo, quantum travel, build mode (F6) and contracts, each with its own commands and per-tick work; the spawner also offers other plugins a service to spawn entities near you. The menu still calls the features directly, and the Squadron 42 settings (`cvars.cpp`) and `missions.cpp` still run from the bootstrap. All of sc-offline's detours go through sco-core's one patcher. Building from source: [docs/build.md](docs/build.md).
+
+## Scope
+
+Offline play is the default and stays that way: while modded, the game doesn't reach Cloud Imperium Games' servers. Two optional additions are planned and **not shipped yet**:
+
+- **Bridges to other games** on the same PC, over local shared memory, for example Titanfall 2 (through Northstar) or Minecraft.
+- **Private co-presence** with friends who also run sc-offline, over a LAN or a VPN you choose (Tailscale, ZeroTier). Each player still runs their own offline game; peers exchange their own authenticated messages (poses, spawn announcements), and other players show up as "ghost" entities your game spawns. It doesn't use or change the game's own netcode or servers.
+
+sc-offline never runs with Easy Anti-Cheat active: while you play, the launcher renames `EasyAntiCheat_EOS.exe` and blocks the EAC download host ([what the launcher changes](#2-what-the-launcher-changes)). Online play, cheating, getting around anti-cheat and the rest of the bans in [CONTRIBUTING](CONTRIBUTING.md#what-fits-this-project) stay out for good.
 
 ## More docs
 
