@@ -45,22 +45,74 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
-        with:
-          msbuild-architecture: x64
+      - name: Configure (x64)
+        run: |
+          cmake --version
+          cmake -S . -B build -G "Visual Studio 18 2026" -A x64
 
-      - name: Build (Release x64)
-        run: msbuild sc-offline.slnx /p:Configuration=Release /p:Platform=x64 /m
+      - name: Build (Release)
+        run: cmake --build build --config Release --parallel
 
-      # Release|x64 links with GenerateDebugInformation=false, so there is no PDB to upload.
+      # The properties players and the release depend on, read from the binaries themselves.
+      # dumpbin and mt come from the image's VS 2026 and Windows SDK.
+      - name: Verify binaries
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = 'build/bin/Release'
+          $dll = "$dir/dinput8.dll"; $exe = "$dir/sc-offline.exe"
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $dumpbin = & $vswhere -latest -products * -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe' | Select-Object -First 1
+          $mt = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\mt.exe" | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $dumpbin -or -not $mt) { throw "dumpbin ($dumpbin) or mt ($mt) not found" }
+          $script:failed = 0
+          function Check([bool]$ok, [string]$what) {
+            if ($ok) { "PASS  $what" } else { "FAIL  $what"; $script:failed++ }
+          }
+
+          '--- dinput8.dll exports'
+          $exports = & $dumpbin /nologo /exports $dll
+          $exports | Select-String 'DirectInput8Create|number of functions|number of names' | ForEach-Object { $_.Line.Trim() }
+          Check ([bool]($exports -match '^\s*1\s+\S+\s+DirectInput8Create \(forwarded to C:\\Windows\\System32\\dinput8\.DirectInput8Create\)')) 'dinput8.dll exports DirectInput8Create (ordinal 1), forwarded to System32 dinput8'
+
+          foreach ($f in $dll, $exe) {
+            $name = Split-Path $f -Leaf
+            "--- $name"
+            $machine = (& $dumpbin /nologo /headers $f | Select-String 'machine \(' | Select-Object -First 1).Line.Trim()
+            $machine
+            Check ($machine -match '^8664 machine \(x64\)$') "$name is machine x64"
+            $deps = & $dumpbin /nologo /dependents $f | Where-Object { $_ -match '^\s+\S+\.dll\s*$' } | ForEach-Object { $_.Trim() }
+            'imports: ' + ($deps -join ', ')
+            $crt = $deps | Where-Object { $_ -match '^(vcruntime|msvcp|ucrtbase|api-ms-win-crt-)' }
+            Check (-not $crt) "$name imports no VCRUNTIME/MSVCP/UCRT DLL (static CRT)"
+          }
+
+          # The MSBuild launcher had no UAC setting: the linker default, asInvoker. Elevation happens
+          # at run time (ShellExecuteEx "runas"), so the manifest must not ask for more.
+          '--- sc-offline.exe manifest'
+          & $mt -nologo "-inputresource:$exe;#1" -out:exe.manifest
+          $m = Get-Content exe.manifest -Raw
+          $m
+          Check ($m -match "requestedExecutionLevel\s+level=['""]asInvoker['""]\s+uiAccess=['""]false['""]") 'sc-offline.exe requestedExecutionLevel asInvoker, uiAccess false (as the MSBuild build)'
+          Check ($m -match "name=['""]Microsoft\.Windows\.Common-Controls['""]") 'sc-offline.exe depends on Common-Controls 6 (launcher.cpp manifestdependency)'
+
+          '--- dinput8.dll manifest'
+          & $mt -nologo "-inputresource:$dll;#2" -out:dll.manifest
+          $d = Get-Content dll.manifest -Raw
+          $d
+          Check ($d -match '<heapType[^>]*>SegmentHeap</heapType>') 'dinput8.dll manifest heapType SegmentHeap (EnableSegmentHeap)'
+
+          if ($script:failed) { "$($script:failed) check(s) failed"; exit 1 }
+          'all checks passed'
+
+      # Release links without debug information, so there is no PDB to upload.
       - name: Upload DLL + launcher artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dinput8-release
           path: |
-            x64/Release/dinput8.dll
-            x64/Release/sc-offline.exe
+            build/bin/Release/dinput8.dll
+            build/bin/Release/sc-offline.exe
           if-no-files-found: error
           retention-days: 30
 
