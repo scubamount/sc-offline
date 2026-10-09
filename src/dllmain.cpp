@@ -19,6 +19,7 @@
 #include "services.h"
 #include "outfits.h"
 #include "menu.h"
+#include "sco/log.h"
 
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "advapi32.lib")
@@ -201,10 +202,14 @@ static DWORD WINAPI ModThread(LPVOID param) {
     for (;;) Sleep(1000);
 }
 
+// sco-core's lines ([core], [plugin], [app], [status]) go to mod.log and the console like ours.
+static void ForwardCoreLog(const char* line) { Log("%s", line); }
+
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hModule);
         InitLog();
+        sco::SetLogSink(ForwardCoreLog);
         if (!AntiCheatProcess()) StartOffline();
         CreateThread(nullptr, 0, ModThread, hModule, 0, nullptr);
     }

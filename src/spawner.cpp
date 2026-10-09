@@ -3,6 +3,7 @@
 #include "teleport.h"
 #include "menu.h"
 #include "npc.h"
+#include "sco/status.h"
 #include <algorithm>
 #include <cctype>
 #include <cstdarg>
@@ -249,7 +250,8 @@ static MenuShip      g_menuShips[kMaxMenuShips];
 static volatile LONG g_menuShipCount = -1;
 static volatile LONG g_menuWantShips = 0;
 static SRWLOCK       g_menuLock = SRWLOCK_INIT;
-static char          g_menuStatus[256] = "Pick a ship and press Spawn.";
+// The status strip's text until a feature or a plugin sets one (sco::Status).
+static const char    kMenuStatusDefault[] = "Pick a ship and press Spawn.";
 static struct { bool pending; int index; MenuSpawnOptions opt; } g_spawnRequest;
 static struct { bool pending; bool enemyWing; char cls[64]; float height; bool sit; bool flightReady; } g_classRequest;
 
@@ -277,10 +279,9 @@ void SetMenuStatus(const char* fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    AcquireSRWLockExclusive(&g_menuLock);
-    strcpy_s(g_menuStatus, buf);
-    ReleaseSRWLockExclusive(&g_menuLock);
-    Log("[ship] %s", buf);
+    // One status line for features and plugins. sco::Status stores it and logs it once, as
+    // "[status] ..." (this used to log "[ship] ...").
+    sco::Status("%s", buf);
 }
 
 int Menu_ShipCount() {
@@ -320,9 +321,7 @@ static volatile LONG g_godModeOn = 1;
 void Menu_SetGodMode(bool on) { InterlockedExchange(&g_godModeOn, on ? 1 : 0); }
 
 void Menu_GetStatus(char* out, size_t n) {
-    AcquireSRWLockShared(&g_menuLock);
-    strncpy_s(out, n, g_menuStatus, _TRUNCATE);
-    ReleaseSRWLockShared(&g_menuLock);
+    if (!sco::GetStatus(out, n)) strncpy_s(out, n, kMenuStatusDefault, _TRUNCATE);
 }
 
 static uintptr_t ClassRegistry() { return VCall<uintptr_t>(*g_tp.entitySystem, 0xC0); }
