@@ -42,5 +42,10 @@ void        CurrentSystemZoneName(char* out, size_t n);           // "SolarSyste
 bool SaveSpotHere(const char* why, char* reply, size_t n);
 bool GoToSavedSpot(const char* why, char* reply, size_t n);
 
+// The F7 / F8 hotkeys: invoke teleport.save / teleport.go through sco_api, the same path a plugin
+// takes (src/builtins/teleport_plugin.cpp). Game thread.
+void TeleportSaveHotkey();
+void TeleportGoHotkey();
+
 void LoadSavedSpot(bool startingOverDaymar);
 void TeleportTick(DWORD now);

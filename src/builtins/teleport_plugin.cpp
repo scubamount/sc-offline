@@ -16,6 +16,7 @@ namespace {
 
 const sco_api* g_api = nullptr;    // from TeleportLoad until TeleportUnload
 sco_plugin*    g_self = nullptr;
+const char*    g_hotkey = nullptr;   // "F7" / "F8" while a hotkey's invoke runs, so mod.log reads as before
 
 const sco_plugin_info kInfo = {
     sizeof(sco_plugin_info), SCO_API_MAJOR, SCO_API_MINOR, "teleport", SCO_VERSION, "sc-offline",
@@ -23,11 +24,11 @@ const sco_plugin_info kInfo = {
 
 // A spot that can't be saved or reached answers SCO_UNAVAILABLE; the reply says why.
 sco_result Save(const sco_arg*, uint32_t, void*, char* reply, uint32_t size) {
-    return SaveSpotHere("teleport.save", reply, size) ? SCO_OK : SCO_UNAVAILABLE;
+    return SaveSpotHere(g_hotkey ? g_hotkey : "teleport.save", reply, size) ? SCO_OK : SCO_UNAVAILABLE;
 }
 
 sco_result Go(const sco_arg*, uint32_t, void*, char* reply, uint32_t size) {
-    return GoToSavedSpot("teleport.go", reply, size) ? SCO_OK : SCO_UNAVAILABLE;
+    return GoToSavedSpot(g_hotkey ? g_hotkey : "teleport.go", reply, size) ? SCO_OK : SCO_UNAVAILABLE;
 }
 
 sco_result Register(const char* name, const char* title, const char* help, sco_command_fn fn) {
@@ -58,6 +59,31 @@ void TeleportUnload() {
     g_self = nullptr;
 }
 
+// A hotkey invokes its command as the teleport plugin itself (its own handle, kept from load), so
+// it goes through the host's command table, capability check and crash guard like any plugin's
+// call. Invoked from the game thread, the command runs before invoke returns. Before the built-in
+// has loaded (or after it unloaded) the hotkey calls teleport.cpp directly, as it used to.
+void Hotkey(const char* command, const char* key, bool (*direct)(const char*, char*, size_t)) {
+    if (!g_api) {
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            Log("[tp] %s: the teleport built-in isn't loaded, so %s runs directly", key, command);
+        }
+        char reply[256];
+        direct(key, reply, sizeof(reply));
+        return;
+    }
+    g_hotkey = key;
+    const sco_result r = g_api->invoke(g_self, command, nullptr, 0, nullptr, nullptr);
+    g_hotkey = nullptr;
+    // SCO_UNAVAILABLE is the command's own failure, already logged with its reason.
+    if (r != SCO_OK && r != SCO_UNAVAILABLE) Log("[tp] %s: %s returned %d", key, command, static_cast<int>(r));
+}
+
 }  // namespace
+
+void TeleportSaveHotkey() { Hotkey("teleport.save", "F7", SaveSpotHere); }
+void TeleportGoHotkey()   { Hotkey("teleport.go", "F8", GoToSavedSpot); }
 
 const sco::plugins::Builtin kTeleportBuiltin = { "teleport", TeleportQuery, TeleportLoad, TeleportUnload };

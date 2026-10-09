@@ -19,6 +19,7 @@
 #include "services.h"
 #include "outfits.h"
 #include "menu.h"
+#include "builtins/builtins.h"
 #include "sco/app.h"
 #include "sco/caps.h"
 #include "sco/log.h"
@@ -27,6 +28,7 @@
 #include "sco/game/signatures.h"
 #include "sco_lua.h"
 #include <filesystem>
+#include <iterator>
 
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "advapi32.lib")
@@ -172,7 +174,10 @@ static void StartHostKit() {
     }
     pf.pluginsEnabled = PluginsEnabled();
     pf.scripts = &kLua;
-    // No built-ins yet: sc-offline's features become built-in plugins in Phase 4.
+    // sc-offline's features as built-in plugins (src/builtins/builtins.h), loaded before any plugin
+    // folder and with plugins on or off. Their capabilities still come from SetFeatureCaps.
+    pf.builtins = kBuiltins;
+    pf.nBuiltins = std::size(kBuiltins);
     // image stays nullptr: the features resolve their addresses in DllMain (StartOffline), before
     // this thread exists, so the signature rows were resolved there and reported by LogStartup.
     pf.setCapabilities = SetFeatureCaps;

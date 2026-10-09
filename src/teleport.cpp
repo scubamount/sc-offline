@@ -438,9 +438,8 @@ void LoadSavedSpot(bool startingOverDaymar) {
 
 void TeleportTick(DWORD now) {
     const bool focus = GameHasFocus();
-    char reply[256];
-    if (KeyPressed(VK_F7, g_keyWasDown[0]) && focus) SaveSpotHere("F7", reply, sizeof(reply));
-    if (KeyPressed(VK_F8, g_keyWasDown[1]) && focus) GoToSavedSpot("F8", reply, sizeof(reply));
+    if (KeyPressed(VK_F7, g_keyWasDown[0]) && focus) TeleportSaveHotkey();
+    if (KeyPressed(VK_F8, g_keyWasDown[1]) && focus) TeleportGoHotkey();
 
     if (g_autoTeleportPending) {
         uintptr_t actor, entity;
