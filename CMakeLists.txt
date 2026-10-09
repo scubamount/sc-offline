@@ -10,7 +10,8 @@
 #   dinput8     shared   src/*.cpp, src/builtins/*.cpp -> dinput8.dll
 #   sc-offline  exe      launcher/launcher.cpp -> sc-offline.exe
 #   sco-core    static   external/sco-core (submodule): scanners, signatures, host kit, plugin
-#                        loader and sco-lua; dinput8 links sco_app, sco_lua and sco_hook
+#                        loader and sco-lua; dinput8 links sco_app, sco_lua, sco_hook and
+#                        sco_engine (the zone tree behind teleport.spatial)
 #
 # Every setting below carries over from the former src/sc-offline-dll.vcxproj and
 # launcher/sc-offline.vcxproj (Release|x64 and Debug|x64).
@@ -125,8 +126,9 @@ target_compile_options(dinput8 PRIVATE ${SCO_DLL_OPTIONS} /W3)
 target_link_options(dinput8 PRIVATE /SUBSYSTEM:WINDOWS "$<$<CONFIG:Release>:/OPT:REF;/OPT:ICF>")
 # Also named by #pragma comment(lib) in dllmain.cpp and menu.cpp.
 target_link_libraries(dinput8 PRIVATE imgui d3d11 shlwapi advapi32 windowscodecs ole32)
-# The host kit (sco/app.h, with sco/scan.h, signatures, caps, the plugin loader) and sco-lua.
-target_link_libraries(dinput8 PRIVATE sco_app sco_lua sco_hook)
+# The host kit (sco/app.h, with sco/scan.h, signatures, caps, the plugin loader), sco-lua, the
+# detour engine and the zone tree (sco/engine/zone.h).
+target_link_libraries(dinput8 PRIVATE sco_app sco_lua sco_hook sco_engine)
 
 # WholeProgramOptimization + LinkTimeCodeGeneration in Release (/GL, /LTCG).
 set_target_properties(imgui dinput8 PROPERTIES INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
@@ -142,7 +144,8 @@ target_compile_options(sc-offline PRIVATE ${SCO_COMMON_OPTIONS} /W3)
 target_link_libraries(sc-offline PRIVATE bcrypt shell32 shlwapi advapi32 ole32 winhttp user32 gdi32 comctl32)
 
 # --- test plugins (CI artifact "test-plugins"; never part of a release) ---------------------------
-# spawn_probe exercises the spawn built-in's command and service in game (tools/test-plugins).
+# spawn_probe exercises the spawn built-in's command and service, and the teleport built-in's
+# teleport.spatial service, in game (tools/test-plugins).
 # Built into build/test-plugins/<id>/ with its plugin.ini, ready to copy into data/plugins/.
 add_library(spawn_probe SHARED tools/test-plugins/spawn_probe/spawn_probe.c)
 target_include_directories(spawn_probe PRIVATE external/sco-core/include src/builtins)
