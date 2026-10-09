@@ -1,7 +1,8 @@
 /* spawn_probe: a test plugin for in-game checks of sc-offline's spawn built-in (not shipped).
- *   F6       logs what the spawn.entities service answers, then invokes spawn.ship with an
- *            unknown class (expect "failed") and with DRAK_Cutlass_Black at 40 m.
- *   Ctrl+F6  spawns a DRAK_Cutlass_Black 30 m from you through spawn.entities.
+ *   Ctrl+Alt+1  logs what the spawn.entities service answers, then invokes spawn.ship with an
+ *               unknown class (expect "failed") and with DRAK_Cutlass_Black at 40 m.
+ *   Ctrl+Alt+2  spawns a DRAK_Cutlass_Black 30 m from you through spawn.entities.
+ * (Not F-keys: sc-offline uses F6 for build mode and F7/F8 for teleport, and the game many more.)
  * Every result goes to mod.log as "[spawn_probe] ...". */
 #include "sco_api.h"
 #include "spawn_service.h"
@@ -13,7 +14,7 @@
 
 static const sco_api* g_api;
 static sco_plugin*    g_self;
-static int            g_f6Down;
+static int            g_down1, g_down2;
 
 static const sco_plugin_info kInfo = {
     sizeof(sco_plugin_info), SCO_API_MAJOR, SCO_API_MINOR, "spawn_probe", "1.0.0", "sc-offline tests",
@@ -87,14 +88,17 @@ static void run_service_spawn(void) {
     say("spawn_near_player(DRAK_Cutlass_Black, 30 m) -> %s, id %llu", err ? err : "ok", (unsigned long long)id);
 }
 
+static int held(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
+
 static void on_tick(const char* event, const void* data, void* ctx) {
-    const int down = (GetAsyncKeyState(VK_F6) & 0x8000) != 0;
+    const int chord = held(VK_CONTROL) && held(VK_MENU);
+    const int down1 = chord && held('1');
+    const int down2 = chord && held('2');
     (void)event; (void)data; (void)ctx;
-    if (down && !g_f6Down) {
-        if (GetAsyncKeyState(VK_CONTROL) & 0x8000) run_service_spawn();
-        else run_checks();
-    }
-    g_f6Down = down;
+    if (down1 && !g_down1) run_checks();
+    if (down2 && !g_down2) run_service_spawn();
+    g_down1 = down1;
+    g_down2 = down2;
 }
 
 SCO_EXPORT const sco_plugin_info* sco_plugin_query(void) { return &kInfo; }
@@ -104,7 +108,7 @@ SCO_EXPORT sco_result sco_plugin_load(const sco_api* api, sco_plugin* self) {
     g_api = api;
     g_self = self;
     r = api->subscribe(self, "tick", on_tick, NULL);
-    if (r == SCO_OK) say("loaded: F6 = service checks + spawn.ship, Ctrl+F6 = spawn through spawn.entities");
+    if (r == SCO_OK) say("loaded: Ctrl+Alt+1 = service checks + spawn.ship, Ctrl+Alt+2 = spawn through spawn.entities");
     return r;
 }
 
