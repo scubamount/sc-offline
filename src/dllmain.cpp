@@ -19,10 +19,14 @@
 #include "services.h"
 #include "outfits.h"
 #include "menu.h"
+#include "sco/app.h"
+#include "sco/caps.h"
 #include "sco/log.h"
 #include "sco/scan.h"
 #include "sco/signatures.h"
 #include "sco/game/signatures.h"
+#include "sco_lua.h"
+#include <filesystem>
 
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "advapi32.lib")
@@ -136,7 +140,58 @@ static void LogStartup() {
         Log("[!] Game is running ONLINE.");
 }
 
+// --- sco-core's host kit (sco/app.h), on the game thread -----------------------------------------
+
+static void SetCap(const char* name, bool ready) {
+    const sco::Result r = sco::caps::Set(name, ready, ready ? nullptr : "unavailable on this game build (see mod.log)");
+    if (r != sco::Result::Ok) Log("[!] capability %s: %s", name, sco::ResultName(r));
+}
+
+// One capability per feature, from the same readiness LogStartup prints.
+static void SetFeatureCaps() {
+    SetCap("offline", g_offline);
+    SetCap("teleport", g_tp.ok);
+    SetCap("spawn.ship", SpawnerReady());
+    SetCap("outfits", g_outfitsOk);
+    SetCap("quantum.drive", QuantumDriveReady());
+    SetCap("quantum.boost", QuantumBoostReady());
+}
+
+static const sco::plugins::ScriptRuntime kLua{ sco_lua_load, sco_lua_unload };
+
+static void StartHostKit() {
+    sco::app::Platform pf;
+    pf.hostVersion = SCO_TITLE;
+    char dir[MAX_PATH];
+    if (DataFilePath(dir, sizeof(dir), "plugins")) {   // data\plugins, beside ships.txt
+        std::error_code ec;
+        pf.pluginRoot = std::filesystem::absolute(dir, ec);
+        if (ec) pf.pluginRoot = dir;
+    } else {
+        Log("[app] SC_OFFLINE_SHIPS_FILE is unset, so there is no data folder to load plugins from");
+    }
+    pf.pluginsEnabled = PluginsEnabled();
+    pf.scripts = &kLua;
+    // No built-ins yet: sc-offline's features become built-in plugins in Phase 4.
+    // image stays nullptr: the features resolve their addresses in DllMain (StartOffline), before
+    // this thread exists, so the signature rows were resolved there and reported by LogStartup.
+    pf.setCapabilities = SetFeatureCaps;
+    sco::app::Start(pf);
+}
+
+// game.exit and unload, once, on the game thread when its message loop gets WM_QUIT.
+static void StopHostKit() {
+    static bool stopped = false;
+    if (stopped) return;
+    stopped = true;
+    Log("[app] game closing (WM_QUIT): game.exit, unloading plugins");
+    sco::app::Stop();
+}
+
 static void OnMainThreadTick() {
+    static bool hostKitStarted = false;
+    if (!hostKitStarted) { hostKitStarted = true; StartHostKit(); }
+
     static DWORD last = 0;
     const DWORD now = GetTickCount();
     if (now - last < 100) return;
@@ -154,12 +209,18 @@ static void OnMainThreadTick() {
     ProcessOutfits();
     TeleportTick(now);
     ProcessTravel(now);
+    sco::app::Tick(now);   // plugin tasks, then "tick"
 }
 
 static HHOOK g_msgHook = nullptr;
 
 static LRESULT CALLBACK GetMsgProc(int code, WPARAM wp, LPARAM lp) {
-    if (code >= 0) OnMainThreadTick();
+    if (code >= 0) {
+        OnMainThreadTick();
+        // GetMessage hands the game's main loop WM_QUIT when the game closes: the last point we
+        // reliably see on the game thread. Peeks that leave it queued don't count.
+        if (wp == PM_REMOVE && reinterpret_cast<const MSG*>(lp)->message == WM_QUIT) StopHostKit();
+    }
     return CallNextHookEx(g_msgHook, code, wp, lp);
 }
 

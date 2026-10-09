@@ -5,6 +5,7 @@ bool ResolveSpawnApi(const Section& text, const Section& rdata);
 bool SpawnerReady();
 void ReadStartOptions();
 bool StartingOverDaymar();
+bool PluginsEnabled();   // plugins = on (SC_OFFLINE_PLUGINS); read by ReadStartOptions
 void ProcessShipMenu(DWORD now);
 
 // Squadron 42 tab: spawn an entity class the menu's ship list doesn't carry.

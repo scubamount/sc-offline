@@ -257,6 +257,7 @@ static struct { bool pending; bool enemyWing; char cls[64]; float height; bool s
 
 static bool g_startDaymarPending = false;
 static char g_startShip[64] = "DRAK_Cutlass_Black";
+static bool g_pluginsOn = false;
 
 void ReadStartOptions() {
     char v[64];
@@ -264,6 +265,9 @@ void ReadStartOptions() {
     g_startDaymarPending = n > 0 && n < sizeof(v) && _stricmp(v, "Daymar") == 0;
     const DWORD s = GetEnvironmentVariableA("SC_OFFLINE_START_SHIP", v, sizeof(v));
     if (s > 0 && s < sizeof(v)) strcpy_s(g_startShip, v);
+    // plugins = on|off in sc-offline.ini; the launcher passes "on" or "off". Anything else is off.
+    const DWORD p = GetEnvironmentVariableA("SC_OFFLINE_PLUGINS", v, sizeof(v));
+    g_pluginsOn = p > 0 && p < sizeof(v) && _stricmp(v, "on") == 0;
     if (g_startDaymarPending && g_sp.ok && g_sp.findEntityByName)
         Log("[ship] start: over Daymar in %s (SC_OFFLINE_START=Daymar)", g_startShip);
     else if (g_startDaymarPending)
@@ -272,6 +276,7 @@ void ReadStartOptions() {
 
 bool SpawnerReady() { return g_sp.ok; }
 bool StartingOverDaymar() { return g_startDaymarPending; }
+bool PluginsEnabled() { return g_pluginsOn; }
 
 void SetMenuStatus(const char* fmt, ...) {
     char buf[256];

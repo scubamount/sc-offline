@@ -439,12 +439,19 @@ void ResolveQuantumApi(const Section& text, const Section& rdata) {
         && HookFunction(loader, 15, reinterpret_cast<void*>(&LoadDataCoreHook), reinterpret_cast<void**>(&g_loadDataCoreOrig));
 }
 
+bool QuantumDriveReady() { return g_hooked; }
+
+bool QuantumBoostReady() {
+    return g_inputHooked && g_startUseHooked && g_driveInput && g_effectGuarded && g_chargeHooked
+        && g_audioSystem && g_handleValid && g_sendEffectTag;
+}
+
 void LogQuantum() {
-    if (g_hooked) Log("[+] new quantum drive: game data loader hooked (the Gladius' drive data is patched in as it loads)");
+    if (QuantumDriveReady()) Log("[+] new quantum drive: game data loader hooked (the Gladius' drive data is patched in as it loads)");
     else          Log("[!] new quantum drive: game data loader not hooked (CryPak %s, its calls %s)",
                       g_cryPak ? "ok" : "MISSING", g_pakCalls ? "ok" : "MISSING");
     const bool audio = g_audioSystem && g_handleValid;
-    if (g_inputHooked && g_startUseHooked && g_driveInput && g_effectGuarded && g_chargeHooked && audio && g_sendEffectTag)
+    if (QuantumBoostReady())
         Log("[+] quantum boost: hold Caps Lock, or NAV mode + hold left mouse");
     else
         Log("[!] quantum boost: input hook %s, drive hook %s, drive input %s, effects guard %s, charge hook %s, audio %s, effect warm-up %s",
