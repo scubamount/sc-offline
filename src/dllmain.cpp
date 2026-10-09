@@ -26,6 +26,8 @@
 #include "sco/scan.h"
 #include "sco/signatures.h"
 #include "sco/game/signatures.h"
+#include "sco/game/system.h"
+#include "sco/runtime.h"
 #include "sco_lua.h"
 #include <filesystem>
 #include <iterator>
@@ -101,6 +103,9 @@ static bool AntiCheatPresent() {
 static bool g_offline = false;
 static bool g_outfitsOk = false;
 static bool g_signaturesResolved = false;
+static const char* g_quitHookStatus = nullptr;   // "[app] game quit hook: ..." in LogStartup
+
+static void InstallQuitHook();
 
 static void StartOffline() {
     g_offline = ApplyOfflinePatches();
@@ -112,6 +117,7 @@ static void StartOffline() {
     if (!sco::game::RegisterGameSignatures()) Log("[!] sco-core's game signature tables did not all register");
     sco::ResolveAll(sco::ModuleImage());
     g_signaturesResolved = true;
+    InstallQuitHook();
     if (ResolveTeleportApi()) {
         ResolveSpawnApi(g_text, g_rdata);
         g_outfitsOk = ResolveLoadoutApi(g_text, g_rdata);  // outfits ride the gear menu's loader
@@ -130,6 +136,7 @@ static void LogStartup() {
     LogHooks();
     LogQuantum();
     if (g_signaturesResolved) sco::LogSignatureReport(false);
+    if (g_quitHookStatus) Log("[app] game quit hook: %s", g_quitHookStatus);
     if (g_tp.ok) Log("[+] teleport: ready (F7 = save spot, F8 = go there)");
     else         Log("[!] teleport: unavailable (see above)");
     if (SpawnerReady()) Log("[+] ship spawner: ready (M = menu)");
@@ -161,6 +168,8 @@ static void SetFeatureCaps() {
 
 static const sco::plugins::ScriptRuntime kLua{ sco_lua_load, sco_lua_unload };
 
+static bool g_hostKitStarted = false;   // sco::app::Start ran (on the game thread)
+
 static void StartHostKit() {
     sco::app::Platform pf;
     pf.hostVersion = SCO_TITLE;
@@ -181,16 +190,75 @@ static void StartHostKit() {
     // image stays nullptr: the features resolve their addresses in DllMain (StartOffline), before
     // this thread exists, so the signature rows were resolved there and reported by LogStartup.
     pf.setCapabilities = SetFeatureCaps;
-    sco::app::Start(pf);
+    g_hostKitStarted = sco::app::Start(pf);
 }
 
-// game.exit and unload, once, on the game thread when its message loop gets WM_QUIT.
-static void StopHostKit() {
+// game.exit and unload, once, on the game thread. Two triggers, whichever comes first: the game's
+// own CSystem::Quit when it is about to end the process (QuitDetour), and WM_QUIT reaching the
+// game's message loop (GetMsgProc). `trigger` names the one that fired.
+static void StopHostKit(const char* trigger) {
     static bool stopped = false;
     if (stopped) return;
     stopped = true;
-    Log("[app] game closing (WM_QUIT): game.exit, unloading plugins");
+    Log("[app] game closing (%s): game.exit, unloading plugins", trigger);
     sco::app::Stop();
+}
+
+// --- the game's own Quit (sco-core's system.quit row) --------------------------------------------
+//
+// void CSystem::Quit(SDisconnectionInfo&& info, const int exitCode): rcx = CSystem*, rdx = info,
+// r8d = exitCode. No stack or xmm arguments. Every call quits; it ends in one of two ways:
+//   - fast shutdown, when the ExitOnQuit cvar (an ICVar* in CSystem, GetIVal != 0) or test mode
+//     (a bool in CSystem) is set: "System Fast Shutdown (%s enabled)", then
+//     TerminateProcess(GetCurrentProcess(), exitCode) inside the call. No WM_QUIT ever comes.
+//     This is the menu Quit in LIVE.
+//   - otherwise PostQuitMessage(exitCode) and a normal return; WM_QUIT then reaches GetMsgProc.
+// The detour stops the host kit before the original only on the first path, testing the same two
+// fields the original tests (their offsets read from its own instructions at +0x31a / +0x330),
+// and leaves the second to the WM_QUIT trigger.
+using QuitFn = void(__fastcall*)(void* system, void* info, int exitCode);
+static QuitFn  g_quitOriginal = nullptr;
+static int32_t g_quitCVarOffset = 0;      // ICVar* ExitOnQuit, in CSystem
+static int32_t g_quitTestModeOffset = 0;  // bool test mode, in CSystem
+
+// The original's test, step for step: cvar && cvar->GetIVal() (vtable +0x10), else test mode.
+static bool QuitEndsProcess(void* system) {
+    auto* sys = static_cast<uint8_t*>(system);
+    void* cvar = *reinterpret_cast<void**>(sys + g_quitCVarOffset);
+    if (cvar) {
+        using GetIValFn = int(__fastcall*)(void* cvar);
+        if ((*reinterpret_cast<GetIValFn* const*>(cvar))[2](cvar) != 0) return true;
+    }
+    return sys[g_quitTestModeOffset] != 0;
+}
+
+static void __fastcall QuitDetour(void* system, void* info, int exitCode) {
+    if (sco::OnGameThread() && g_hostKitStarted && QuitEndsProcess(system)) StopHostKit("CSystem::Quit");
+    g_quitOriginal(system, info, exitCode);
+}
+
+// After ResolveAll. Hooks CSystem::Quit when system.quit is OK and its fast-shutdown test is where
+// this build has it; otherwise WM_QUIT stays the only trigger.
+static void InstallQuitHook() {
+    sco::game::QuitHook q;
+    if (!sco::game::QuitFunction(q)) {
+        g_quitHookStatus = "not installed (system.quit isn't OK, see [core] signatures; WM_QUIT only)";
+        return;
+    }
+    // +0x31a  mov rcx,[r14+cvar]; test rcx,rcx; je; mov rax,[rcx]; call [rax+10h]; test eax,eax; jne
+    // +0x330  cmp byte ptr [r14+testMode],0; je (PostQuitMessage)
+    if (!BytesMatch(q.fn + 0x31a, "49 8B 8E ?? ?? ?? ?? 48 85 C9 74 0A 48 8B 01 FF 50 10 85 C0 75 0E "
+                                  "41 80 BE ?? ?? ?? ?? 00 0F 84")) {
+        g_quitHookStatus = "not installed (CSystem::Quit's fast-shutdown test moved; WM_QUIT only)";
+        return;
+    }
+    g_quitCVarOffset     = *reinterpret_cast<const int32_t*>(q.fn + 0x31d);
+    g_quitTestModeOffset = *reinterpret_cast<const int32_t*>(q.fn + 0x333);
+    if (!HookFunction(q.fn, q.stolenBytes, reinterpret_cast<void*>(&QuitDetour), reinterpret_cast<void**>(&g_quitOriginal))) {
+        g_quitHookStatus = "not installed (hook failed; WM_QUIT only)";
+        return;
+    }
+    g_quitHookStatus = "installed";
 }
 
 static void RunFeatureTicks(DWORD now) {
@@ -231,7 +299,7 @@ static LRESULT CALLBACK GetMsgProc(int code, WPARAM wp, LPARAM lp) {
         // GetMessage hands the game's main loop WM_QUIT when the game closes: the last point we
         // reliably see on the game thread. Peeks that leave it queued don't count; a PeekMessage
         // that removes it may add PM_NOYIELD, so test the PM_REMOVE bit.
-        if ((wp & PM_REMOVE) && reinterpret_cast<const MSG*>(lp)->message == WM_QUIT) StopHostKit();
+        if ((wp & PM_REMOVE) && reinterpret_cast<const MSG*>(lp)->message == WM_QUIT) StopHostKit("WM_QUIT");
     }
     return CallNextHookEx(g_msgHook, code, wp, lp);
 }
