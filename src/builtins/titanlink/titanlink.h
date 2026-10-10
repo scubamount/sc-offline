@@ -4,7 +4,7 @@
 // pilot mode, commands, tick), titanlink_ui.cpp (its tab) and titanlink_overlay.cpp (the window
 // that shows Titanfall's picture over the game). docs/bridges.md describes what it does.
 #include "sco_ipc.h"
-#include "titanlink_wire.h"
+#include "sc_titanlink.h" // the channel layout, MIT, from sco-core's SDK
 #include <windows.h>
 #include <cstdint>
 

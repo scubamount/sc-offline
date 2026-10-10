@@ -2,7 +2,7 @@
 // SCO_BRIDGE_VOXEL).
 //
 // voxel_bridge.toggle (Ctrl+F9) opens the channel Local\SCO_voxel_bridge.link through sco.ipc
-// (layout voxel_wire.h, docs/bridges.md) and makes a building area where you stand: block
+// (layout sc_voxel_bridge.h, docs/bridges.md) and makes a building area where you stand: block
 // (0, 64, 0) at your feet, x along your right, y up, -z along your facing, block_size metres a
 // block. voxel_bridge.anchor moves the area to where you stand now. Ten times a second the
 // built-in writes your position and facing in voxel coordinates, so the voxel game's player can

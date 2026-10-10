@@ -158,6 +158,10 @@ struct Config {
     // until the player presses Host or Join. multiplayerAllow: extra IPv4 ranges (a VPN), checked.
     bool multiplayer = true;
     wstring multiplayerAllow;
+    // Ship terminals (ASOP), personal hangars, the hangar lift and ATC hails in the mod. On by default.
+    bool asop = true;
+    // Which ship list the terminals show with asop on: game (the game's own) or ships (ships.txt).
+    wstring asopFleetList = L"game";
 };
 
 static bool ParseOnOff(const wstring& v, bool& out) {
@@ -240,6 +244,13 @@ static bool ReadConfig(const wstring& path, Config& c) {
                 c.multiplayerAllow.clear();
                 Out("[!] sc-offline.ini line %d: multiplayer_allow must be up to 8 IPv4 ranges like 100.64.0.0/10 (/8 or narrower); ignored\n", lineNo);
             }
+        }
+        else if (!_wcsicmp(k.c_str(), L"asop")) {
+            if (!ParseOnOff(v, c.asop)) Out("[!] sc-offline.ini line %d: asop must be on or off\n", lineNo);
+        }
+        else if (!_wcsicmp(k.c_str(), L"asop_fleet_list")) {
+            if (!_wcsicmp(v.c_str(), L"game") || !_wcsicmp(v.c_str(), L"ships")) c.asopFleetList = v;
+            else Out("[!] sc-offline.ini line %d: asop_fleet_list must be game or ships\n", lineNo);
         }
         else if (!_wcsicmp(k.c_str(), L"check_updates")) {
             if (!ParseOnOff(v, c.checkUpdates)) Out("[!] sc-offline.ini line %d: check_updates must be on or off\n", lineNo);
@@ -2946,12 +2957,14 @@ int wmain(int argc, wchar_t** argv) {
         SetVar(L"SC_OFFLINE_PLUGINS", cfg.plugins ? L"on" : L"off");
         SetVar(L"SC_OFFLINE_MULTIPLAYER", cfg.multiplayer ? L"on" : L"off");
         SetVar(L"SC_OFFLINE_MULTIPLAYER_ALLOW", cfg.multiplayerAllow);
+        SetVar(L"SC_OFFLINE_ASOP", cfg.asop ? L"on" : L"off");
+        SetVar(L"SC_OFFLINE_ASOP_FLEET_LIST", cfg.asopFleetList);
         SetVar(L"SC_USER", g.userDir);
         if (dry)
             Out("[dry-run] would set SC_OFFLINE_BOOT_MAP=%ls SC_OFFLINE_START_SHIP=%ls SC_OFFLINE_START=%ls SC_OFFLINE_PLUGINS=%ls\n"
-                "          SC_OFFLINE_MOD_LOG, _SPAWN_FILE, _SHIPS_FILE under %ls; SC_USER=%ls\n",
+                "          SC_OFFLINE_ASOP=%ls; SC_OFFLINE_MOD_LOG, _SPAWN_FILE, _SHIPS_FILE under %ls; SC_USER=%ls\n",
                 cfg.bootMap.c_str(), cfg.startShip.c_str(), cfg.start.c_str(), cfg.plugins ? L"on" : L"off",
-                data.c_str(), g.userDir.c_str());
+                cfg.asop ? L"on" : L"off", data.c_str(), g.userDir.c_str());
     }
 
     // 4. Change the game folder, through the helper (see the top of this file).

@@ -1,4 +1,5 @@
 #include "hooks.h"
+#include "fleet.h"
 #include "teleport.h"
 #include "sco/hook.h"
 #include <initializer_list>
@@ -251,7 +252,14 @@ uint8_t* NearData(size_t n) {
 }
 
 constexpr size_t   kEntitlementSize = 0x150;
-constexpr uint16_t kUrnType = 0x1E11;
+// The fleet ships' entitlement URN: urn:sc:platform:entitlement:uuid:<id>. CSCURN bytes +0x00
+// namespace (6 platform; 0x11 = none), +0x01 type (0x16 entitlement; 0x1E = none), +0x08 kind
+// (3 uuid; 5 = none), +0x20 the id's variant (2 = a 16-byte id at +0x10). The game reads a URN with
+// any "none" byte as unset (0x441F50 on 4.10.196), and the terminal then offers no Deliver, Retrieve
+// or Claim on the row; 0x1E11 / kind 5, used before, is exactly the list builder's unset URN.
+constexpr uint16_t kUrnType = 0x1606;
+constexpr uint8_t  kUrnKindUuid = 3;
+constexpr uint8_t  kUrnIdGuid = 2;
 constexpr uint64_t kShipUrnMarker = 0x53434F4600000000ull;
 constexpr size_t   kSlotUrn = 0x1698;
 constexpr size_t   kAsopAtcId = 0x9F8;
@@ -370,9 +378,9 @@ static int BuildFleetShips() {
     for (int i = 0; g_fakeEntitlements && i < kept; ++i) {
         uint8_t* e = g_fakeEntitlements + i * kEntitlementSize;
         *reinterpret_cast<uint16_t*>(e + 0x00) = kUrnType;
-        e[0x08] = 5;
+        e[0x08] = kUrnKindUuid;
         *reinterpret_cast<uint64_t*>(e + 0x10) = kShipUrnMarker | static_cast<uint32_t>(i);
-        e[0x20] = 1;
+        e[0x20] = kUrnIdGuid;
         e[0x50] = 3;
         *reinterpret_cast<uint32_t*>(e + 0x54) = 1;
         memcpy(e + 0x58, ships[i].guid, 16);
@@ -396,6 +404,13 @@ static int EnsureFleetShips() {
 static void __fastcall Hook_EntitlementsResult(uintptr_t self, uintptr_t result) {
     bool failed = false;
     __try { failed = Rd<uint8_t>(result) != 1; } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    if (failed && Fleet_UseGameList()) {
+        static volatile LONG told = 0;
+        if (!InterlockedExchange(&told, 1))
+            Log("[fleet] asop_fleet_list = game: the game's own ship list, not ships.txt (its entitlement query failed, so it lists nothing; asop_fleet_list = ships lists ships.txt)");
+        g_origEntitlementsResult(self, result);
+        return;
+    }
     const int n = failed ? EnsureFleetShips() : 0;
     if (!n) { g_origEntitlementsResult(self, result); return; }
     struct { uint8_t ok; uint8_t pad[7]; uint8_t* begin; uint8_t* end; uint8_t* cap; uint8_t spare[64]; } fake = {};
@@ -410,13 +425,31 @@ static void __fastcall Hook_EntitlementsResult(uintptr_t self, uintptr_t result)
 static int SlotShipIndex(uintptr_t slot) {
     __try {
         const uintptr_t urn = slot + kSlotUrn;
-        if (Rd<uint16_t>(urn) != kUrnType || Rd<uint8_t>(urn + 0x20) != 1) return -1;
+        if (Rd<uint16_t>(urn) != kUrnType || Rd<uint8_t>(urn + 0x20) != kUrnIdGuid) return -1;
         const uint64_t id = Rd<uint64_t>(urn + 0x10);
         const int i = static_cast<int>(static_cast<uint32_t>(id));
         return (id & 0xFFFFFFFF00000000ull) == kShipUrnMarker && i < g_shipCount ? i : -1;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return -1;
     }
+}
+
+int FleetShipIndexOfUrnId(const uint64_t id[2]) {
+    AcquireSRWLockShared(&g_shipsLock);
+    const int count = g_shipsBuilt ? g_shipCount : 0;
+    ReleaseSRWLockShared(&g_shipsLock);
+    for (int i = 0; i < 2; ++i)
+        for (const uint64_t q : { id[i], _byteswap_uint64(id[i]) })
+            if ((q & 0xFFFFFFFF00000000ull) == kShipUrnMarker && static_cast<uint32_t>(q) < static_cast<uint32_t>(count))
+                return static_cast<int>(static_cast<uint32_t>(q));
+    return -1;
+}
+
+const char* FleetShipClass(int index) {
+    AcquireSRWLockShared(&g_shipsLock);
+    const int count = g_shipsBuilt ? g_shipCount : 0;
+    ReleaseSRWLockShared(&g_shipsLock);
+    return index >= 0 && index < count ? g_ships[index].name : nullptr;
 }
 
 const char* RequestShipFromAtc(uint64_t atcEntity, uint64_t player, const char* shipClass) {
@@ -445,7 +478,9 @@ const char* RequestShipFromAtc(uint64_t atcEntity, uint64_t player, const char* 
 
 static void __fastcall Hook_RetrieveVehicle(uintptr_t asop, uintptr_t slot) {
     const int i = SlotShipIndex(slot);
-    if (i < 0) { g_origRetrieveVehicle(asop, slot); return; }
+    // With the ASOP Retrieve (fleet.cpp) on, the game's own retrieve runs: it reaches the ATC with
+    // the stored ship, where asking the ATC directly for a class would lock the station's terminals.
+    if (i < 0 || Fleet_RetrieveActive()) { g_origRetrieveVehicle(asop, slot); return; }
     uint64_t atc = 0;
     __try { atc = Rd<uint64_t>(asop + kAsopAtcId); } __except (EXCEPTION_EXECUTE_HANDLER) {}
     if (const char* err = RequestShipFromAtc(atc, LocalPlayerId(), g_ships[i].name))

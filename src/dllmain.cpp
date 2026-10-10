@@ -17,6 +17,7 @@
 #include "travel.h"
 #include "version.h"
 #include "services.h"
+#include "fleet.h"
 #include "outfits.h"
 #include "menu.h"
 #include "hotkeys.h"
@@ -110,15 +111,17 @@ static const char* g_quitHookStatus = nullptr;   // "[app] game quit hook: ..." 
 static void InstallQuitHook();
 
 static void StartOffline() {
+    // sco-core's signature rows first. They match the game's original bytes (sco-sigcheck checks
+    // them against StarCitizen.exe on disk), and the ASOP rows cover bytes that the offline patches
+    // and hooks below change (the shard gate, the fleet manager's retrieve). The report goes out
+    // with LogStartup.
+    if (!sco::game::RegisterGameSignatures()) Log("[!] sco-core's game signature tables did not all register");
+    sco::ResolveAll(sco::ModuleImage());
+    g_signaturesResolved = true;
     g_offline = ApplyOfflinePatches();
     if (!g_offline) return;
     InstallHooks(g_text);
     ResolveQuantumApi(g_text, g_rdata);
-    // sco-core's signature rows, resolved where teleport used to scan (after the patches and
-    // hooks, so the bytes scanned are the same as before). The report goes out with LogStartup.
-    if (!sco::game::RegisterGameSignatures()) Log("[!] sco-core's game signature tables did not all register");
-    sco::ResolveAll(sco::ModuleImage());
-    g_signaturesResolved = true;
     EnableQuantumDrive();   // the pak.* rows: the new quantum drive's game data, served as it loads
     InstallQuitHook();
     if (ResolveTeleportApi()) {
@@ -130,7 +133,8 @@ static void StartOffline() {
         ResolveMissionsApi(g_text, g_rdata);
         ResolveContractsApi(g_text, g_rdata);
         ResolveAmmoApi(g_text);
-        ResolveHangarsApi(g_text, g_rdata);
+        ResolveFleetApi();     // ship terminals (fleet.cpp); reads sc-offline.ini's asop switch
+        ResolveHangarsApi();   // hangars and ATC tokens (services.cpp)
     }
 }
 
@@ -146,6 +150,8 @@ static void LogStartup() {
     else                Log("[!] ship spawner: unavailable (see above)");
     if (g_outfitsOk) Log("[+] outfits: ready (Squadron 42 tab, data/outfits.txt)");
     else             Log("[!] outfits: unavailable (they use the gear menu's loader; see [gear] above)");
+    LogFleet();
+    LogHangars();
     if (g_offline)
         Log("[i] check Game.log: \"Process sc-client started\" line should show bOnline[0].");
     else
@@ -180,6 +186,8 @@ static void SetFeatureCaps() {
 #ifdef SCO_BRIDGE_VOXEL
     SetCap("voxel_bridge", g_tp.ok && SpawnerReady());   // teleport.spatial, plus the spawner for crates
 #endif
+    SetFleetCaps();    // asop.terminal, asop.deliver, asop.retrieve, hangar.lift, atc.store, ...
+    SetHangarCaps();   // hangar.instance, atc.tokens, asop.diagnostics
 }
 
 static const sco::plugins::ScriptRuntime kLua{ sco_lua_load, sco_lua_unload };
@@ -297,11 +305,14 @@ static void RunFeatureTicks(DWORD now) {
     if (!ContractsBuiltinOwnsTick()) ProcessContracts();
     if (!AmmoBuiltinOwnsTick()) ProcessAmmo();
     TeleportTick(now);
+    ProcessFleet(now);
 }
 
 static void OnMainThreadTick() {
     static bool hostKitStarted = false;
     if (!hostKitStarted) { hostKitStarted = true; StartHostKit(); }
+    // Every message, not throttled: a loading thread may be waiting for it (services.cpp, rc7).
+    ProcessHangars(GetTickCount());
     // Every pass, not throttled: the menu's frame (its tabs are plugin draws, game thread only)
     // and the keys bound through sco.ui.
     Menu_GameThreadFrame();

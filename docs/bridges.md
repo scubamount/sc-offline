@@ -49,16 +49,16 @@ Commands: `voxel_bridge.toggle`, `voxel_bridge.anchor`, `voxel_bridge.status`, g
 
 ## Where the other sides live
 
-Each bridge has a second half inside the other game. Neither is in this repository:
+Each bridge has a second half inside the other game. Neither is in this repository, and neither needs anything from it: both build against the published sco-core SDK alone (`sc_ipc.h` and the bridge's layout header, all MIT; see [The wire](#the-wire)).
 
-- **The Titanfall side** is a Northstar plugin (a native DLL that hooks Titanfall 2's Direct3D to share its picture, plus a Squirrel script that runs the local match). The fork's version is `TitanLink/src/plugin.cpp` and `TitanLink/mod/` in the 2026-10-09 download. It stays outside sc-offline, in its own repository: it is a mod for another game, with Titanfall-side match settings (`sv_cheats`, `ns_auth_allow_insecure` in Titanfall 2) that the design left for the maintainer to decide on, and `sc_ipc.h` is MIT so that a non-GPL program can speak the wire. To port the fork's plugin: replace its `Local\SCTitanLink_v1` mapping (`LinkOpen`, `ReadSc`, the `TfBlock` / `FrameBlock` writes and the `cmd` text) with `sc_ipc_attach` on `Local\SCO_titanlink.link` and the blocks and messages below. The free-form console command it used to receive is now a `TL_MSG_START_MATCH` with a map and mode it must check.
+- **The Titanfall side** is a Northstar plugin (a native DLL that hooks Titanfall 2's Direct3D to share its picture, plus a Squirrel script that runs the local match). The fork's version is `TitanLink/src/plugin.cpp` and `TitanLink/mod/` in the 2026-10-09 download. It lives in its own repository as a separate plugin built against the sco-core SDK (maintainer's decision of 2026-10-10): it is a mod for another game, with Titanfall-side match settings (`sv_cheats`, `ns_auth_allow_insecure` in Titanfall 2) that the design left for the maintainer to decide on, and the SDK headers it includes are MIT so that a non-GPL program can speak the wire. To port the fork's plugin: replace its `Local\SCTitanLink_v1` mapping (`LinkOpen`, `ReadSc`, the `TfBlock` / `FrameBlock` writes and the `cmd` text) with `sc_ipc_attach` on `Local\SCO_titanlink.link` and the blocks and messages below. The free-form console command it used to receive is now a `TL_MSG_START_MATCH` with a map and mode it must check.
 - **The voxel side**, a mod for the voxel game, wasn't in the download, so it has to be written against the wire below.
 
 Until they exist, `bridge-peer.exe` (in `bridges-test`) stands in for either one.
 
 ## The wire
 
-Both channels follow `sc_ipc.h`: the 64-byte `sc_ipc_hdr` at offset 0 (magic `SCIO`, version, pids, epoch, both heartbeats, size, `layout_id` / `layout_version`, state), then seqlock **blocks** (`sc_ipc_block`, 16 bytes, then the struct) and single-producer **rings** (`sc_ipc_ring`, 192 bytes, then the capacity) at the offsets in the tables. The layouts are pinned with `static_assert`s in [`titanlink_wire.h`](../src/builtins/titanlink/titanlink_wire.h) and [`voxel_wire.h`](../src/builtins/voxel_bridge/voxel_wire.h). Those are plain C headers the other side may include, or it can declare the same structs from this page. Everything is little-endian, with natural alignment.
+Both channels follow `sc_ipc.h`: the 64-byte `sc_ipc_hdr` at offset 0 (magic `SCIO`, version, pids, epoch, both heartbeats, size, `layout_id` / `layout_version`, state), then seqlock **blocks** (`sc_ipc_block`, 16 bytes, then the struct) and single-producer **rings** (`sc_ipc_ring`, 192 bytes, then the capacity) at the offsets in the tables. The layouts are defined once, in sco-core's SDK: [`sc_titanlink.h`](../external/sco-core/include/sc_titanlink.h) and [`sc_voxel_bridge.h`](../external/sco-core/include/sc_voxel_bridge.h), MIT, plain C11 / C++20, with every size and offset pinned by `static_assert`s (and by sco-core's `tests/abi_titanlink.c` and `tests/abi_voxel_bridge.c`; [sco-core docs/ipc.md, Bridge layouts](../external/sco-core/docs/ipc.md#bridge-layouts)). sc-offline includes them from `external/sco-core/include` and keeps no copy of its own. The other side vendors the same headers from the SDK zip; its `TL_LAYOUT_VERSION` / `VX_LAYOUT_VERSION` must equal sc-offline's, or `sc_ipc_attach` refuses the channel (`SC_IPC_MISMATCH`). This page describes the same layouts in prose. Everything is little-endian, with natural alignment.
 
 **What the other side must do:**
 
@@ -111,7 +111,7 @@ sc-offline checks everything you write in the same way: flags are masked, every 
 
 ## Testing with `bridge-peer`
 
-`bridge-peer.exe titanlink` or `bridge-peer.exe voxel`, started while the game runs (before or after you open the bridge), attaches with nothing but `sc_ipc.h` and the layout headers. It beats and prints what sc-offline writes once a second (flags, feet, angles, buttons, the area and the ground it receives), and answers as a minimal other side:
+`bridge-peer.exe titanlink` or `bridge-peer.exe voxel`, started while the game runs (before or after you open the bridge), attaches with nothing but the SDK headers `sc_ipc.h`, `sc_titanlink.h` and `sc_voxel_bridge.h`. It beats and prints what sc-offline writes once a second (flags, feet, angles, buttons, the area and the ground it receives), and answers as a minimal other side:
 
 - **titanlink:** it says it's in a match, so pilot mode starts. A Titan call parks a "Titan" where it was asked, and E puts you in it and out again. It shares no picture, so the overlay stays clear.
 - **voxel:** it says a world is loaded. For every new building area it sends one section with a 3 x 3 wall four blocks (2 m) in front of the area's origin, so three columns of three crates appear.

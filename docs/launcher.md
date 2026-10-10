@@ -254,6 +254,8 @@ There is no wallet setting: your aUEC balance is kept in `data\storage\contracts
 | `start_ship` | `DRAK_Cutlass_Black` | The ship used by `start = Daymar`. **Without `start = Daymar` it does nothing.** |
 | `start` | (empty) | Empty: the game's own spawn (Orison with `boot_map = PU`, a Pyro station with `PU_All`). `Daymar`: about 10 seconds after you spawn, `start_ship` is spawned over Daymar and you're put in its pilot seat. |
 | `plugins` | `off` | `on`: load plugins from `data\plugins\<id>\`. See [Plugins](features.md#plugins). |
+| `asop_fleet_list` | `game` | Which ship list the terminals show with `asop = on`: `game` (the game's own; offline its entitlement query fails, so it's empty) or `ships` (every ship in `data\ships.txt`). |
+| `asop` | `on` | `off`: leave the ship terminals, personal hangars, the hangar lift and ATC hails as the game has them offline. See [Ship terminals, hangars and ATC](features.md#ship-terminals-hangars-and-atc). |
 | `block_network` | `on` | Block `StarCitizen.exe`, the RSI Launcher and the game's `CrashHandler.exe` in Windows Firewall while you play. See [PC changes](#pc-changes). |
 | `multiplayer` | `on` | The [Multiplayer tab](features.md#multiplayer-lan-or-vpn). Nothing connects until you press Host or Join there; with `block_network` on, the firewall leaves your LAN open for it (see [PC changes](#pc-changes)). `off`: no tab, and the firewall blocks every address. |
 | `multiplayer_allow` | (empty) | Extra networks a session may use besides your LAN, for a VPN: up to 8 IPv4 ranges separated by commas, `/8` or narrower (Tailscale: `100.64.0.0/10`). Every address in them can reach a session you host, so allow only your VPN's range. A value that doesn't parse is ignored with a warning. |
