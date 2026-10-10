@@ -254,6 +254,7 @@ There is no wallet setting: your aUEC balance is kept in `data\storage\contracts
 | `start_ship` | `DRAK_Cutlass_Black` | The ship used by `start = Daymar`. **Without `start = Daymar` it does nothing.** |
 | `start` | (empty) | Empty: the game's own spawn (Orison with `boot_map = PU`, a Pyro station with `PU_All`). `Daymar`: about 10 seconds after you spawn, `start_ship` is spawned over Daymar and you're put in its pilot seat. |
 | `plugins` | `off` | `on`: load plugins from `data\plugins\<id>\`. See [Plugins](features.md#plugins). |
+| `asop` | `on` | `off`: leave the ship terminals, personal hangars, the hangar lift and ATC hails as the game has them offline. See [Ship terminals, hangars and ATC](features.md#ship-terminals-hangars-and-atc). |
 | `block_network` | `on` | Block `StarCitizen.exe`, the RSI Launcher and the game's `CrashHandler.exe` in Windows Firewall while you play. See [PC changes](#pc-changes). |
 | `eac_hosts` | `on` | Add the EAC hosts line while you play. |
 | `eac_rename` | `on` | Rename `EasyAntiCheat_EOS.exe` while you play. |

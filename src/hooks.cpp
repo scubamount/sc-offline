@@ -1,4 +1,5 @@
 #include "hooks.h"
+#include "fleet.h"
 #include "teleport.h"
 #include "sco/hook.h"
 #include <initializer_list>
@@ -419,6 +420,24 @@ static int SlotShipIndex(uintptr_t slot) {
     }
 }
 
+int FleetShipIndexOfUrnId(const uint64_t id[2]) {
+    AcquireSRWLockShared(&g_shipsLock);
+    const int count = g_shipsBuilt ? g_shipCount : 0;
+    ReleaseSRWLockShared(&g_shipsLock);
+    for (int i = 0; i < 2; ++i)
+        for (const uint64_t q : { id[i], _byteswap_uint64(id[i]) })
+            if ((q & 0xFFFFFFFF00000000ull) == kShipUrnMarker && static_cast<uint32_t>(q) < static_cast<uint32_t>(count))
+                return static_cast<int>(static_cast<uint32_t>(q));
+    return -1;
+}
+
+const char* FleetShipClass(int index) {
+    AcquireSRWLockShared(&g_shipsLock);
+    const int count = g_shipsBuilt ? g_shipCount : 0;
+    ReleaseSRWLockShared(&g_shipsLock);
+    return index >= 0 && index < count ? g_ships[index].name : nullptr;
+}
+
 const char* RequestShipFromAtc(uint64_t atcEntity, uint64_t player, const char* shipClass) {
     if (!g_getATCComp || !g_requestTakingOff) return "the ATC functions weren't found";
     __try {
@@ -445,7 +464,9 @@ const char* RequestShipFromAtc(uint64_t atcEntity, uint64_t player, const char* 
 
 static void __fastcall Hook_RetrieveVehicle(uintptr_t asop, uintptr_t slot) {
     const int i = SlotShipIndex(slot);
-    if (i < 0) { g_origRetrieveVehicle(asop, slot); return; }
+    // With the ASOP Retrieve (fleet.cpp) on, the game's own retrieve runs: it reaches the ATC with
+    // the stored ship, where asking the ATC directly for a class would lock the station's terminals.
+    if (i < 0 || Fleet_RetrieveActive()) { g_origRetrieveVehicle(asop, slot); return; }
     uint64_t atc = 0;
     __try { atc = Rd<uint64_t>(asop + kAsopAtcId); } __except (EXCEPTION_EXECUTE_HANDLER) {}
     if (const char* err = RequestShipFromAtc(atc, LocalPlayerId(), g_ships[i].name))
