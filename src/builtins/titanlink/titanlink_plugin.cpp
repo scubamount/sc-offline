@@ -1,7 +1,7 @@
 // titanlink: Titanfall 2 inside Star Citizen, an optional built-in (CMake SCO_BRIDGE_TITANLINK).
 //
 // Pilot mode (F9, titanlink.pilot) opens the channel Local\SCO_titanlink.link through sco.ipc
-// (layout titanlink_wire.h, docs/bridges.md) and, when Titanfall 2 isn't answering yet, starts the
+// (layout sc_titanlink.h, docs/bridges.md) and, when Titanfall 2 isn't answering yet, starts the
 // EA app and NorthstarLauncher.exe (only on that key press; the command line goes to mod.log). The
 // Titanfall side, a Northstar plugin that opens the channel by name, loads the local match the
 // built-in asks for. From then on, ten times a second, the built-in writes where you are and where
