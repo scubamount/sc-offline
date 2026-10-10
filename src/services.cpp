@@ -620,6 +620,11 @@ static uintptr_t __fastcall ClearTokenHook(uintptr_t atc, const uintptr_t* token
 using NotifyPlayerFn = void(__fastcall*)(uintptr_t atc, const uint8_t* request, const void* data, uintptr_t a4);
 using PermissionsContinuationFn = void(__fastcall*)(uintptr_t lambda, const uint8_t* result, uintptr_t a3, uintptr_t a4);
 static NotifyPlayerFn            g_notifyPlayerOrig = nullptr;
+// RmMulticastNotifyPlayer's client half: void(atc, context, request, data, CLocIdentifier&). It queues
+// the HUD reply; logging it shows whether an ATC answer reaches the client side offline.
+using NotifyClientFn = void(__fastcall*)(uintptr_t atc, uintptr_t context, const uint8_t* request, const void* data, uintptr_t loc,
+                                         uintptr_t a6);
+static NotifyClientFn g_notifyClientOrig = nullptr;
 static PermissionsContinuationFn g_permissionsContinuationOrig = nullptr;
 
 static void LogNotify(const uint8_t* request) {
@@ -633,6 +638,19 @@ static void LogNotify(const uint8_t* request) {
 static void __fastcall NotifyPlayerHook(uintptr_t atc, const uint8_t* request, const void* data, uintptr_t a4) {
     if (g_hangar[kDiagnostics].on && request && AtcBudget()) LogNotify(request);
     g_notifyPlayerOrig(atc, request, data, a4);
+}
+
+static void LogNotifyClient(const uint8_t* request) {
+    __try {
+        const uintptr_t r = reinterpret_cast<uintptr_t>(request);
+        Log("[atc] reply reached the client half: mode %u notification %u player 0x%llX vehicle 0x%llX", Rd<uint32_t>(r + 0x18), Rd<uint32_t>(r + 0x1C),
+            static_cast<unsigned long long>(Rd<uint64_t>(r)), static_cast<unsigned long long>(Rd<uint64_t>(r + 8)));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+
+static void __fastcall NotifyClientHook(uintptr_t atc, uintptr_t context, const uint8_t* request, const void* data, uintptr_t loc, uintptr_t a6) {
+    if (g_hangar[kDiagnostics].on && request && AtcBudget()) LogNotifyClient(request);
+    g_notifyClientOrig(atc, context, request, data, loc, a6);
 }
 
 static void LogPermissions(const uint8_t* result) {
@@ -696,6 +714,7 @@ void ResolveHangarsApi() {
     if (g_hangar[kDiagnostics].on)
         HangarInstalled(kDiagnostics,
             EnsureHangarHook("atc.notify_player", 6, reinterpret_cast<void*>(&NotifyPlayerHook), reinterpret_cast<void**>(&g_notifyPlayerOrig))
+            && EnsureHangarHook("atc.rm_multicast_notify_player", 5, reinterpret_cast<void*>(&NotifyClientHook), reinterpret_cast<void**>(&g_notifyClientOrig))
             && EnsureHangarHook("hangar.permissions_continuation", 5, reinterpret_cast<void*>(&PermissionsContinuationHook),
                                 reinterpret_cast<void**>(&g_permissionsContinuationOrig)));
 }

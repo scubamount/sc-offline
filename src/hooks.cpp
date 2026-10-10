@@ -252,7 +252,14 @@ uint8_t* NearData(size_t n) {
 }
 
 constexpr size_t   kEntitlementSize = 0x150;
-constexpr uint16_t kUrnType = 0x1E11;
+// The fleet ships' entitlement URN: urn:sc:platform:entitlement:uuid:<id>. CSCURN bytes +0x00
+// namespace (6 platform; 0x11 = none), +0x01 type (0x16 entitlement; 0x1E = none), +0x08 kind
+// (3 uuid; 5 = none), +0x20 the id's variant (2 = a 16-byte id at +0x10). The game reads a URN with
+// any "none" byte as unset (0x441F50 on 4.10.196), and the terminal then offers no Deliver, Retrieve
+// or Claim on the row; 0x1E11 / kind 5, used before, is exactly the list builder's unset URN.
+constexpr uint16_t kUrnType = 0x1606;
+constexpr uint8_t  kUrnKindUuid = 3;
+constexpr uint8_t  kUrnIdGuid = 2;
 constexpr uint64_t kShipUrnMarker = 0x53434F4600000000ull;
 constexpr size_t   kSlotUrn = 0x1698;
 constexpr size_t   kAsopAtcId = 0x9F8;
@@ -371,9 +378,9 @@ static int BuildFleetShips() {
     for (int i = 0; g_fakeEntitlements && i < kept; ++i) {
         uint8_t* e = g_fakeEntitlements + i * kEntitlementSize;
         *reinterpret_cast<uint16_t*>(e + 0x00) = kUrnType;
-        e[0x08] = 5;
+        e[0x08] = kUrnKindUuid;
         *reinterpret_cast<uint64_t*>(e + 0x10) = kShipUrnMarker | static_cast<uint32_t>(i);
-        e[0x20] = 1;
+        e[0x20] = kUrnIdGuid;
         e[0x50] = 3;
         *reinterpret_cast<uint32_t*>(e + 0x54) = 1;
         memcpy(e + 0x58, ships[i].guid, 16);
@@ -418,7 +425,7 @@ static void __fastcall Hook_EntitlementsResult(uintptr_t self, uintptr_t result)
 static int SlotShipIndex(uintptr_t slot) {
     __try {
         const uintptr_t urn = slot + kSlotUrn;
-        if (Rd<uint16_t>(urn) != kUrnType || Rd<uint8_t>(urn + 0x20) != 1) return -1;
+        if (Rd<uint16_t>(urn) != kUrnType || Rd<uint8_t>(urn + 0x20) != kUrnIdGuid) return -1;
         const uint64_t id = Rd<uint64_t>(urn + 0x10);
         const int i = static_cast<int>(static_cast<uint32_t>(id));
         return (id & 0xFFFFFFFF00000000ull) == kShipUrnMarker && i < g_shipCount ? i : -1;

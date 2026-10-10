@@ -1182,14 +1182,21 @@ void EnsureDeliverySystem(DWORD now) {
 // object per binding, bool value at +0x41, int at +0x48. Rows: vector at kiosk +0xF0 / +0xF8,
 // 0x16C0 bytes per row (UpdateBindingsElement), same field layout (InsuredVehicle table).
 struct TerminalSnapshot {
+    int64_t providerRows;                     // the list provider's entries (the terminal drops some)
+    int64_t urnNs, urnType, urnKind, urnVariant, urnValid, deliverableField;   // the row's URN, and provider entry +0xA0
     int64_t rows, selected, deliverySystem, capacity, used;
     int64_t deliverable, deliverOk;           // rows with CanBeDelivered, and with it not disabled
     int64_t info, canDeliver, deliverDisabled, canRetrieve, retrieveDisabled, canClaim, claimDisabled,
             claimedThisPatch, sameLocation, matchesFilter;   // the selected row (or row 0)
 };
 
-bool ReadTerminal(uintptr_t kiosk, TerminalSnapshot& s) {
+bool ReadTerminal(uintptr_t kiosk, uintptr_t provider, TerminalSnapshot& s) {
     __try {
+        s.providerRows = -1;
+        if (provider) {
+            const uintptr_t pb = Rd<uintptr_t>(provider + kProviderBegin), pe = Rd<uintptr_t>(provider + kProviderEnd);
+            if (pe >= pb && (pe - pb) % kVehicleDataSize == 0) s.providerRows = static_cast<int64_t>((pe - pb) / kVehicleDataSize);
+        }
         const uintptr_t begin = Rd<uintptr_t>(kiosk + 0xF0), end = Rd<uintptr_t>(kiosk + 0xF8);
         if (end < begin || (end - begin) % 0x16C0 || (end - begin) / 0x16C0 > 8192) return false;
         s.rows = static_cast<int64_t>((end - begin) / 0x16C0);
@@ -1216,6 +1223,25 @@ bool ReadTerminal(uintptr_t kiosk, TerminalSnapshot& s) {
         s.claimedThisPatch = Rd<uint8_t>(e + 0x7E8 + 0x41);
         s.sameLocation = Rd<uint8_t>(e + 0xAC0 + 0x41);
         s.matchesFilter = Rd<uint8_t>(e + 0xC30 + 0x41);
+        // The inputs of CanBeDelivered: the row's URN (+0x1698) must be set (none of its bytes the
+        // "none" value, 0x441F50), and the provider's entry with that URN must have +0xA0 == 1.
+        const uintptr_t urn = e + 0x1698;
+        s.urnNs = Rd<uint8_t>(urn + 0x00);
+        s.urnType = Rd<uint8_t>(urn + 0x01);
+        s.urnKind = Rd<uint8_t>(urn + 0x08);
+        s.urnVariant = Rd<uint8_t>(urn + 0x20);
+        s.urnValid = s.urnNs != 0x11 && s.urnType != 0x1E && s.urnKind != 5;
+        s.deliverableField = -1;
+        if (provider && s.providerRows > 0) {
+            const uintptr_t pb = Rd<uintptr_t>(provider + kProviderBegin);
+            for (int64_t k = 0; k < s.providerRows; ++k) {
+                const uintptr_t pe = pb + static_cast<uintptr_t>(k) * kVehicleDataSize;
+                if (!memcmp(reinterpret_cast<const void*>(pe + kVehicleUrn + kUrnId), reinterpret_cast<const void*>(urn + kUrnId), 16)) {
+                    s.deliverableField = Rd<int32_t>(pe + 0xA0);
+                    break;
+                }
+            }
+        }
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -1234,13 +1260,22 @@ void WatchTerminal(DWORD now) {
     last = now;
     if (ReadVtable(kiosk) != g_openKioskVtable) return;   // the terminal streamed out
     TerminalSnapshot s = {};
-    if (!ReadTerminal(kiosk, s)) return;
+    uintptr_t provider = 0;
+    {
+        Lock l;
+        provider = g_lastFetch.provider;
+    }
+    if (!ReadTerminal(kiosk, provider, s)) return;
     if (kiosk == shownKiosk && !memcmp(&s, &shown, sizeof(s))) return;
     shown = s;
     shownKiosk = kiosk;
     ++lines;
-    Log("[asop] terminal: %lld rows, %lld CanBeDelivered (%lld not disabled), selected %lld, DeliverySystemSetup %lld, storage %lld/%lld",
-        s.rows, s.deliverable, s.deliverOk, s.selected, s.deliverySystem, s.used, s.capacity);
+    Log("[asop] terminal: %lld rows (list provider %lld), %lld CanBeDelivered (%lld not disabled), selected %lld, DeliverySystemSetup %lld, storage %lld/%lld",
+        s.rows, s.providerRows, s.deliverable, s.deliverOk, s.selected, s.deliverySystem, s.used, s.capacity);
+    if (s.rows)
+        Log("[asop] terminal row %lld inputs: urn namespace %lld type %lld kind %lld id-variant %lld -> %s, provider entry +0xA0 %lld (1 = deliverable)",
+            s.selected >= 0 && s.selected < s.rows ? s.selected : 0, s.urnNs, s.urnType, s.urnKind, s.urnVariant,
+            s.urnValid ? "set" : "UNSET (no Deliver/Retrieve/Claim)", s.deliverableField);
     if (s.rows)
         Log("[asop] terminal row %lld: info %lld, CanBeDelivered %lld IsDeliverDisabled %lld, CanBeRetrieved %lld IsRetrieveDisabled %lld, "
             "CanBeClaimed %lld IsClaimDisabled %lld, HasBeenClaimedInCurrentPatch %lld, IsOnSameLocation %lld, matchesFilter %lld",
