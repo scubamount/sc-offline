@@ -154,6 +154,10 @@ struct Config {
     bool discordPresence = true;
     // Load plugins from data\plugins (sco-core's plugin loader). Off by default.
     bool plugins = false;
+    // The Multiplayer tab (co-presence over sco-core's sco.net): on by default, but nothing networks
+    // until the player presses Host or Join. multiplayerAllow: extra IPv4 ranges (a VPN), checked.
+    bool multiplayer = true;
+    wstring multiplayerAllow;
     // Ship terminals (ASOP), personal hangars, the hangar lift and ATC hails in the mod. On by default.
     bool asop = true;
     // Which ship list the terminals show with asop on: game (the game's own) or ships (ships.txt).
@@ -164,6 +168,35 @@ static bool ParseOnOff(const wstring& v, bool& out) {
     if (!_wcsicmp(v.c_str(), L"1") || !_wcsicmp(v.c_str(), L"on") || !_wcsicmp(v.c_str(), L"yes") || !_wcsicmp(v.c_str(), L"true")) { out = true; return true; }
     if (!_wcsicmp(v.c_str(), L"0") || !_wcsicmp(v.c_str(), L"off") || !_wcsicmp(v.c_str(), L"no") || !_wcsicmp(v.c_str(), L"false")) { out = false; return true; }
     return false;
+}
+
+// multiplayer_allow: up to 8 IPv4 ranges "a.b.c.d/n" (n 8 to 32, no host bits set), separated by
+// commas. Fills the ranges and the same list rewritten from the numbers; false for anything else.
+struct Ipv4Range { uint32_t first, last; };
+static bool ParseAllowList(const wstring& v, std::vector<Ipv4Range>& out, wstring& text) {
+    out.clear();
+    text.clear();
+    for (size_t pos = 0; pos < v.size();) {
+        size_t comma = v.find(L',', pos);
+        if (comma == wstring::npos) comma = v.size();
+        const wstring item = Trim(v.substr(pos, comma - pos));
+        pos = comma + 1;
+        unsigned a = 0, b = 0, c = 0, d = 0, n = 0;
+        wchar_t extra = 0;
+        if (item.empty() || !iswdigit(item[0]) ||
+            swscanf_s(item.c_str(), L"%u.%u.%u.%u/%u%c", &a, &b, &c, &d, &n, &extra, 1u) != 5)
+            return false;
+        if (a > 255 || b > 255 || c > 255 || d > 255 || n < 8 || n > 32 || out.size() >= 8) return false;
+        const uint32_t ip = (a << 24) | (b << 16) | (c << 8) | d;
+        const uint32_t mask = n == 32 ? 0xFFFFFFFFu : ~(0xFFFFFFFFu >> n);
+        if (ip & ~mask) return false;
+        out.push_back({ ip, ip | ~mask });
+        wchar_t one[24];
+        swprintf_s(one, L"%u.%u.%u.%u/%u", a, b, c, d, n);
+        if (!text.empty()) text += L',';
+        text += one;
+    }
+    return true;
 }
 
 static bool ReadConfig(const wstring& path, Config& c) {
@@ -201,6 +234,16 @@ static bool ReadConfig(const wstring& path, Config& c) {
         }
         else if (!_wcsicmp(k.c_str(), L"plugins")) {
             if (!ParseOnOff(v, c.plugins)) Out("[!] sc-offline.ini line %d: plugins must be on or off\n", lineNo);
+        }
+        else if (!_wcsicmp(k.c_str(), L"multiplayer")) {
+            if (!ParseOnOff(v, c.multiplayer)) Out("[!] sc-offline.ini line %d: multiplayer must be on or off\n", lineNo);
+        }
+        else if (!_wcsicmp(k.c_str(), L"multiplayer_allow")) {
+            std::vector<Ipv4Range> ranges;
+            if (!ParseAllowList(v, ranges, c.multiplayerAllow)) {
+                c.multiplayerAllow.clear();
+                Out("[!] sc-offline.ini line %d: multiplayer_allow must be up to 8 IPv4 ranges like 100.64.0.0/10 (/8 or narrower); ignored\n", lineNo);
+            }
         }
         else if (!_wcsicmp(k.c_str(), L"asop")) {
             if (!ParseOnOff(v, c.asop)) Out("[!] sc-offline.ini line %d: asop must be on or off\n", lineNo);
@@ -1979,8 +2022,15 @@ static const wchar_t* kFirewallRule = L"sc-offline: block StarCitizen.exe";
 // reports a modded session. sc-offline.exe itself stays online (self-update, #14).
 static const wchar_t* kLauncherRule = L"sc-offline: block RSI Launcher.exe";
 static const wchar_t* kCrashRule    = L"sc-offline: block CrashHandler.exe";
+// multiplayer = on: StarCitizen.exe's block rule leaves the LAN (and multiplayer_allow) out, and
+// this rule lets other PCs there reach it over UDP, for a session the player hosts.
+static const wchar_t* kMpRule       = L"sc-offline: allow StarCitizen.exe multiplayer (LAN)";
 
-struct PcWanted { bool firewall = false, eacHosts = false, eacRename = false; };
+struct PcWanted {
+    bool firewall = false, eacHosts = false, eacRename = false;
+    bool lan = false;      // multiplayer: the LAN (and allow) stay reachable for StarCitizen.exe
+    wstring allow;         // multiplayer_allow, as ParseAllowList rewrote it
+};
 
 static wstring PcChangesPath() { return EnvOr(L"ProgramData", L"C:\\ProgramData") + L"\\sc-offline\\pc-changes.txt"; }
 static wstring HostsPath()     { return EnvOr(L"SystemRoot", L"C:\\Windows") + L"\\System32\\drivers\\etc\\hosts"; }
@@ -2005,13 +2055,49 @@ static bool FirewallRuleExists(const wchar_t* rule) {
     return RunTool(System32(L"netsh.exe"), L"advfirewall firewall show rule name=\"" + wstring(rule) + L"\"") == 0;
 }
 
-static bool AddFirewallRule(const wchar_t* rule, const wstring& exe) {
+// remote: the addresses to block ("" for every address).
+static bool AddFirewallRule(const wchar_t* rule, const wstring& exe, const wstring& remote = L"") {
     for (const wchar_t* dir : { L"out", L"in" }) {
         const wstring args = L"advfirewall firewall add rule name=\"" + wstring(rule) + L"\" dir=" + dir +
-                             L" action=block enable=yes profile=any program=\"" + exe + L"\"";
+                             L" action=block enable=yes profile=any program=\"" + exe + L"\"" +
+                             (remote.empty() ? L"" : L" remoteip=" + remote);
         if (RunTool(System32(L"netsh.exe"), args) != 0) return false;
     }
     return true;
+}
+
+static wstring Ipv4Text(uint32_t ip) {
+    wchar_t b[16];
+    swprintf_s(b, L"%u.%u.%u.%u", ip >> 24, (ip >> 16) & 255u, (ip >> 8) & 255u, ip & 255u);
+    return b;
+}
+
+// Every address except loopback, the private and link-local ranges and multiplayer_allow's: what
+// StarCitizen.exe's block rule blocks when multiplayer is on. IPv6 is blocked entirely (sco.net is
+// IPv4 only).
+static wstring BlockedOutsideLan(const std::vector<Ipv4Range>& allow) {
+    std::vector<Ipv4Range> keep = { { 0x0A000000u, 0x0AFFFFFFu }, { 0x7F000000u, 0x7FFFFFFFu }, { 0xA9FE0000u, 0xA9FEFFFFu },
+                                    { 0xAC100000u, 0xAC1FFFFFu }, { 0xC0A80000u, 0xC0A8FFFFu } };
+    keep.insert(keep.end(), allow.begin(), allow.end());
+    std::sort(keep.begin(), keep.end(), [](const Ipv4Range& x, const Ipv4Range& y) { return x.first < y.first; });
+    wstring out;
+    uint64_t next = 0;
+    for (const Ipv4Range& r : keep) {
+        if (r.first > next) out += (out.empty() ? L"" : L",") + Ipv4Text(static_cast<uint32_t>(next)) + L"-" + Ipv4Text(r.first - 1);
+        if (static_cast<uint64_t>(r.last) + 1 > next) next = static_cast<uint64_t>(r.last) + 1;
+    }
+    if (next <= 0xFFFFFFFFull) out += (out.empty() ? L"" : L",") + Ipv4Text(static_cast<uint32_t>(next)) + L"-255.255.255.255";
+    return out + L",::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff";
+}
+
+// Inbound UDP to StarCitizen.exe from the local subnet (and multiplayer_allow), so other players can
+// join a session this PC hosts. sco.net itself refuses anything outside that and anyone without the
+// passphrase, and listens only while the player hosts.
+static bool AddMultiplayerRule(const wstring& exe, const wstring& allow) {
+    const wstring args = L"advfirewall firewall add rule name=\"" + wstring(kMpRule) +
+                         L"\" dir=in action=allow enable=yes profile=any protocol=UDP program=\"" + exe +
+                         L"\" remoteip=LocalSubnet" + (allow.empty() ? L"" : L"," + allow);
+    return RunTool(System32(L"netsh.exe"), args) == 0;
 }
 
 static bool DeleteFirewallRule(const wchar_t* rule) {
@@ -2057,7 +2143,7 @@ static wstring CrashHandlerExe(const wstring& bin) {
 }
 
 struct FwRule { const char* key; const wchar_t* name; };
-static const FwRule kFwRules[] = { { "firewall", kFirewallRule }, { "fw_launcher", kLauncherRule }, { "fw_crash", kCrashRule } };
+static const FwRule kFwRules[] = { { "firewall", kFirewallRule }, { "fw_launcher", kLauncherRule }, { "fw_crash", kCrashRule }, { "fw_mp", kMpRule } };
 
 // Appends the EAC line, tagged so it can be found again. Keeps the file's line endings.
 static bool AddHostsLine() {
@@ -2144,13 +2230,30 @@ static int ApplyPcChanges(const PcWanted& w, const wstring& gameExe, bool dry) {
     if (w.firewall) {
         const wstring bin = ParentDir(gameExe);
         const wstring exes[] = { gameExe, RsiLauncherExe(bin), CrashHandlerExe(bin) };
-        for (size_t i = 0; i < ARRAYSIZE(kFwRules); ++i) {
+        std::vector<Ipv4Range> allow;
+        wstring allowText;
+        if (w.lan && !ParseAllowList(w.allow, allow, allowText)) { Out("[!] multiplayer_allow ignored (not a list of IPv4 ranges)\n"); allow.clear(); allowText.clear(); }
+        for (size_t i = 0; i < ARRAYSIZE(exes); ++i) {   // kFwRules' first three: the block rules
             const FwRule& r = kFwRules[i];
             if (exes[i].empty()) { if (i == 1) Out("[i] RSI Launcher.exe not found; not blocking it\n"); continue; }
             if (Field(rec, r.key) == "added" && !dry && FirewallRuleExists(r.name)) Out("[i] firewall rule \"%ls\" already in place\n", r.name);
             else if (Step(dry, "add a firewall rule blocking %ls", exes[i].c_str())) {
-                if (!AddFirewallRule(r.name, exes[i])) { Out("[!] couldn't add the firewall rule (netsh failed)\n"); DeleteFirewallRule(r.name); return 5; }
+                const wstring remote = i == 0 && w.lan ? BlockedOutsideLan(allow) : L"";
+                bool added = AddFirewallRule(r.name, exes[i], remote);
+                if (!added && !remote.empty()) {   // fail closed: block every address, as without multiplayer
+                    DeleteFirewallRule(r.name);
+                    Out("[!] couldn't leave your LAN open in the firewall rule; blocking every address (multiplayer can't reach other PCs)\n");
+                    added = AddFirewallRule(r.name, exes[i]);
+                }
+                if (!added) { Out("[!] couldn't add the firewall rule (netsh failed)\n"); DeleteFirewallRule(r.name); return 5; }
                 record(r.key, "added");
+            }
+        }
+        if (w.lan) {
+            if (Field(rec, "fw_mp") == "added" && !dry && FirewallRuleExists(kMpRule)) Out("[i] firewall rule \"%ls\" already in place\n", kMpRule);
+            else if (Step(dry, "add a firewall rule letting your LAN%ls reach %ls over UDP (multiplayer)", allowText.empty() ? L"" : L" and multiplayer_allow", gameExe.c_str())) {
+                if (AddMultiplayerRule(gameExe, allowText)) record("fw_mp", "added");
+                else { DeleteFirewallRule(kMpRule); Out("[!] couldn't add the multiplayer firewall rule; a session you host may not be reachable\n"); }
             }
         }
     }
@@ -2183,6 +2286,7 @@ static wstring PcFlags(const PcWanted& w) {
     if (w.firewall) f += L'f';
     if (w.eacHosts) f += L'h';
     if (w.eacRename) f += L'e';
+    if (w.lan) f += L'l';
     return f.empty() ? L"-" : f;
 }
 
@@ -2191,16 +2295,19 @@ static PcWanted ParsePcFlags(const wstring& f) {
     w.firewall = f.find(L'f') != wstring::npos;
     w.eacHosts = f.find(L'h') != wstring::npos;
     w.eacRename = f.find(L'e') != wstring::npos;
+    w.lan = f.find(L'l') != wstring::npos;
     return w;
 }
 
-// --helper <play|install|uninstall> <Bin64> <launcher pid> <event name> <pc flags>
+// --helper <play|install|uninstall> <Bin64> <launcher pid> <event name> <pc flags> [<multiplayer_allow>]
 // The part that changes the game folder and the PC; runs elevated when either needs it.
-// play: make the PC changes (pc flags: f firewall, h hosts, e EAC rename, - none), put the mod in,
+// play: make the PC changes (pc flags: f firewall, h hosts, e EAC rename, l the LAN stays open for
+// multiplayer, - none), put the mod in,
 // signal the event, wait for the launcher and every StarCitizen.exe to exit, then take the mod
 // out and undo the PC changes. install: put in. uninstall: take out and undo leftover PC changes.
 // Exit codes: 0 ok, 2 copy failed, 3 removal failed, 4 bad args, 5 PC change failed.
-static int Helper(const wstring& op, const wstring& bin, DWORD parentPid, const wstring& eventName, const wstring& flags) {
+static int Helper(const wstring& op, const wstring& bin, DWORD parentPid, const wstring& eventName, const wstring& flags,
+                  const wstring& allow) {
     const wstring here = ExeDir();
     OpenLog(here + L"\\data", true, Narrow(L"helper " + op).c_str());
     const GamePaths g(bin);
@@ -2210,7 +2317,9 @@ static int Helper(const wstring& op, const wstring& bin, DWORD parentPid, const 
     HANDLE parent = play ? OpenProcess(SYNCHRONIZE, FALSE, parentPid) : nullptr;
     if (play && !parent) return 4;
     if (play) {
-        const int pc = ApplyPcChanges(ParsePcFlags(flags), bin + L"\\" + kGameExe, false);
+        PcWanted wanted = ParsePcFlags(flags);
+        wanted.allow = allow;
+        const int pc = ApplyPcChanges(wanted, bin + L"\\" + kGameExe, false);
         if (pc) { UndoPcChanges(false); CloseHandle(parent); return pc; }
     }
     const int rc = PutMod(here, g, play ? "play" : "install", false);
@@ -2234,7 +2343,7 @@ static HANDLE StartHelper(const wchar_t* op, const GamePaths& g, const wstring& 
     wchar_t self[MAX_PATH * 2];
     GetModuleFileNameW(nullptr, self, ARRAYSIZE(self));
     const wstring args = L"--helper " + wstring(op) + L" \"" + g.bin + L"\" " + std::to_wstring(GetCurrentProcessId()) +
-                         L" " + eventName + L" " + PcFlags(pc);
+                         L" " + eventName + L" " + PcFlags(pc) + (pc.lan && !pc.allow.empty() ? L" " + pc.allow : L"");
     const bool isPlay = !_wcsicmp(op, L"play");
     const bool pcChanges = (isPlay && NeedsPcChanges(pc)) ||
                            ((isPlay || !_wcsicmp(op, L"uninstall")) && !PcChangesLeft().empty());
@@ -2326,8 +2435,9 @@ static CheckResult SelfChecks(const wstring& here, const Config& cfg, const Game
         DescribePcChanges(pcLeft);
         if (!GameRunning()) Out("    Run `sc-offline.exe uninstall` to undo them before going online.\n");
     }
-    if (!OnWine()) Out("Network:  %s\n", cfg.firewall ? "blocked for StarCitizen.exe, RSI Launcher.exe and CrashHandler.exe while you play (block_network)"
-                                                       : "NOT blocked (block_network = off)");
+    if (!OnWine()) Out("Network:  %s%s\n", cfg.firewall ? "blocked for StarCitizen.exe, RSI Launcher.exe and CrashHandler.exe while you play (block_network)"
+                                                         : "NOT blocked (block_network = off)",
+                       cfg.firewall && cfg.multiplayer ? "; your LAN stays reachable for the Multiplayer tab (multiplayer)" : "");
 
     // 5. Easy Anti-Cheat.
     const Eac eac = EacState();
@@ -2696,8 +2806,8 @@ int wmain(int argc, wchar_t** argv) {
 #ifdef SCO_UPDATE_TEST
     if (argc == 5 && !_wcsicmp(argv[1], L"--apply-zip")) return ApplyZipForTest(argv[2], argv[3], argv[4]);
 #endif
-    if (argc == 7 && !_wcsicmp(argv[1], L"--helper"))
-        return Helper(argv[2], argv[3], wcstoul(argv[4], nullptr, 10), argv[5], argv[6]);
+    if ((argc == 7 || argc == 8) && !_wcsicmp(argv[1], L"--helper"))
+        return Helper(argv[2], argv[3], wcstoul(argv[4], nullptr, 10), argv[5], argv[6], argc == 8 ? argv[7] : L"");
     // Double-clicked with no arguments: the window (issue #20). From a terminal, or with any
     // argument, the CLI runs exactly as before. `sc-offline.exe --console` forces the console run.
     if (argc == 1 && !GuiChild() && OwnsConsole() && !OnWine()) { FreeConsole(); return RunGui(); }
@@ -2811,6 +2921,7 @@ int wmain(int argc, wchar_t** argv) {
 
     PcWanted pc;
     pc.firewall = cfg.firewall; pc.eacHosts = cfg.eacHosts; pc.eacRename = cfg.eacRename;
+    pc.lan = cfg.firewall && cfg.multiplayer; pc.allow = cfg.multiplayerAllow;
 
     // 2. Self-checks.
     const CheckResult checks = SelfChecks(here, cfg, g);
@@ -2844,6 +2955,8 @@ int wmain(int argc, wchar_t** argv) {
         SetVar(L"SC_OFFLINE_START", cfg.start);
         SetVar(L"SC_OFFLINE_START_SHIP", cfg.startShip);
         SetVar(L"SC_OFFLINE_PLUGINS", cfg.plugins ? L"on" : L"off");
+        SetVar(L"SC_OFFLINE_MULTIPLAYER", cfg.multiplayer ? L"on" : L"off");
+        SetVar(L"SC_OFFLINE_MULTIPLAYER_ALLOW", cfg.multiplayerAllow);
         SetVar(L"SC_OFFLINE_ASOP", cfg.asop ? L"on" : L"off");
         SetVar(L"SC_OFFLINE_ASOP_FLEET_LIST", cfg.asopFleetList);
         SetVar(L"SC_USER", g.userDir);
