@@ -1,14 +1,15 @@
 #pragma once
-// The mover behind spawn.entities 1.2's set_entity_transform (sc_spawn.h), for sc-offline's own
-// code. Everything here is game thread only.
+// The mover behind spawn.entities 1.2's set_entity_transform (sc_spawn.h) lives in sco-core's game
+// pack (sco::game::services); these forward to it for sc-offline's own code. Everything here is
+// game thread only.
 #include "sco/game/services.h"
 #include <cstdint>
 
-// spawn_plugin.cpp. The player's own vehicle, retrieved or delivered by ATC: any plugin may move a
-// registered id with set_entity_transform. ASOP registers it once that lands; nothing does yet.
-// Registering an id twice or unregistering one that isn't registered changes nothing.
-void RegisterPlayerVehicle(uint64_t entityId);
-void UnregisterPlayerVehicle(uint64_t entityId);
+// The player's own vehicle, retrieved or delivered by ATC (ASOP's fleet code): any plugin may move
+// a registered id with set_entity_transform. Registering an id twice or unregistering one that
+// isn't registered changes nothing.
+inline void RegisterPlayerVehicle(uint64_t entityId) { sco::game::services::RegisterPlayerVehicle(entityId); }
+inline void UnregisterPlayerVehicle(uint64_t entityId) { sco::game::services::UnregisterPlayerVehicle(entityId); }
 
 // sco-core's game pack, through teleport.spatial's zone tree (the conversions sc_spatial.h
 // publishes; sco/game/services.h). The id of the zone an entity is in, or 0.
