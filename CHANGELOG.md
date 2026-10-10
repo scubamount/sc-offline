@@ -33,6 +33,13 @@
 - Docs and `sc-offline.ini`: `start_ship` only applies with `start = Daymar`, the wallet lives in `data\wallet.txt`, and a new **Not available offline** list in `docs/features.md` covers ASOP, the vehicle manager and character creation ([#26](https://github.com/scubamount/sc-offline/issues/26)).
 - README: 0.6.1 has been played in game on Windows; the "nobody has played it" note is gone. Linux through Wine is still untested.
 
+## 0.7.4 (2026-10-10) — EXPERIMENTAL
+
+For Star Citizen 4.10.2.
+
+- **Leaving the game makes the PC safe to go online right away.** After you quit from the game's own menu, sc-offline used to keep the mod in `Bin64`, the firewall rules and the renamed Easy Anti-Cheat in place until you answered its questions about a crash report and the session's logs; until then the window stayed red and every button, Uninstall included, was greyed out. Now the mod is taken out and the PC changes are undone as soon as the game closes, the window says so, and only then come the questions.
+- **`sc-offline.exe` and `dinput8.dll` now carry version information** (Properties > Details: product sc-offline, version 0.7.4, description, GitHub address). Files without it are a common reason antivirus heuristics treat a new program as suspicious. Some players' Microsoft Defender flags the 0.7.x downloads as `Trojan:Script/Wacatac.H!ml`; that name is a machine-learning guess, not a known virus. The release zip is built by GitHub Actions from this repository's source, and every file's SHA-256 is in `manifest.json` (see `docs/launcher.md`, Checking a release by hand).
+
 ## 0.7.3 (2026-10-10) — EXPERIMENTAL
 
 - **The menu no longer slows the game to a crawl.** The menu used to wait on the game for every frame it drew; now it never waits. While the game is building the menu's next picture, the menu keeps answering its window and the M key and shows its last picture, so a busy game can't stall the menu and the menu can't stall the game. Keeps 0.7.2's changes: the cursor is clamped only when the menu window moves, and the menu stops asking the game for pictures while it isn't focused.

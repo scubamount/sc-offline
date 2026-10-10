@@ -1,0 +1,2 @@
+// dinput8.dll version resource; the block itself is src/version.rc.
+#include "version.rc"

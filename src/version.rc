@@ -1,0 +1,48 @@
+// Version information for sc-offline.exe and dinput8.dll (Windows Explorer > Properties > Details).
+// One file for both: SCO_RC_EXE picks the description and file name. The version comes from
+// src/version.h, so the release tag, the manifest and this always agree.
+#include <winver.h>
+#include "../src/version.h"
+
+#define SCO_STR(x) #x
+#define SCO_XSTR(x) SCO_STR(x)
+
+#ifdef SCO_RC_EXE
+#define SCO_RC_DESC  "sc-offline launcher - Star Citizen offline mod"
+#define SCO_RC_FILE  "sc-offline.exe"
+#define SCO_RC_TYPE  VFT_APP
+#else
+#define SCO_RC_DESC  "sc-offline - Star Citizen offline mod"
+#define SCO_RC_FILE  "dinput8.dll"
+#define SCO_RC_TYPE  VFT_DLL
+#endif
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     SCO_VERSION_MAJOR, SCO_VERSION_MINOR, SCO_VERSION_PATCH, 0
+PRODUCTVERSION  SCO_VERSION_MAJOR, SCO_VERSION_MINOR, SCO_VERSION_PATCH, 0
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        SCO_RC_TYPE
+FILESUBTYPE     0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "scubamount"
+            VALUE "FileDescription",  SCO_RC_DESC
+            VALUE "FileVersion",      SCO_VERSION
+            VALUE "InternalName",     SCO_RC_FILE
+            VALUE "LegalCopyright",   "GPL-3.0; based on ChrisWareOffline 0.9.0-rc1"
+            VALUE "OriginalFilename", SCO_RC_FILE
+            VALUE "ProductName",      "sc-offline"
+            VALUE "ProductVersion",   SCO_VERSION
+            VALUE "Comments",         "https://github.com/scubamount/sc-offline"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

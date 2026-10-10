@@ -94,6 +94,7 @@ target_compile_options(imgui PRIVATE ${SCO_DLL_OPTIONS} /W0)
 target_link_libraries(imgui INTERFACE d3d11 d3dcompiler dwmapi imm32)
 
 add_library(dinput8 SHARED
+  src/dinput8_version.rc
   src/dllmain.cpp
   src/common.cpp
   src/patches.cpp
@@ -187,7 +188,9 @@ set_target_properties(imgui dinput8 PROPERTIES INTERPROCEDURAL_OPTIMIZATION_RELE
 # Console subsystem (CMake's default for an executable). No UAC setting: the manifest keeps the
 # linker default asInvoker; the launcher asks for administrator rights at run time
 # (ShellExecuteEx "runas") only for the parts that need them.
-add_executable(sc-offline launcher/launcher.cpp)
+add_executable(sc-offline launcher/launcher.cpp launcher/version.rc)
+# Version resource (Properties > Details): src/version.rc, shared with dinput8.dll.
+# sc-offline.exe gets its own .rc so the two targets can define SCO_RC_EXE differently.
 target_compile_definitions(sc-offline PRIVATE ${SCO_COMMON_DEFINES})
 target_compile_options(sc-offline PRIVATE ${SCO_COMMON_OPTIONS} /W3)
 # Also named by #pragma comment(lib) in launcher.cpp.
