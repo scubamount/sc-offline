@@ -33,6 +33,11 @@
 - Docs and `sc-offline.ini`: `start_ship` only applies with `start = Daymar`, the wallet lives in `data\wallet.txt`, and a new **Not available offline** list in `docs/features.md` covers ASOP, the vehicle manager and character creation ([#26](https://github.com/scubamount/sc-offline/issues/26)).
 - README: 0.6.1 has been played in game on Windows; the "nobody has played it" note is gone. Linux through Wine is still untested.
 
+## 0.7.1 (2026-10-10) — EXPERIMENTAL
+
+- **Supports the 2026-10-07 Star Citizen build.** The mod resolves every game address at run time by scanning the executable's byte patterns, so a game patch that moves code no longer breaks it: the signature scanner re-finds the functions on the new `StarCitizen.exe` instead of trusting fixed offsets. All 103 pattern call sites (34 `FindUniquePattern`, 5 `FindPattern` and 64 `FindCString`) resolve against the 2026-10-07 build; the same scan passes on the 4.10.196 build that 0.7.0 shipped against, so nothing was pinned to one version. Nothing else changes: the features, the menu and the settings are the same as 0.7.0.
+- **This release is experimental:** it has not been played in game on the new build. It is a compatibility rebuild, not a feature change — the addresses were verified by scanning the new build's executable and by a clean compile and link, but every runtime path is unproven until someone runs it. If the menu doesn't open or the game crashes, send back the matching lines from `mod.log` and `Game.log`.
+
 ## 0.6.1 (2026-10-07)
 
 - **Online-safe light now updates while you play** ([#22](https://github.com/scubamount/sc-offline/issues/22)). It used to freeze while **Play** was running, so it stayed green with the game open and only changed at the end. It now refreshes every 1.5 seconds and turns red as soon as the mod is copied in or `StarCitizen.exe` is running.
