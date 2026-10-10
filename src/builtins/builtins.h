@@ -16,6 +16,7 @@ extern const sco::plugins::Builtin kAmmoBuiltin;       // ammo_plugin.cpp: ammo.
 extern const sco::plugins::Builtin kQuantumBuiltin;    // quantum_plugin.cpp: quantum.*, the quantum boost and travel ticks
 extern const sco::plugins::Builtin kBuildBuiltin;      // build_plugin.cpp: build.*, the build-mode tick (F6)
 extern const sco::plugins::Builtin kContractsBuiltin;  // contracts_plugin.cpp: contracts.status, the contracts tick
+extern const sco::plugins::Builtin kMiningBuiltin;      // mining_plugin.cpp: mining.status, natural mining on the game.mining row (mining = on)
 extern const sco::plugins::Builtin kMultiplayerBuiltin;  // multiplayer_plugin.cpp: multiplayer.*, co-presence over sco.net
 // The optional bridges (docs/bridges.md), compiled in only with their CMake option; never in a release.
 extern const sco::plugins::Builtin kTitanLinkBuiltin;  // titanlink/titanlink_plugin.cpp: titanlink.*, the Titanfall 2 link (SCO_BRIDGE_TITANLINK)
@@ -32,6 +33,8 @@ bool AmmoBuiltinOwnsTick();
 bool QuantumBuiltinOwnsTick();
 bool BuildBuiltinOwnsTick();
 bool ContractsBuiltinOwnsTick();
+// game.mining from sco-core's rows: ready when the cell function is found (SetFeatureCaps).
+void SetMiningCaps();
 
 // The index of the entry named `name` (any case) in a list of count names, or -1.
 inline int FindBuiltinName(int count, const char* (*nameAt)(int), const char* name) {
@@ -67,7 +70,7 @@ inline sco_result RegisterBuiltinCommand(const sco_api* api, sco_plugin* self, c
 }
 
 // Every built-in, in load order.
-inline const sco::plugins::Builtin kBuiltins[] = { kTeleportBuiltin, kSpawnBuiltin, kCrewBuiltin, kLoadoutBuiltin, kNpcBuiltin, kAmmoBuiltin, kQuantumBuiltin, kBuildBuiltin, kContractsBuiltin,
+inline const sco::plugins::Builtin kBuiltins[] = { kTeleportBuiltin, kSpawnBuiltin, kCrewBuiltin, kLoadoutBuiltin, kNpcBuiltin, kAmmoBuiltin, kQuantumBuiltin, kBuildBuiltin, kContractsBuiltin, kMiningBuiltin,
     kMultiplayerBuiltin
 #ifdef SCO_BRIDGE_TITANLINK
     , kTitanLinkBuiltin
