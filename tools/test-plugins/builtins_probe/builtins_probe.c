@@ -1,10 +1,10 @@
 /* builtins_probe: a test plugin for in-game checks of sc-offline's feature built-ins (not shipped).
- *   Ctrl+Alt+4  lists every built-in command (crew, npc, loadout, ammo, quantum, build,
+ *   Ctrl+Alt+4  lists every built-in command (crew, npc, loadout, quantum, build,
  *               contracts) with its title and whether its capability is there, then invokes
  *               contracts.status.
  *   Ctrl+Alt+5  invokes each command that takes a name with one no list has (expect "failed")
  *               and npc.spawn with a count of 11 (expect "bad_arg"). Nothing changes in game.
- *   Ctrl+Alt+6  ammo.infinite and ammo.ship_infinite: on the first press, off the next.
+ *   Ctrl+Alt+6  creative.ammo and creative.ship_ammo (the creative plugin, once it is on): on the first press, off the next.
  *   Ctrl+Alt+7  build.toggle (as F6).
  *   Ctrl+Alt+8  first press: quantum.save_bookmark "builtins_probe" (saves where you are);
  *               next press: quantum.bookmark "builtins_probe" (takes you there). The Travel
@@ -28,7 +28,7 @@ static const sco_plugin_info kInfo = {
     sizeof(sco_plugin_info), SCO_API_MAJOR, SCO_API_MINOR, "builtins_probe", "1.0.0", "sc-offline tests",
 };
 
-static const char* const kOwners[] = { "crew.", "npc.", "loadout.", "ammo.", "quantum.", "build.", "contracts." };
+static const char* const kOwners[] = { "crew.", "npc.", "loadout.", "quantum.", "build.", "contracts." };
 
 static void say(const char* fmt, ...) {
     char buf[384];
@@ -104,8 +104,8 @@ static void failure_paths(void) {
 
 static void toggle_ammo(void) {
     sco_arg a = boolean(g_ammoOn = !g_ammoOn);
-    call("ammo.infinite", &a, 1);
-    call("ammo.ship_infinite", &a, 1);
+    call("creative.ammo", &a, 1);
+    call("creative.ship_ammo", &a, 1);
 }
 
 static void travel(void) {

@@ -6,7 +6,7 @@ Most of the lists below are plain text files in `data/`, and the counts are take
 
 ## Player
 
-- Noclip, god mode, infinite ammo.
+- Noclip, god mode, infinite ammo: from the optional [creative plugin](#the-creative-plugin) (shipped off; turn it on in the launcher's Plugins page).
 - Gear menu: equip any of 1489 items, sorted into ten slots (`items.txt`).
 - Wallet: your aUEC balance is loaded when you spawn and saved as it changes, in the contracts built-in's storage (`data/storage/contracts.db`) and in `data/wallet.txt`. The file holds just the number; edit it while the game is closed to change your balance: an edited `wallet.txt` always wins over the stored balance (see [Saves](data-files.md#saves)). Without the file, you start with the `aUEC amount` in `data/OfflineDB/default_1.xml` (100,000,000). Once `wallet.txt` exists, that amount is no longer used, so delete `wallet.txt` to go back to it.
 
@@ -23,7 +23,7 @@ Most of the lists below are plain text files in `data/`, and the counts are take
 - Spawn any of 1102 vehicles (`ships.txt`). Typing in the search box selects the first match.
 - Pick where you board: the pilot seat, a seat by name, choose after spawning, or don't board. You can also remove the NPC sitting in that seat.
 - **Power on** sends the game's Flight Ready event. Depending on the ship, some systems may still start switched off.
-- Infinite ship ammo refills the magazines of the ship you're in.
+- Infinite ship ammo refills the magazines of the ship you're aboard (the [creative plugin](#the-creative-plugin)).
 
 ## Ship terminals, hangars and ATC
 
@@ -133,7 +133,7 @@ With `plugins = off`, `mod.log` shows `[plugin] 11 found, 11 loaded (plugins = o
 
 ### Built-in plugins
 
-sc-offline's features are eleven plugins compiled into `dinput8.dll`: `teleport`, `spawn`, `crew`, `loadout`, `npc`, `ammo`, `quantum`, `build`, `contracts`, `mining` and `multiplayer`, loaded in that order. They load first, with `plugins` on or off, and are listed as `builtin` in the `[plugin]` report (`[plugin] loaded teleport <version> (api 1.1) built in`). Each runs its feature's per-tick work from a `tick` subscription, so a fault there switches that feature off (`[plugin] <id> ... crashed`) instead of crashing the game. Each built-in also draws its own tabs in the menu through sco-core's `sco.ui` service, and binds its keys there: `build` binds F6, and `teleport` binds F7 and F8. The menu looks and works as before. A fault while a tab is drawn switches off only the built-in that owns it, along with its tabs. Their commands are the ones plugins call through the SDK's `invoke`; a command that ran but couldn't do it (an unknown name, a list not loaded yet) answers `failed` with the reason:
+sc-offline's features are ten plugins compiled into `dinput8.dll`: `teleport`, `spawn`, `crew`, `loadout`, `npc`, `quantum`, `build`, `contracts`, `mining` and `multiplayer`, loaded in that order. They load first, with `plugins` on or off, and are listed as `builtin` in the `[plugin]` report (`[plugin] loaded teleport <version> (api 1.1) built in`). Each runs its feature's per-tick work from a `tick` subscription, so a fault there switches that feature off (`[plugin] <id> ... crashed`) instead of crashing the game. Each built-in also draws its own tabs in the menu through sco-core's `sco.ui` service, and binds its keys there: `build` binds F6, and `teleport` binds F7 and F8. The menu looks and works as before. A fault while a tab is drawn switches off only the built-in that owns it, along with its tabs. Their commands are the ones plugins call through the SDK's `invoke`; a command that ran but couldn't do it (an unknown name, a list not loaded yet) answers `failed` with the reason:
 
 | Command | Does | Key |
 | --- | --- | --- |
@@ -150,8 +150,6 @@ sc-offline's features are eleven plugins compiled into `dinput8.dll`: `teleport`
 | `npc.clear` | Despawns the NPCs `npc.spawn` made (the crew's NPCs aren't included; `crew.clear` removes those) | |
 | `loadout.equip <items>` | Equips items from `items.txt` (separated by spaces or commas, one per slot; the other slots are empty, as in the gear menu) | |
 | `loadout.wear <outfit>` | Wears a Squadron 42 outfit from `outfits.txt` | |
-| `ammo.infinite <on>` | Infinite ammo on or off (the menu's checkbox doesn't follow it) | |
-| `ammo.ship_infinite <on>` | Infinite ship ammo on or off | |
 | `quantum.travel <place> <altitude>` | Teleports you to a place from the Travel tab, `<altitude>` m (100 to 20000) above the ground | |
 | `quantum.bookmark <name>` | Teleports you to a saved spot | |
 | `quantum.save_bookmark <name>` | Saves where you are as a named spot (`data/storage/quantum.db`); an empty name uses the zone's | |
@@ -166,7 +164,7 @@ sc-offline's features are eleven plugins compiled into `dinput8.dll`: `teleport`
 | `multiplayer.leave` | Leaves the session (or stops hosting) | |
 | `multiplayer.goto <player>` | Teleports you next to that player's ghost | |
 
-Each built-in's commands need the capability named after it (`teleport`, `spawn.ship`, `crew`, `npc`, `loadout`, `ammo`, `quantum`, `build`, `contracts`, `game.mining`); one is missing when this game build's addresses for that feature aren't found, and the rest of the plugin system still starts. A built-in owns its id, command prefix and services, so a plugin folder named after one (`teleport`, `spawn`, `crew`, ...) is refused (`the id belongs to a built-in plugin`), whatever its kind.
+Each built-in's commands need the capability named after it (`teleport`, `spawn.ship`, `crew`, `npc`, `loadout`, `quantum`, `build`, `contracts`, `game.mining`); one is missing when this game build's addresses for that feature aren't found, and the rest of the plugin system still starts. A built-in owns its id, command prefix and services, so a plugin folder named after one (`teleport`, `spawn`, `crew`, ...) is refused (`the id belongs to a built-in plugin`), whatever its kind.
 
 The `spawn` built-in's tick runs the Vehicles tab's spawns and the seat job that puts you in a seat; the `crew` built-in's runs the Crew tab's seat actions and the seat jobs of the `crew.*` commands. For plugin authors sco-core's game pack publishes `spawn.entities` 1.2 (the `spawn` built-in published it before, with the same table): a C function table to spawn an entity class near you, look up your entity and ship ids, ask whether an entity id still resolves in the game (`entity_alive`, 1.1), and (new in 1.2) move and turn an entity in the world frame or a zone's frame (`set_entity_transform`), without going through command replies. A plugin may move only what it spawned itself through `spawn_as` (1.2: `spawn_near_player` with the plugin's handle; what `spawn_near_player` and `spawn.ship` spawn belongs to nobody), forgotten when that plugin unloads, or your own vehicle once ASOP registers it as retrieved or delivered by ATC. A plugin built against 1.0 or 1.1 keeps working; one that uses a later function checks the table's `size` first. Its header is [`sc_spawn.h`](../external/sco-core/include/sc_spawn.h), shipped in sco-core's SDK; find it with `query_service` (sco_api 1.1). A plugin runs its own code in the game, so only install plugins you trust.
 
@@ -177,6 +175,21 @@ sco-core's game pack publishes `teleport.spatial` 1.0 (since game pack 0.1.0; th
 A plugin can add its own menu tab (drawn with sc-offline's ImGui), a badge beside the tab title, and an overlay. It can also bind a free key chord such as `ctrl+alt+9` to any command. sc-offline keeps **M** and build mode's keys for itself. See [plugin-ui.md](plugin-ui.md) for the tab order, how to draw, and the full key table.
 
 When you quit the game (the menu's Quit, or the `quit` console command), plugins get `game.exit` and are then unloaded, newest first and built-ins last, before the game exits. `mod.log` shows `[app] game closing (CSystem::Quit): game.exit, unloading plugins` followed by one `[plugin] unloaded <id>` line per plugin. If the game crashes or is killed (Task Manager, `taskkill`), plugins get no `game.exit` and aren't unloaded; don't rely on it to save anything that matters.
+
+### The creative plugin
+
+Noclip, god mode and infinite ammo are not part of `dinput8.dll` any more: they are `data/plugins/creative`, a plain plugin built only from the sco SDK's headers (`plugins/creative/`, CMake target `sc-offline-creative`) on sco-core's `game.creative` service. The folder ships with an empty `disabled` file, so the plugin is **off** until you turn it on in the launcher's Plugins page (and `plugins = on` in `sc-offline.ini`; see [the launcher](launcher.md)). A change applies at the next game start. Unloading the plugin switches every toggle it turned on off again.
+
+| Command | Does |
+| --- | --- |
+| `creative.god <on>` | God mode on or off (held every half second, so it also applies after you respawn) |
+| `creative.noclip <on>` | Noclip on or off |
+| `creative.noclip_speed <speed>` | The noclip speed in metres per second (1 to 10000; the Player tab's slider is 1 to 500). The game's own speed returns when the plugin unloads |
+| `creative.ammo <on>` | Infinite ammo for the weapons you carry |
+| `creative.ship_ammo <on>` | Infinite ammo for every weapon on the ship you're aboard |
+| `creative.status` | Which toggles are on |
+
+The Player tab's Noclip, speed slider, God mode and Infinite ammo checkboxes, and the Vehicles tab's Infinite ship ammo checkbox, run these commands (through `sco_api`'s `invoke`); with the plugin off they put the checkbox back and say so in the status strip. What changed from the built-in versions: the commands were `ammo.infinite` and `ammo.ship_infinite` (a plugin's commands must start with its id, so they are `creative.ammo` and `creative.ship_ammo` now), god mode no longer starts on, and the ship toggle covers the ship you're aboard but not the Crew tab's target ship. Each toggle needs its capability: `game.creative.god_mode`, `game.creative.fly`, `game.creative.ammo`, `game.creative.ship_ammo`.
 
 ## Multiplayer (LAN or VPN)
 

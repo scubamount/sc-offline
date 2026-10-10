@@ -13,7 +13,6 @@
 #include "missions.h"
 #include "contracts.h"
 #include "quantum.h"
-#include "ammo.h"
 #include "travel.h"
 #include "version.h"
 #include "services.h"
@@ -133,7 +132,6 @@ static void StartOffline() {
         ResolveCVarsApi(g_text, g_rdata);
         ResolveMissionsApi(g_text, g_rdata);
         ResolveContractsApi(g_text, g_rdata);
-        ResolveAmmoApi(g_text);
         ResolveFleetApi();     // ship terminals (fleet.cpp); reads sc-offline.ini's asop switch
         ResolveHangarsApi();   // hangars and ATC tokens (services.cpp)
     }
@@ -175,7 +173,6 @@ static void SetFeatureCaps() {
     SetCap("npc", SpawnerReady());
     SetCap("outfits", g_outfitsOk);
     SetCap("loadout", g_outfitsOk);   // the gear menu's loader, which outfits ride
-    SetCap("ammo", AmmoReady());
     SetCap("quantum.drive", QuantumDriveReady());
     SetCap("quantum.boost", QuantumBoostReady());
     SetCap("quantum", g_tp.ok);   // the Travel tab's requests all go through teleport
@@ -309,7 +306,6 @@ static void RunFeatureTicks(DWORD now) {
     if (!QuantumBuiltinOwnsTick()) { ProcessQuantum(); ProcessTravel(now); }
     ProcessMissions();
     if (!ContractsBuiltinOwnsTick()) ProcessContracts();
-    if (!AmmoBuiltinOwnsTick()) ProcessAmmo();
     TeleportTick(now);
     ProcessFleet(now);
 }

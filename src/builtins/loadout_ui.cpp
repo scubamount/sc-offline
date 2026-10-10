@@ -1,7 +1,8 @@
 // The loadout built-in's menu tabs: Player (noclip, god mode, infinite ammo and the gear menu) and
 // Squadron 42 (outfits, the SQ42 settings, the [sq42] spawn list, SQ42 ships and the console).
-// Moved from menu.cpp unchanged; registered through sco.ui by loadout_plugin.cpp and drawn by the
-// menu shell on the game thread.
+// Moved from menu.cpp; registered through sco.ui by loadout_plugin.cpp and drawn by the menu shell
+// on the game thread. The Player tab's noclip, god mode and infinite ammo are the optional creative
+// plugin's (data/plugins/creative): the checkboxes run its commands through sco_api's invoke.
 #include "tabs.h"
 #include "../menu.h"
 #include "../menu_ui.h"
@@ -11,6 +12,44 @@
 #include "../spawner.h"
 #include <cstdio>
 #include <cstring>
+
+static const sco_api* g_api = nullptr;
+static sco_plugin*    g_self = nullptr;
+
+void RegisterPlayerTab(const sco_api* api, sco_plugin* self) {
+    g_api = api;
+    g_self = self;
+    RegisterBuiltinTab(api, self, "loadout.player", "Player", kTabPlayer, DrawPlayerTab);
+}
+
+// The command's reply in the status strip (which also logs it). A refusal puts the checkbox back; a
+// missing command means the creative plugin isn't loaded.
+static void CreativeReply(sco_result r, const char* reply, void* ctx) {
+    if (r == SCO_OK) {
+        SetMenuStatus("%s", reply ? reply : "");
+        return;
+    }
+    if (ctx) *static_cast<bool*>(ctx) = !*static_cast<bool*>(ctx);
+    if (reply && reply[0]) SetMenuStatus("%s", reply);
+    else if (r == SCO_NOT_FOUND) SetMenuStatus("Needs the creative plugin: turn it on in the launcher's Plugins page.");
+    else SetMenuStatus("The creative plugin refused (result %d).", static_cast<int>(r));
+}
+
+void InvokeCreativeToggle(const char* command, bool on, bool* flag) {
+    if (!g_api || !g_self) { if (flag) *flag = !on; return; }
+    sco_arg arg = {};
+    arg.type = SCO_ARG_BOOL;
+    arg.v.i = on ? 1 : 0;
+    g_api->invoke(g_self, command, &arg, 1, CreativeReply, flag);
+}
+
+void InvokeCreativeSpeed(float metresPerSecond) {
+    if (!g_api || !g_self) return;
+    sco_arg arg = {};
+    arg.type = SCO_ARG_FLOAT;
+    arg.v.f = metresPerSecond;
+    g_api->invoke(g_self, "creative.noclip_speed", &arg, 1, CreativeReply, nullptr);
+}
 
 static void GearCombo(int slot, const char* label, const char* none, int& pick, const char* filter, float width) {
     const int n = Menu_GearCount(slot);
@@ -36,18 +75,22 @@ void DrawPlayerTab(void*, void*) {
     SectionHeading("Movement");
     static bool  noclip = false;
     static float speed = 30.0f;
-    if (ImGui::Checkbox("Noclip", &noclip)) Menu_SetNoclip(noclip, speed);
+    if (ImGui::Checkbox("Noclip", &noclip)) {
+        InvokeCreativeSpeed(speed);
+        InvokeCreativeToggle("creative.noclip", noclip, &noclip);
+    }
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-1);
     if (ImGui::SliderFloat("##noclipSpeed", &speed, 1.0f, 500.0f, "Speed %.0f", ImGuiSliderFlags_Logarithmic))
-        Menu_SetNoclipSpeed(speed);
+        InvokeCreativeSpeed(speed);
     Hint("F7 saves where you're standing and F8 takes you back. The Travel tab has named spots and places.");
 
     SectionHeading("Protection");
-    static bool god = true, ammo = false;
-    if (ImGui::Checkbox("God mode", &god)) Menu_SetGodMode(god);
+    static bool god = false, ammo = false;
+    if (ImGui::Checkbox("God mode", &god)) InvokeCreativeToggle("creative.god", god, &god);
     ImGui::SameLine(0, 24);
-    if (ImGui::Checkbox("Infinite ammo", &ammo)) Menu_SetInfiniteAmmo(ammo);
+    if (ImGui::Checkbox("Infinite ammo", &ammo)) InvokeCreativeToggle("creative.ammo", ammo, &ammo);
+    Hint("Noclip, god mode and infinite ammo come from the creative plugin. Turn it on in the launcher's Plugins page.");
 
     SectionHeading("Gear");
     static int  gear[Gear_SlotCount] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };

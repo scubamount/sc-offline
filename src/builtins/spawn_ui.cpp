@@ -78,8 +78,8 @@ void DrawVehiclesTab(void*, void*) {
 
     SectionHeading("Current ship");
     static bool shipAmmo = false;
-    if (ImGui::Checkbox("Infinite ship ammo", &shipAmmo)) Menu_SetInfiniteShipAmmo(shipAmmo);
-    ImGui::SetItemTooltip("Refills the magazines of the ship you're aboard, and the ship in the Crew tab.");
+    if (ImGui::Checkbox("Infinite ship ammo", &shipAmmo)) InvokeCreativeToggle("creative.ship_ammo", shipAmmo, &shipAmmo);
+    ImGui::SetItemTooltip("Refills the magazines of the ship you're aboard. Needs the creative plugin (launcher's Plugins page).");
     if (ImGui::Button("Power on / off", ImVec2(-1, 0))) Menu_RequestFlightReady();
     Hint("Toggles Flight Ready on the ship in the Crew tab, as if you pressed R in its pilot seat.");
 }

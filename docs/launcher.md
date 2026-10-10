@@ -72,6 +72,9 @@ The page manages `data\plugins\<id>\` the way the host (sco-core) reads it, with
 - **On / off**: the switch creates or deletes an empty file named `disabled` in the plugin's folder. The host
   reads that marker when the game starts, so a change applies at the next start. The old `data\mods\mod.txt` /
   `enabled.txt` split is gone: nothing here reads or writes it.
+- **The creative plugin** (`creative`: noclip, god mode, infinite ammo) ships with its `disabled` marker, so it
+  starts **off**: switch it on here (and have `plugins = on`). A self-update copies every file in the release,
+  that marker included, so switch it on again if it is off after an update.
 - **Plugins are off**: the host loads no plugin unless `plugins = on` in `sc-offline.ini` (the default is off).
   When it is off, the page says so and **Turn on** writes the key.
 - **Settings** (the gear, for a plugin whose `plugin.ini` has a `[settings]` section): edits the values the

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""SDK-headers gate: src/builtins/ is a consumer of the sco SDK (game-services plan, PR 8).
+"""SDK-headers gate: src/builtins/ and plugins/ are consumers of the sco SDK (game-services plan, PR 8).
 
     python3 tools/sdk-headers.py            # from the repo root
 
-Every file under src/builtins/ may include only
+Every file under src/builtins/ and plugins/ (the plugins built from this repo: plugins/creative) may include only
   * the headers the SDK zip ships (sco_api.h, sco_*.h, sc_*.h, scosdk/**, ImGui's public headers),
-  * files inside src/builtins/ itself,
+  * files inside its own tree (src/builtins/ or plugins/<id>/),
   * toolchain headers (the standard library, the Windows SDK).
 Anything else - ../*.h, sco/*.h (sco-core's internal kernel headers), version.h - fails with file:line.
 
@@ -15,7 +15,7 @@ the gate follows the zip and never a second list kept here.
 The one exception file is tools/sdk-headers-allow.txt: `header | files | reason`, one line per
 header, a reason on every line. The header is named by where it lives (`src/menu.h`, or
 `sco/plugins.h` for sco-core's include folder), so ../menu.h and ../../menu.h are one entry; files
-is a comma-separated list of path globs relative to src/builtins/. A header or file pattern that no longer matches a
+is a comma-separated list of path globs relative to src/builtins/ (plugins/ has no entries: it must stay clean). A header or file pattern that no longer matches a
 violation fails too, so the list only ever shrinks. Exit 0 clean, 1 violations or stale entries, 2 the check could not run (which
 must never read as clean).
 """
@@ -26,6 +26,7 @@ from pathlib import Path
 
 ROOT = Path(sys.argv[1] if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent).resolve()
 BUILTINS = ROOT / "src" / "builtins"
+PLUGINS = ROOT / "plugins"   # plugins built from this repo; clean, no allow-list entries
 SCO = ROOT / "external" / "sco-core"
 PACKAGE = SCO / "sdk" / "package.py"
 ALLOW = ROOT / "tools" / "sdk-headers-allow.txt"
@@ -104,11 +105,14 @@ def main():
     files = sorted(p for p in BUILTINS.rglob("*") if p.is_file() and p.suffix in SOURCE_SUFFIXES)
     if not files:
         die("no sources under src/builtins/")
+    plugin_files = sorted(p for p in PLUGINS.rglob("*") if p.is_file() and p.suffix in SOURCE_SUFFIXES) if PLUGINS.is_dir() else []
+    files += plugin_files
     checked = allowed = 0
     bad = []
     for f in files:
         rel = f.relative_to(ROOT).as_posix()
-        brel = f.relative_to(BUILTINS).as_posix()
+        own = PLUGINS if f in plugin_files else BUILTINS
+        brel = f.relative_to(own).as_posix()
         for lineno, line in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
             m = INCLUDE.match(line)
             if not m:
@@ -120,7 +124,7 @@ def main():
                 if not quoted:
                     continue  # the standard library or the Windows SDK
                 verdict = "does not resolve"
-            elif under(hit, BUILTINS):
+            elif under(hit, own):
                 continue
             elif under(hit, SCO / "include") and (name in top or name.split("/")[0] in dirs):
                 continue
@@ -129,7 +133,7 @@ def main():
             elif under(hit, SCO / "include"):
                 verdict = "is sco-core's internal header, not in the SDK zip"
             else:
-                verdict = "is not in the SDK zip or src/builtins/"
+                verdict = "is not in the SDK zip or its own folder"
             key = header_key(hit, name)
             glob = next((g for e in allow if e["inc"] == key for g in e["globs"] if fnmatch.fnmatch(brel, g)), None)
             if glob is not None:
