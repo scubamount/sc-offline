@@ -15,9 +15,15 @@
  *   Ctrl+Alt+3  logs what the teleport.spatial service answers about you (pose, zone name, a
  *               local -> world -> local round trip, zone_of_entity) and spawn.entities 1.1's
  *               entity_alive for you and for a made-up id.
+ *   Ctrl+Alt+=  game.entities 1.0 (sc_entities.h), one press: spawns a small prop 5 m ahead of you,
+ *               waits for it to stream in (up to 60 s), then get_transform, set_transform 1 m up,
+ *               get_transform again, class_of, alive, a set_transform on your own character (expect
+ *               a refusal, and "[game] warning: ..." in mod.log) and despawn (twice: ok, then
+ *               not_found). Ctrl+Alt+1-9 and 0 are all taken by the probes, hence the =.
  * (Not F-keys: sc-offline uses F6 for build mode and F7/F8 for teleport, and the game many more.)
  * Every result goes to mod.log as "[spawn_probe] ...". */
 #include "sco_api.h"
+#include <sc_entities.h>
 #include <sc_spawn.h>
 #include <sc_spatial.h>
 #define WIN32_LEAN_AND_MEAN
@@ -29,7 +35,10 @@
 
 static const sco_api* g_api;
 static sco_plugin*    g_self;
-static int            g_down1, g_down2, g_down3;
+static int            g_down1, g_down2, g_down3, g_downEnt;
+static int            g_entStep;        /* Ctrl+Alt+=: 0 idle, 1 waiting for g_prop to stream in */
+static uint64_t       g_prop;           /* spawned with game.entities.spawn */
+static ULONGLONG      g_propUntil;      /* GetTickCount64 deadline while waiting for g_prop */
 static int            g_moverStep;      /* Ctrl+Alt+2: 0 spawn, 1 world frame, 2 zone frame */
 static ULONGLONG      g_waitUntil;      /* GetTickCount64 deadline while a step waits for g_mine; 0 = none */
 static uint64_t       g_mine, g_theirs; /* spawned with spawn_as / spawn_near_player */
@@ -226,6 +235,106 @@ static void run_spatial(void) {
     }
 }
 
+/* ---- game.entities 1.0 -------------------------------------------------------------------- */
+
+static const sc_entities_v1* entities(int quiet) {
+    const sc_entities_v1* e = (const sc_entities_v1*)(quiet ? quiet_service(SC_ENTITIES_NAME, SC_ENTITIES_VERSION_1_0)
+                                                            : service(SC_ENTITIES_NAME, SC_ENTITIES_VERSION_1_0));
+    if (e && e->size <= offsetof(sc_entities_v1, last_error)) {
+        say("game.entities table is too short (size %u)", e->size);
+        return NULL;
+    }
+    return e;
+}
+
+/* "what -> result", plus the service's reason when it refused. */
+static void say_result(const sc_entities_v1* e, const char* what, sco_result r, const char* expect) {
+    char why[192] = "";
+    uint32_t n = sizeof(why);
+    if (r != SCO_OK) e->last_error(g_self, why, &n);
+    say("%s -> %s (expect %s)%s%s", what, result_name(r), expect, why[0] ? ": " : "", why);
+}
+
+static void entities_start(void) {
+    static const char* const kProps[] = { "PlayerDeco_Flair_Heart_Table_1_a", "PlayerDeco_Flair_Hanger_Flag_UEE_1" };
+    const sc_entities_v1* e = entities(0);
+    const sc_spatial_v1* sp = (const sc_spatial_v1*)service(SC_SPATIAL_SERVICE_NAME, SC_SPATIAL_SERVICE_VERSION);
+    double pos[3], rot[4], at[3], fwd[3];
+    uint64_t zone = 0;
+    sco_result r = SCO_NOT_FOUND;
+    size_t i;
+    char what[160];
+    if (!e || !sp) return;
+    if (g_entStep) { say("game.entities check already running (waiting for %llu)", (unsigned long long)g_prop); return; }
+    if (!sp->player_pose(pos, rot, &zone)) { say("game.entities: player_pose failed; are you spawned?"); return; }
+    /* Forward is +y in a zone's frame, rotated by your rotation (x, y, z, w); up is +z. */
+    fwd[0] = 2.0 * (rot[0] * rot[1] - rot[3] * rot[2]);
+    fwd[1] = 1.0 - 2.0 * (rot[0] * rot[0] + rot[2] * rot[2]);
+    fwd[2] = 2.0 * (rot[1] * rot[2] + rot[3] * rot[0]);
+    at[0] = pos[0] + fwd[0] * 5.0; at[1] = pos[1] + fwd[1] * 5.0; at[2] = pos[2] + fwd[2] * 5.0;
+    for (i = 0; i < sizeof(kProps) / sizeof(kProps[0]); ++i) {
+        g_prop = 0;
+        r = e->spawn(g_self, kProps[i], zone, at, rot, &g_prop);
+        snprintf(what, sizeof(what), "spawn(%s, 5 m ahead, zone %llu) id %llu", kProps[i], (unsigned long long)zone,
+                 (unsigned long long)g_prop);
+        say_result(e, what, r, "ok");
+        if (r != SCO_NOT_FOUND) break;   /* not found: this class isn't on this build; try the next */
+    }
+    if (r != SCO_OK) { g_prop = 0; return; }
+    g_entStep = 1;
+    g_propUntil = GetTickCount64() + 60000;
+    say("waiting for %llu to stream in (up to 60 s)", (unsigned long long)g_prop);
+}
+
+static void entities_finish(const sc_entities_v1* e, int timedOut) {
+    char what[160], cls[96] = "";
+    double pos[3] = { 0 }, rot[4] = { 0 }, up[3], after[3] = { 0 };
+    uint64_t zone = 0, me = 0;
+    uint32_t n = sizeof(cls);
+    sco_result r;
+    const sc_spawn_service_v1* s = (const sc_spawn_service_v1*)quiet_service(SC_SPAWN_SERVICE_NAME, SC_SPAWN_SERVICE_VERSION);
+    g_entStep = 0;
+    if (timedOut) {
+        say("%llu didn't stream in within 60 s; skipping to despawn", (unsigned long long)g_prop);
+    } else {
+        r = e->get_transform(g_prop, pos, rot, &zone);
+        snprintf(what, sizeof(what), "get_transform(%llu) zone %llu pos (%.3f, %.3f, %.3f)", (unsigned long long)g_prop,
+                 (unsigned long long)zone, pos[0], pos[1], pos[2]);
+        say_result(e, what, r, "ok");
+        if (r == SCO_OK) {
+            up[0] = pos[0]; up[1] = pos[1]; up[2] = pos[2] + 1.0;
+            snprintf(what, sizeof(what), "set_transform(%llu, 1 m up)", (unsigned long long)g_prop);
+            say_result(e, what, e->set_transform(g_self, g_prop, zone, up, rot), "ok");
+            r = e->get_transform(g_prop, after, NULL, NULL);
+            snprintf(what, sizeof(what), "get_transform again: z %.3f, moved %.3f m up", after[2], after[2] - pos[2]);
+            say_result(e, what, r, "ok, 1.000 once the game has applied it");
+        }
+        r = e->class_of(g_prop, cls, &n);
+        snprintf(what, sizeof(what), "class_of(%llu) '%s'", (unsigned long long)g_prop, cls);
+        say_result(e, what, r, "ok");
+        say("alive(%llu)=%d alive(0xDEAD)=%d", (unsigned long long)g_prop, e->alive(g_prop), e->alive(0xDEAD));
+        if (s) me = s->local_player_id();
+        if (me && zone) {
+            snprintf(what, sizeof(what), "set_transform(you %llu), not spawned here", (unsigned long long)me);
+            say_result(e, what, e->set_transform(g_self, me, zone, pos, rot), "failed + [game] warning in mod.log");
+        }
+    }
+    snprintf(what, sizeof(what), "despawn(%llu)", (unsigned long long)g_prop);
+    say_result(e, what, e->despawn(g_self, g_prop), "ok");
+    snprintf(what, sizeof(what), "despawn(%llu) again", (unsigned long long)g_prop);
+    say_result(e, what, e->despawn(g_self, g_prop), "not_found");
+    g_prop = 0;
+}
+
+static void entities_tick(void) {
+    const sc_entities_v1* e;
+    if (!g_entStep) return;
+    e = entities(1);
+    if (!e) { g_entStep = 0; return; }
+    if (e->alive(g_prop)) entities_finish(e, 0);
+    else if (GetTickCount64() > g_propUntil) entities_finish(e, 1);
+}
+
 static int held(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
 
 static void on_tick(const char* event, const void* data, void* ctx) {
@@ -233,6 +342,7 @@ static void on_tick(const char* event, const void* data, void* ctx) {
     const int down1 = chord && held('1');
     const int down2 = chord && held('2');
     const int down3 = chord && held('3');
+    const int downEnt = chord && held(VK_OEM_PLUS);
     (void)event; (void)data; (void)ctx;
     if (down1 && !g_down1) run_checks();
     if (down2 && !g_down2) run_mover();
@@ -245,6 +355,9 @@ static void on_tick(const char* event, const void* data, void* ctx) {
         }
     }
     if (down3 && !g_down3) run_spatial();
+    if (downEnt && !g_downEnt) entities_start();
+    entities_tick();
+    g_downEnt = downEnt;
     g_down1 = down1;
     g_down2 = down2;
     g_down3 = down3;
@@ -259,7 +372,7 @@ SCO_EXPORT sco_result sco_plugin_load(const sco_api* api, sco_plugin* self) {
     r = api->subscribe(self, "tick", on_tick, NULL);
     if (r == SCO_OK)
         say("loaded: Ctrl+Alt+1 = service checks + spawn.ship, Ctrl+Alt+2 = spawn.entities mover (3 steps), "
-            "Ctrl+Alt+3 = teleport.spatial + entity_alive");
+            "Ctrl+Alt+3 = teleport.spatial + entity_alive, Ctrl+Alt+= = game.entities");
     return r;
 }
 
