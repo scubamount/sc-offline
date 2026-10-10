@@ -3,6 +3,10 @@
 #include "menu.h"
 #include "spawner.h"
 #include "teleport.h"
+#include "sco/game/actors.h"
+#include "sco/signatures.h"
+
+namespace actors = sco::game::actors;
 
 using SetAmmoFn = void(__fastcall*)(uintptr_t container, int count, uint8_t notify);
 static SetAmmoFn         g_setAmmoOrig = nullptr;
@@ -24,16 +28,16 @@ void Menu_SetInfiniteShipAmmo(bool on) {
 
 static uint64_t ParentId(uintptr_t entity) {
     uint64_t port = 0;
-    VCall<void>(entity, 0x150, &port, 0ull);
+    VCall<void>(entity, actors::kEntityParentPort, &port, 0ull);
     if (!(port & kPtrMask)) return 0;
     uint64_t id = 0;
-    const uint64_t* owner = VCall<const uint64_t*>(port & kPtrMask, 0x8, &id);
+    const uint64_t* owner = VCall<const uint64_t*>(port & kPtrMask, actors::kPortOwnerId, &id);
     return owner ? *owner : 0;
 }
 
 static uintptr_t EntityById(uint64_t id) {
     uint64_t handle = 0;
-    const uint64_t* h = VCall<const uint64_t*>(*g_tp.entitySystem, 0x128, &handle, id);
+    const uint64_t* h = VCall<const uint64_t*>(*g_tp.entitySystem, actors::kEsHandleById, &handle, id);
     return h ? (*h & kPtrMask) : 0;
 }
 
@@ -70,11 +74,11 @@ static void __fastcall SetAmmoHook(uintptr_t container, int count, uint8_t notif
     g_lastNotify = notify;
     if (g_infinite || g_shipInfinite) {
         __try {
-            const int32_t key = Rd<int32_t>(container + 0xC4);
-            const int32_t now = key ? Rd<int32_t>(container + 0xC0) ^ key : 0;
+            const int32_t key = Rd<int32_t>(container + actors::kAmmoKey);
+            const int32_t now = key ? Rd<int32_t>(container + actors::kAmmoCount) ^ key : 0;
             if (count < now) {
-                if (g_infinite && YouCarry(container)) count = Rd<int32_t>(container + 0xB8);
-                else if (g_shipInfinite && OnYourShip(container)) count = Rd<int32_t>(container + 0xB8);
+                if (g_infinite && YouCarry(container)) count = Rd<int32_t>(container + actors::kAmmoMax);
+                else if (g_shipInfinite && OnYourShip(container)) count = Rd<int32_t>(container + actors::kAmmoMax);
             }
         } __except (EXCEPTION_EXECUTE_HANDLER) {}
     }
@@ -83,13 +87,13 @@ static void __fastcall SetAmmoHook(uintptr_t container, int count, uint8_t notif
 
 bool AmmoReady() { return g_setAmmoOrig != nullptr; }
 
-void ResolveAmmoApi(const Section& text) {
-    int n = 0;
-    uint8_t* fn = FindUniquePattern(text, "40 56 57 41 54 41 57 48 81 EC 88 00 00 00 8B 81 C4 00 00 00 45 33 FF 45 0F B6 E0 48 8B F9", n);
-    if (fn && g_tp.entitySystem && HookFunction(fn, 14, reinterpret_cast<void*>(&SetAmmoHook), reinterpret_cast<void**>(&g_setAmmoOrig)))
+// The magazine setter is sco-core's ammo.set_ammo row (sco/game/actors.h).
+void ResolveAmmoApi(const Section&) {
+    if (!ActorsCapability("ammo.setter", "ammo", "infinite ammo")) return;
+    if (HookFunction(sco::Sig("ammo.set_ammo"), 14, reinterpret_cast<void*>(&SetAmmoHook), reinterpret_cast<void**>(&g_setAmmoOrig)))
         Log("[+] infinite ammo: ready (M menu)");
     else
-        Log("[!] infinite ammo: the magazine setter wasn't found (%d matches)", n);
+        Log("[!] infinite ammo: hooking the magazine setter failed");
 }
 
 // Energy weapons can drain their magazine without going through the setter above, so with ship
@@ -97,10 +101,10 @@ void ResolveAmmoApi(const Section& text) {
 // container is only touched if it reads like a magazine (key set, count between 0 and its maximum).
 static bool ReadMagazine(uintptr_t c, int32_t& count, int32_t& max) {
     __try {
-        const int32_t key = Rd<int32_t>(c + 0xC4);
-        max = Rd<int32_t>(c + 0xB8);
+        const int32_t key = Rd<int32_t>(c + actors::kAmmoKey);
+        max = Rd<int32_t>(c + actors::kAmmoMax);
         if (!key || max <= 0 || max > 1000000) return false;
-        count = Rd<int32_t>(c + 0xC0) ^ key;
+        count = Rd<int32_t>(c + actors::kAmmoCount) ^ key;
         return count >= 0 && count <= max;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;

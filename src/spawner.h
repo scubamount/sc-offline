@@ -2,6 +2,9 @@
 #include "common.h"
 
 bool ResolveSpawnApi(const Section& text, const Section& rdata);
+// Sets capability `name` (sco/game/actors.h or sco/game/features.h) from its signature rows;
+// false, after one "[tag] what disabled (row STATE; see the [core] lines)" line, unless all are OK.
+bool ActorsCapability(const char* name, const char* tag, const char* what);
 bool SpawnerReady();
 void ReadStartOptions();
 bool StartingOverDaymar();
