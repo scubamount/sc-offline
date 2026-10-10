@@ -331,12 +331,15 @@ bool CallLift(LiftRequestFn fn, uint64_t manager) {
 }
 
 // SvRequestSpawnVehicleInLoadingPlatform (doc 8.4). The class goes in as an engine string: the
-// int32 length and capacity sit just before the text. A fault after the ship was queued has been
-// seen; it counts as "requested" (the caller doesn't spawn again).
+// int32 length and capacity sit just before the text. The string is passed by value, so the callee
+// destroys it on return (0x38F9D0 on 4.10.196: header = text - 8, freed when capacity > 0). Capacity
+// 0 marks it as not owned, so our stack copy isn't freed; with capacity = length the free faulted
+// after the SpawnShip batch was queued. A fault still counts as "requested" (no second spawn).
 bool CallPlatformSpawn(uint64_t manager, const char* cls, uint64_t landingArea, uint64_t player) {
     struct { int32_t length, capacity; char text[128]; } name = {};
     const size_t len = strnlen(cls, sizeof(name.text) - 1);
-    name.length = name.capacity = static_cast<int32_t>(len);
+    name.length = static_cast<int32_t>(len);
+    name.capacity = 0;
     memcpy(name.text, cls, len);
     const char* data = name.text;
     __try {
@@ -1251,6 +1254,44 @@ bool ReadTerminal(uintptr_t kiosk, uintptr_t provider, TerminalSnapshot& s) {
     }
 }
 
+// The fleet ships the provider lists but the terminal leaves out (its row filter, 0x56B7E10: the
+// docking limits, the vehicle record's listable flag, vehicle types the terminal doesn't take).
+// Returns how many; out gets up to max fleet indices.
+int DroppedShips(uintptr_t kiosk, uintptr_t provider, int* out, int max) {
+    int dropped = 0;
+    __try {
+        const uintptr_t kb = Rd<uintptr_t>(kiosk + 0xF0), ke = Rd<uintptr_t>(kiosk + 0xF8);
+        const uintptr_t pb = Rd<uintptr_t>(provider + kProviderBegin), pe = Rd<uintptr_t>(provider + kProviderEnd);
+        if (ke < kb || pe < pb || (pe - pb) / kVehicleDataSize > 8192 || (ke - kb) / 0x16C0 > 8192) return 0;
+        for (uintptr_t p = pb; p + kVehicleDataSize <= pe; p += kVehicleDataSize) {
+            const int ship = FleetShipIndexOfUrnId(reinterpret_cast<const uint64_t*>(p + kVehicleUrn + kUrnId));
+            if (ship < 0) continue;
+            bool listed = false;
+            for (uintptr_t k = kb; k + 0x16C0 <= ke && !listed; k += 0x16C0)
+                listed = !memcmp(reinterpret_cast<const void*>(k + 0x1698 + kUrnId), reinterpret_cast<const void*>(p + kVehicleUrn + kUrnId), 16);
+            if (listed) continue;
+            if (dropped < max) out[dropped] = ship;
+            ++dropped;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return dropped;
+    }
+    return dropped;
+}
+
+void LogDroppedShips(uintptr_t kiosk, uintptr_t provider) {
+    int ships[40];
+    const int n = DroppedShips(kiosk, provider, ships, 40);
+    if (!n) return;
+    char list[1600] = "";
+    size_t used = 0;
+    for (int i = 0; i < n && i < 40 && used + 80 < sizeof(list); ++i) {
+        const char* cls = FleetShipClass(ships[i]);
+        used += static_cast<size_t>(snprintf(list + used, sizeof(list) - used, "%s%s", i ? ", " : "", cls ? cls : "?"));
+    }
+    Log("[asop] terminal leaves out %d listed ship(s): %s%s", n, list, n > 40 ? ", ..." : "");
+}
+
 // Every 500 ms for 3 minutes after a terminal opens: one line whenever what it shows changes
 // (a row click changes "selected").
 void WatchTerminal(DWORD now) {
@@ -1270,9 +1311,11 @@ void WatchTerminal(DWORD now) {
     }
     if (!ReadTerminal(kiosk, provider, s)) return;
     if (kiosk == shownKiosk && !memcmp(&s, &shown, sizeof(s))) return;
+    const bool rowsChanged = kiosk != shownKiosk || s.rows != shown.rows || s.providerRows != shown.providerRows;
     shown = s;
     shownKiosk = kiosk;
     ++lines;
+    if (rowsChanged && s.rows && provider) LogDroppedShips(kiosk, provider);
     Log("[asop] terminal: %lld rows (list provider %lld; docking limits ship %lld, ground %lld), %lld CanBeDelivered (%lld not disabled), "
         "selected %lld, DeliverySystemSetup %lld, storage %lld/%lld",
         s.rows, s.providerRows, s.maxShipClass, s.maxGroundClass, s.deliverable, s.deliverOk, s.selected, s.deliverySystem, s.used, s.capacity);
