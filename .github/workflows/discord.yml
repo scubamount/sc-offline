@@ -1,13 +1,14 @@
 name: discord
 
 # Posts project activity to the project's Discord channel (issue #30):
-# releases, merged PRs, issues opened or closed, and pushes to main.
+# releases, merged PRs, issues opened or closed, pushes to main, and workflow runs starting.
 #
 # The webhook URL lives only in the DISCORD_WEBHOOK_URL Actions secret. Untrusted text
 # (titles, labels, bodies) reaches the payload only through env vars and `jq --arg`, never
 # through `${{ }}` inside a shell script, and `allowed_mentions` is empty so nothing pings.
 # PRs from forks get no secrets on `pull_request`, so they don't post; there is deliberately
-# no `pull_request_target` here.
+# no `pull_request_target` here. `workflow_run` runs from main with secrets even for fork PR runs,
+# so its step reads only event fields (through env) and never checks out the run's code.
 
 on:
   release:
@@ -18,6 +19,9 @@ on:
     types: [opened, closed]
   push:
     branches: [main]
+  workflow_run:
+    workflows: [build]
+    types: [requested]
 
 permissions: {}
 
@@ -76,6 +80,17 @@ jobs:
           PUSH_AVATAR: ${{ github.event.sender.avatar_url }}
           PUSH_AT: ${{ github.event.head_commit.timestamp }}
           PUSH_COMMITS: ${{ toJSON(github.event.commits) }}
+          WR_NAME: ${{ github.event.workflow_run.name }}
+          WR_NUM: ${{ github.event.workflow_run.run_number }}
+          WR_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          WR_URL: ${{ github.event.workflow_run.html_url }}
+          WR_EVENT: ${{ github.event.workflow_run.event }}
+          WR_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          WR_SHA: ${{ github.event.workflow_run.head_sha }}
+          WR_TITLE: ${{ github.event.workflow_run.display_title }}
+          WR_ACTOR: ${{ github.event.workflow_run.triggering_actor.login }}
+          WR_AVATAR: ${{ github.event.workflow_run.triggering_actor.avatar_url }}
+          WR_AT: ${{ github.event.workflow_run.created_at }}
         run: |
           set -eu
           # A body excerpt: HTML comments (PR/issue templates) and blank runs dropped, first 700 chars.
@@ -147,6 +162,20 @@ jobs:
                 description: ($d | if length > 3500 then .[0:3500] + "\n…" else . end),
                 footer: {text: "sc-offline · Star Citizen offline mod"}}' > embed.json
               fi
+              ;;
+            workflow_run)
+              attempt=""; [ "${WR_ATTEMPT:-1}" = "1" ] || attempt=" (attempt $WR_ATTEMPT)"
+              jq -n --arg t "Started: $WR_NAME #$WR_NUM$attempt" --arg u "$WR_URL" --arg d "$WR_TITLE" \
+                    --arg a "$WR_ACTOR" --arg av "$WR_AVATAR" --arg at "$WR_AT" --arg e "$WR_EVENT" \
+                    --arg b "$WR_BRANCH" --arg sha "$WR_SHA" --arg repo "$REPO" '{
+                title: ($t | .[0:256]), url: $u, color: 16766720, timestamp: $at,
+                author: {name: ("Workflow started by " + $a), icon_url: $av},
+                description: ($d | .[0:300]),
+                fields: [
+                  {name: "Trigger", value: $e, inline: true},
+                  {name: "Branch", value: ($b | .[0:100]), inline: true},
+                  {name: "Commit", value: ("[`" + $sha[0:7] + "`](https://github.com/" + $repo + "/commit/" + $sha + ")"), inline: true}],
+                footer: {text: "sc-offline · Star Citizen offline mod"}}' > embed.json
               ;;
           esac
           jq '{username: "sc-offline", allowed_mentions: {parse: []}, embeds: [.]}' embed.json > payload.json
