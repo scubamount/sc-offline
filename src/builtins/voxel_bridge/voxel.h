@@ -2,7 +2,7 @@
 // voxel_bridge: the voxel-game bridge, an optional built-in (CMake SCO_BRIDGE_VOXEL, off by default
 // and never in the release zip). Shared between voxel_plugin.cpp (the built-in) and voxel_ui.cpp
 // (its tab). docs/bridges.md describes what it does and the wire the voxel game's mod speaks.
-#include "voxel_wire.h"
+#include "sc_voxel_bridge.h" // the channel layout, MIT, from sco-core's SDK
 #include <cstddef>
 #include <cstdint>
 

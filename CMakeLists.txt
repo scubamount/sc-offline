@@ -170,9 +170,10 @@ if(SCO_BRIDGE_VOXEL)
 endif()
 if(SCO_BRIDGE_TITANLINK OR SCO_BRIDGE_VOXEL)
   # A stand-in for the other program, for testing a bridge without Titanfall 2 or the voxel game:
-  # it opens a channel with nothing but sc_ipc.h and the layout headers (tools/bridge-peer).
+  # it opens a channel with nothing but sco-core's MIT SDK headers sc_ipc.h, sc_titanlink.h and
+  # sc_voxel_bridge.h (tools/bridge-peer).
   add_executable(bridge-peer tools/bridge-peer/bridge_peer.cpp)
-  target_include_directories(bridge-peer PRIVATE external/sco-core/include src/builtins)
+  target_include_directories(bridge-peer PRIVATE external/sco-core/include)
   target_compile_definitions(bridge-peer PRIVATE ${SCO_COMMON_DEFINES})
   target_compile_options(bridge-peer PRIVATE ${SCO_COMMON_OPTIONS} /W3)
 endif()

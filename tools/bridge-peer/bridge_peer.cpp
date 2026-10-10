@@ -6,7 +6,7 @@
 //
 // Built only with SCO_BRIDGE_TITANLINK or SCO_BRIDGE_VOXEL (CI artifact "bridges-test"); never in a
 // release. It opens the channel the built-in created, by name, with nothing from sco-core but the
-// MIT wire header sc_ipc.h (plus the bridge's layout header), the way the real other side does. It
+// MIT SDK headers sc_ipc.h and the bridge's layout header, the way the real other side does. It
 // beats, prints what sc-offline writes once a second, and answers like a minimal peer:
 //   titanlink: says it's in a match; a Titan call parks a Titan where asked, E puts the pilot in it
 //              and out again; no picture (tl_frame stays empty).
@@ -16,8 +16,8 @@
 // Ctrl+C ends it (or the seconds run out); the channel then sees its heartbeat stop.
 #include <windows.h>
 #include <sc_ipc.h>
-#include "titanlink/titanlink_wire.h"
-#include "voxel_bridge/voxel_wire.h"
+#include <sc_titanlink.h>
+#include <sc_voxel_bridge.h>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
