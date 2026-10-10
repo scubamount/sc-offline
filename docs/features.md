@@ -47,6 +47,8 @@ Your retrieved ship is registered with the game pack's spawn.entities mover, so 
 
 Lists every seat on your ship and who is in it. From here you can sit in a seat, make an NPC stand up, remove an NPC, or add one. NPCs you add will sit in a seat but won't fly the ship or operate turrets.
 
+The `crew.*` commands (below) work on sco-core's `game.vehicles` and `game.actors` services, not on this tab's seat code. They act on the ship you're aboard, or the one `crew.target` pinned. Some entries in a ship's seat list are not crew seats (turret items and remote-operated parts: the game's own seat picker skips them). `crew.fill` seats NPCs only in seats that are empty and usable, and says how many it skipped: `Seating 10 x <npc> (5 seats skipped: not interactable)`. `mod.log` has one `interactable yes|no` line per seat, written by the game pack, and `crew.sit` refuses a seat that isn't usable.
+
 ## NPCs
 
 Spawn any of 2239 NPC archetypes in front of you, and remove them again (`npcs.txt`). If the game refuses to delete an NPC offline, the mod moves it far out of range instead.
@@ -116,11 +118,11 @@ sc-offline's features are ten plugins compiled into `dinput8.dll`: `teleport`, `
 | `teleport.save` | Saves where you're standing (`data/storage/teleport.db`); the reply names the spot | **F7** |
 | `teleport.go` | Teleports to the saved spot; the reply says where you went, or why not | **F8** |
 | `spawn.ship <class> <height>` | Spawns a ship `<height>` m (0 to 10000) above you, as the Vehicles tab does, and makes it the Crew & seats target; the status strip says when it's there. An unknown class answers `failed` | |
-| `crew.target` | Makes the ship you're in the Crew & seats target | |
-| `crew.sit <seat>` | Puts you in the target ship's first seat whose name has these words (`pilot`, `turret left`), removing an NPC in it | |
-| `crew.stand_all` | You and every NPC on the target ship get out of the seats | |
-| `crew.fill <npc>` | Puts an NPC of this archetype (`npcs.txt`) in every empty seat of the target ship | |
-| `crew.clear` | Removes every NPC from the target ship's seats | |
+| `crew.target` | Pins the ship you're in as the target of the `crew.*` commands (without it they use the ship you're aboard) | |
+| `crew.sit <seat>` | Puts you in the target ship's first seat whose name has these words (`pilot`, `turret left`), removing a crew NPC in it | |
+| `crew.stand_all` | You and the NPCs `crew.fill` added on the target ship get out of the seats | |
+| `crew.fill <npc>` | Puts an NPC of this archetype (`npcs.txt`) in every empty, usable seat of the target ship and says how many seats it skipped | |
+| `crew.clear` | Removes the NPCs `crew.fill` added to the target ship | |
 | `crew.power_on` | Sends the game's Flight Ready event to the target ship | |
 | `npc.spawn <npc> <count>` | Spawns 1 to 10 NPCs of an archetype (`npcs.txt`) in front of you | |
 | `npc.clear` | Removes the NPCs you spawned | |
@@ -143,7 +145,7 @@ sc-offline's features are ten plugins compiled into `dinput8.dll`: `teleport`, `
 
 Each built-in's commands need the capability named after it (`teleport`, `spawn.ship`, `crew`, `npc`, `loadout`, `ammo`, `quantum`, `build`, `contracts`); one is missing when this game build's addresses for that feature aren't found, and the rest of the plugin system still starts. A built-in owns its id, command prefix and services, so a plugin folder named after one (`teleport`, `spawn`, `crew`, ...) is refused (`the id belongs to a built-in plugin`), whatever its kind.
 
-The `spawn` built-in's tick runs the Vehicles tab's spawns and the seat job that puts you in a seat; the `crew` built-in's runs the Crew & seats actions and crew jobs. For plugin authors sco-core's game pack publishes `spawn.entities` 1.2 (the `spawn` built-in published it before, with the same table): a C function table to spawn an entity class near you, look up your entity and ship ids, ask whether an entity id still resolves in the game (`entity_alive`, 1.1), and (new in 1.2) move and turn an entity in the world frame or a zone's frame (`set_entity_transform`), without going through command replies. A plugin may move only what it spawned itself through `spawn_as` (1.2: `spawn_near_player` with the plugin's handle; what `spawn_near_player` and `spawn.ship` spawn belongs to nobody), forgotten when that plugin unloads, or your own vehicle once ASOP registers it as retrieved or delivered by ATC. A plugin built against 1.0 or 1.1 keeps working; one that uses a later function checks the table's `size` first. Its header is [`sc_spawn.h`](../external/sco-core/include/sc_spawn.h), shipped in sco-core's SDK; find it with `query_service` (sco_api 1.1). A plugin runs its own code in the game, so only install plugins you trust.
+The `spawn` built-in's tick runs the Vehicles tab's spawns and the seat job that puts you in a seat; the `crew` built-in's runs the Crew tab's seat actions and the seat jobs of the `crew.*` commands. For plugin authors sco-core's game pack publishes `spawn.entities` 1.2 (the `spawn` built-in published it before, with the same table): a C function table to spawn an entity class near you, look up your entity and ship ids, ask whether an entity id still resolves in the game (`entity_alive`, 1.1), and (new in 1.2) move and turn an entity in the world frame or a zone's frame (`set_entity_transform`), without going through command replies. A plugin may move only what it spawned itself through `spawn_as` (1.2: `spawn_near_player` with the plugin's handle; what `spawn_near_player` and `spawn.ship` spawn belongs to nobody), forgotten when that plugin unloads, or your own vehicle once ASOP registers it as retrieved or delivered by ATC. A plugin built against 1.0 or 1.1 keeps working; one that uses a later function checks the table's `size` first. Its header is [`sc_spawn.h`](../external/sco-core/include/sc_spawn.h), shipped in sco-core's SDK; find it with `query_service` (sco_api 1.1). A plugin runs its own code in the game, so only install plugins you trust.
 
 sco-core's game pack publishes `teleport.spatial` 1.0 (since game pack 0.1.0; the `teleport` built-in published it before, with the same table) ([`sc_spatial.h`](../external/sco-core/include/sc_spatial.h), shipped in sco-core's SDK): your position and orientation in the zone you're in, the zone an entity is in, a zone's name, and positions converted between a zone and the world or between two zones. Zones are the game's nested frames (star system > planet > city or station > ship > room); every id is the game's own 64-bit id and every position is in metres. Each tick the built-in reads your zone chain from the game into sco-core's zone tree, and a zone you ask about that isn't in it is read on the spot; nothing about the game is kept from one tick to the next, so an id that has streamed out simply answers 0. Like `spawn.entities`, it works from the game thread only.
 
