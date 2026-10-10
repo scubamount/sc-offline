@@ -1183,6 +1183,7 @@ void EnsureDeliverySystem(DWORD now) {
 // 0x16C0 bytes per row (UpdateBindingsElement), same field layout (InsuredVehicle table).
 struct TerminalSnapshot {
     int64_t providerRows;                     // the list provider's entries (the terminal drops some)
+    int64_t maxShipClass, maxGroundClass;     // the terminal's docking limits (-1 = none): bigger ships aren't listed
     int64_t urnNs, urnType, urnKind, urnVariant, urnValid, deliverableField;   // the row's URN, and provider entry +0xA0
     int64_t rows, selected, deliverySystem, capacity, used;
     int64_t deliverable, deliverOk;           // rows with CanBeDelivered, and with it not disabled
@@ -1200,6 +1201,8 @@ bool ReadTerminal(uintptr_t kiosk, uintptr_t provider, TerminalSnapshot& s) {
         const uintptr_t begin = Rd<uintptr_t>(kiosk + 0xF0), end = Rd<uintptr_t>(kiosk + 0xF8);
         if (end < begin || (end - begin) % 0x16C0 || (end - begin) / 0x16C0 > 8192) return false;
         s.rows = static_cast<int64_t>((end - begin) / 0x16C0);
+        s.maxShipClass = Rd<int32_t>(kiosk + 0xA08);           // MaxShipDockingClass (synced field +0xA00)
+        s.maxGroundClass = Rd<int32_t>(kiosk + 0xA18);         // MaxGroundDockingClass
         s.selected = Rd<int64_t>(kiosk + 0x278 + 0x48);        // CurrentVehicleIndex
         s.deliverySystem = Rd<int64_t>(kiosk + 0x198 + 0x48);  // DeliverySystemSetup
         s.capacity = Rd<int64_t>(kiosk + 0x400 + 0x48);        // StorageCapacity
@@ -1270,8 +1273,9 @@ void WatchTerminal(DWORD now) {
     shown = s;
     shownKiosk = kiosk;
     ++lines;
-    Log("[asop] terminal: %lld rows (list provider %lld), %lld CanBeDelivered (%lld not disabled), selected %lld, DeliverySystemSetup %lld, storage %lld/%lld",
-        s.rows, s.providerRows, s.deliverable, s.deliverOk, s.selected, s.deliverySystem, s.used, s.capacity);
+    Log("[asop] terminal: %lld rows (list provider %lld; docking limits ship %lld, ground %lld), %lld CanBeDelivered (%lld not disabled), "
+        "selected %lld, DeliverySystemSetup %lld, storage %lld/%lld",
+        s.rows, s.providerRows, s.maxShipClass, s.maxGroundClass, s.deliverable, s.deliverOk, s.selected, s.deliverySystem, s.used, s.capacity);
     if (s.rows)
         Log("[asop] terminal row %lld inputs: urn namespace %lld type %lld kind %lld id-variant %lld -> %s, provider entry +0xA0 %lld (1 = deliverable)",
             s.selected >= 0 && s.selected < s.rows ? s.selected : 0, s.urnNs, s.urnType, s.urnKind, s.urnVariant,
