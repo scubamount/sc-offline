@@ -35,6 +35,8 @@ The station's ship terminals (ASOP) work offline, with `asop = on` in `sc-offlin
 - **Store** at the hangar terminal lowers the lift with the ship, stores it, and raises the empty lift again. You can Retrieve it again afterwards.
 - **ATC hails.** A hail from inside your hangar is a take-off: the doors open and close behind you. A hail from outside gets you a landing pad with its marker on your HUD. At another station the ATC makes you a hangar there, and Store there keeps the ship at that station.
 
+The terminal only offers Deliver with the game's delivery system switched on. Online the server does that; here sc-offline sets `g_itemRecovery.deliverySystemSetup 1`. **Show local ships** lists only ships at this station, so it stays empty until you've delivered one there.
+
 Limits: one ship out at a time. Stored and retrieved ships last for the session. A retrieved ship is a new ship of the same class, so damage, cargo and loadout changes don't carry over. Only small and medium hangars have been tried.
 
 Each part of this switches itself off when the game's code for it isn't found on your game version, and `mod.log` lists every part at startup: `[+] ship terminal open (rc1): ready (...)`, or `[!] ship terminal Deliver (rc3): needs atc.store_vehicle (MISSING)`. With `asop = off` it reads `[-] ship terminals, hangars and ATC (ASOP): off`. Each step of a Deliver, Retrieve or Store is logged with `[asop]`, and hangar and ATC steps with `[iim]` and `[atc]`. The parts are also capabilities that plugins can ask about: `asop.terminal`, `asop.caller`, `asop.list`, `asop.deliver`, `asop.claim_timeout`, `asop.retrieve`, `hangar.lift`, `atc.store`, `hangar.instance`, `atc.tokens` and `asop.diagnostics`.

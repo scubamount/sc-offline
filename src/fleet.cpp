@@ -9,6 +9,7 @@
 // Nothing here sleeps or waits; a step that needs the game to catch up returns and runs again on
 // a later tick. Every read of game memory is inside __try and a fault drops that step.
 #include "fleet.h"
+#include "cvars.h"
 #include "hooks.h"
 #include "spawner.h"
 #include "teleport.h"
@@ -1145,6 +1146,25 @@ void ShortenClaimTimeout() {
     }
 }
 
+// The terminal offers Deliver only with the item-recovery delivery system set up. The kiosk copies
+// g_itemRecovery.deliverySystemSetup into its DeliverySystemSetup binding on every list update
+// ("0: Disabled / 1: delivery times applied, can't be expedited / 2: ... can be expedited"). Online
+// the server's config sets it; offline it keeps the cvar block's default, 0, and every row shows
+// "Deliverable" with no action. 1 keeps the expedite path (DGS pricing) off; Deliver itself is
+// this module's (rc3). Checked every 2 s: the console may not exist yet, and a config may reset it.
+void EnsureDeliverySystem(DWORD now) {
+    static const char kCVar[] = "g_itemRecovery.deliverySystemSetup";
+    static DWORD last = 0;
+    static bool logged = false;
+    if (now - last < 2000) return;
+    last = now;
+    float value = 0;
+    if (!GetCVarNow(kCVar, value) || value >= 1) return;
+    const bool ok = SetCVarNow(kCVar, 1);
+    if (!logged || !ok) Log("[asop] %s %.0f -> 1 %s (the terminal's Deliver action needs it)", kCVar, value, ok ? "set" : "NOT set");
+    logged |= ok;
+}
+
 // Swaps pGame's caller-lookup slot once pGame exists (doc 6).
 void InstallCallerLookup() {
     static bool done = false;
@@ -1364,6 +1384,7 @@ void ProcessFleet(DWORD now) {
     RefreshPlayer();
     if (On(kCaller)) InstallCallerLookup();
     if (On(kClaim)) ShortenClaimTimeout();
+    if (On(kDeliver)) EnsureDeliverySystem(now);
 
     // What the hooks queued.
     std::vector<DeliverRequest> delivers;
