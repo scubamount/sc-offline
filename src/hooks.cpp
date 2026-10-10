@@ -1,7 +1,10 @@
 #include "hooks.h"
 #include "fleet.h"
+#include "patches.h"
 #include "teleport.h"
 #include "sco/hook.h"
+#include "sco/signatures.h"
+#include "sco/game/offline.h"
 #include <initializer_list>
 #include <nmmintrin.h>
 #include <share.h>
@@ -155,12 +158,9 @@ using InstanceGroupQueryFn = void(__fastcall*)(uintptr_t, uintptr_t, uintptr_t*)
 static InstanceGroupQueryFn g_origInstanceGroupQuery = nullptr;
 static uintptr_t*           g_servicesManager = nullptr;
 
-static bool PrepareInstanceGroupQuery(uint8_t* target) {
-    static const uint8_t loadMgr[] = { 0x48, 0x8B, 0x0D };
-    static const uint8_t callHub[] = { 0x48, 0x8B, 0x01, 0xFF, 0x50, 0x18 };
-    if (memcmp(target + 0x5B, loadMgr, sizeof(loadMgr)) != 0 || memcmp(target + 0x99, callHub, sizeof(callHub)) != 0)
-        return false;
-    g_servicesManager = reinterpret_cast<uintptr_t*>(target + 0x5B + 7 + Rel32(target + 0x5E));
+// elevator.instance_group_query checks the services manager load (+0x5B) and its hub call (+0x99).
+static bool PrepareInstanceGroupQuery(uint8_t*) {
+    g_servicesManager = reinterpret_cast<uintptr_t*>(sco::Sig("elevator.services_manager"));
     return true;
 }
 
@@ -168,7 +168,7 @@ static void __fastcall Hook_InstanceGroupQuery(uintptr_t self, uintptr_t key, ui
     uintptr_t hub = 0;
     __try {
         const uintptr_t mgr = *g_servicesManager;
-        if (mgr) hub = reinterpret_cast<uintptr_t(__fastcall*)(uintptr_t)>(Rd<uintptr_t>(Rd<uintptr_t>(mgr) + 0x18))(mgr);
+        if (mgr) hub = reinterpret_cast<uintptr_t(__fastcall*)(uintptr_t)>(Rd<uintptr_t>(Rd<uintptr_t>(mgr) + sco::game::offline::kServicesHubSlot))(mgr);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         hub = 0;
     }
@@ -185,12 +185,14 @@ static EntitlementsResultFn g_origEntitlementsResult = nullptr;
 static RetrieveVehicleFn    g_origRetrieveVehicle = nullptr;
 static void __fastcall Hook_EntitlementsResult(uintptr_t self, uintptr_t result);
 static void __fastcall Hook_RetrieveVehicle(uintptr_t asop, uintptr_t slot);
-static bool PrepareEntitlementsResult(uint8_t* target);
 static bool PrepareRetrieveVehicle(uint8_t* target);
 
+// Each target is a sco-core signature row (sco/game/offline.h; the retrieve hook's is the ASOP row
+// asop.fleet_retrieve); a hook is installed only when its capability is ready.
 struct HookSpec {
     const char*   name;
-    const char*   pattern;
+    const char*   row;
+    const char*   cap;
     size_t      stolen;
     void*       detour;
     void**      original;
@@ -198,34 +200,30 @@ struct HookSpec {
 };
 
 static const HookSpec kHooks[] = {
-    { "inventory filter validator",
-      "48 89 5C 24 18 48 89 74 24 20 57 48 83 EC 20 49 89 50 28 49 8B F8 41 8B 41 1C 48 8B DA",
+    { "inventory filter validator", "inventory.validate_filter", "inventory.filter_validator",
       5, reinterpret_cast<void*>(&Hook_ValidateFilter), reinterpret_cast<void**>(&g_origValidateFilter), nullptr },
-    { "inventory projection validator",
-      "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 20 48 8D 05 ?? ?? ?? ?? 49 8B F0",
+    { "inventory projection validator", "inventory.validate_projection", "inventory.projection_validator",
       5, reinterpret_cast<void*>(&Hook_ValidateProjection), reinterpret_cast<void**>(&g_origValidateProjection), nullptr },
-    { "hangar elevator crash guard",
-      "48 89 5C 24 08 48 89 74 24 18 48 89 7C 24 20 55 48 8D AC 24 70 FE FF FF 48 81 EC 90 02 00 00 49 8B 00 49 8B F8",
+    { "hangar elevator crash guard", "elevator.instance_group_query", "elevator.crash_guard",
       5, reinterpret_cast<void*>(&Hook_InstanceGroupQuery), reinterpret_cast<void**>(&g_origInstanceGroupQuery),
       &PrepareInstanceGroupQuery },
-    { "fleet manager ship list (offline)",
-      "40 55 56 41 56 48 8D AC 24 00 FF FF FF 48 81 EC 00 02 00 00 4C 8B F1 48 8B F2 48 83 C1 08 E8",
+    { "fleet manager ship list (offline)", "fleet.entitlements_result", "fleet.ship_list",
       5, reinterpret_cast<void*>(&Hook_EntitlementsResult), reinterpret_cast<void**>(&g_origEntitlementsResult),
-      &PrepareEntitlementsResult },
-    { "fleet manager retrieve -> spaceport ATC",
-      "48 89 54 24 10 55 53 41 55 41 57 48 8D AC 24 A8 FE FF FF 48 81 EC 68 02 00 00 4C 8B FA 4C 8B E9 48 8B 51 08 48 8D 8D 80 01 00 00 E8",
+      nullptr },
+    { "fleet manager retrieve -> spaceport ATC", "asop.fleet_retrieve", "fleet.retrieve_atc",
       5, reinterpret_cast<void*>(&Hook_RetrieveVehicle), reinterpret_cast<void**>(&g_origRetrieveVehicle),
       &PrepareRetrieveVehicle },
 };
 static PatchStatus g_hookStatus[sizeof(kHooks) / sizeof(kHooks[0])];
 
-void InstallHooks(const Section& text) {
+void InstallHooks() {
     for (size_t i = 0; i < sizeof(kHooks) / sizeof(kHooks[0]); ++i) {
         const HookSpec& h = kHooks[i];
         PatchStatus& st = g_hookStatus[i];
         st.expected = 1;
-        uint8_t* target = FindUniquePattern(text, h.pattern, st.sites);
-        if (!target) { st.result = st.sites ? PatchResult::WrongMatchCount : PatchResult::NotFound; continue; }
+        if (!OfflineCapReady(h.cap)) { st.result = PatchResult::NotFound; continue; }
+        uint8_t* target = sco::Sig(h.row);
+        st.sites = 1;
         if (h.prepare && !h.prepare(target)) { st.result = PatchResult::NotFound; continue; }
         if (!Detour(target, h.stolen, h.detour, h.original, st.err)) { st.result = PatchResult::ProtectFailed; continue; }
         st.result = PatchResult::Applied;
@@ -236,7 +234,7 @@ void InstallHooks(const Section& text) {
 
 void LogHooks() {
     for (size_t i = 0; i < sizeof(kHooks) / sizeof(kHooks[0]); ++i)
-        LogPatch(kHooks[i].name, g_hookStatus[i]);
+        LogOfflinePatch(kHooks[i].name, g_hookStatus[i], kHooks[i].cap);
 }
 
 bool HookFunction(uint8_t* target, size_t stolen, void* detour, void** original) {
@@ -295,25 +293,14 @@ void FreeCryString(void* s) {
 static GetATCCompFn       g_getATCComp = nullptr;
 static RequestTakingOffFn g_requestTakingOff = nullptr;
 
-static bool PrepareEntitlementsResult(uint8_t* target) {
-    const uint8_t* msg = FindCString(g_rdata, "QueryEntitlements failed with error: $$");
-    return msg && BytesMatch(target + 0x55, "4C 8D 0D") && target + 0x55 + 7 + Rel32(target + 0x58) == msg;
-}
-
-static bool PrepareRetrieveVehicle(uint8_t* target) {
-    if (!BytesMatch(target + 0xC7, "49 8B 95 F8 09 00 00") || !BytesMatch(target + 0xDD, "E8")) return false;
-    const uint8_t* usage = FindCString(g_rdata,
-        "Invalid arguments. Usage: g_ATC_requestTakeOff <atc_name (autocompletable)> [<ship_archetype>] [<pad_name_filter>]");
-    const uint8_t* lea = usage ? FindRipLea(g_text, 0x48, 0x8D, 0x15, usage) : nullptr;
-    if (!lea) return false;
-    const uint8_t* cmd = lea - 0x1CD;
-    if (!BytesMatch(cmd, "40 55 53 48 8B EC 48 83 EC 78") || !BytesMatch(cmd + 0x72, "E8")
-        || !BytesMatch(cmd + 0xA9, "E8") || !BytesMatch(cmd + 0x190, "E8"))
-        return false;
-    g_getATCComp       = reinterpret_cast<GetATCCompFn>(target + 0xDD + 5 + Rel32(target + 0xDE));
-    g_strCtor          = reinterpret_cast<StrCtorFn>(cmd + 0x72 + 5 + Rel32(cmd + 0x73));
-    g_strDtor          = reinterpret_cast<StrDtorFn>(cmd + 0xA9 + 5 + Rel32(cmd + 0xAA));
-    g_requestTakingOff = reinterpret_cast<RequestTakingOffFn>(cmd + 0x190 + 5 + Rel32(cmd + 0x191));
+// fleet.retrieve_atc: asop.fleet_retrieve checks the kiosk ATC id load (+0xC7) and the
+// GetATCComponent call (+0xDD, atc.get_component); fleet.takeoff_command the g_ATC_requestTakeOff
+// command whose calls give the CryString ctor / dtor and RequestTakingOff.
+static bool PrepareRetrieveVehicle(uint8_t*) {
+    g_getATCComp       = reinterpret_cast<GetATCCompFn>(sco::Sig("atc.get_component"));
+    g_strCtor          = reinterpret_cast<StrCtorFn>(sco::Sig("fleet.string_ctor"));
+    g_strDtor          = reinterpret_cast<StrDtorFn>(sco::Sig("fleet.string_dtor"));
+    g_requestTakingOff = reinterpret_cast<RequestTakingOffFn>(sco::Sig("fleet.request_taking_off"));
     return true;
 }
 

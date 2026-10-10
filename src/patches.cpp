@@ -1,25 +1,59 @@
 #include "patches.h"
 #include "hooks.h"
+#include "sco/caps.h"
+#include "sco/signatures.h"
+#include "sco/game/features.h"
+#include "sco/game/offline.h"
 
-static const uint8_t kIsOnlineStore[]   = { 0x44, 0x88, 0xA0, 0x0E, 0x06, 0x00, 0x00 };
-static const uint8_t kIsOnlineCleared[] = { 0xC6, 0x80, 0x0E, 0x06, 0x00, 0x00, 0x00 };
-static_assert(sizeof(kIsOnlineStore) == sizeof(kIsOnlineCleared), "patch must be same length");
+// Every address below is a sco-core signature row (sco/game/offline.h, plus features'
+// offline.or_loop_bound); StartOffline resolves them before these patches change any byte. A patch
+// runs only when its capability is ready.
+namespace off = sco::game::offline;
 
-static PatchStatus PatchIsOnlineStore(const Section& text) {
+template <typename Cap>
+static const Cap* FindCap(const Cap* caps, size_t n, const char* name) {
+    for (size_t i = 0; i < n; ++i)
+        if (strcmp(caps[i].name, name) == 0) return &caps[i];
+    return nullptr;
+}
+
+bool OfflineCapReady(const char* name) {
+    size_t n = 0;
+    const off::Capability* caps = off::Capabilities(n);
+    if (const off::Capability* c = FindCap(caps, n, name))
+        sco::caps::SetFromSignatures(c->name, c->rows, c->count);
+    else {
+        const sco::game::features::Capability* fcaps = sco::game::features::Capabilities(n);
+        const sco::game::features::Capability* f = FindCap(fcaps, n, name);
+        if (!f) return false;
+        sco::caps::SetFromSignatures(f->name, f->rows, f->count);
+    }
+    return sco::caps::Has(name);
+}
+
+void LogOfflinePatch(const char* name, const PatchStatus& st, const char* cap) {
+    if (st.result == PatchResult::NotFound && !sco::caps::Has(cap))
+        Log("[!] %s: not patched, %s isn't ready (see the [core] lines in mod.log)", name, cap);
+    else
+        LogPatch(name, st);
+}
+
+// Row "<base>.<k>" (numbered rows).
+static uint8_t* SigN(const char* base, int k) {
+    char id[64];
+    snprintf(id, sizeof(id), "%s.%d", base, k);
+    return sco::Sig(id);
+}
+
+static const uint8_t kIsOnlineCleared[] = { 0xC6, 0x80, 0x0E, 0x06, 0x00, 0x00, 0x00 };   // over offline.is_online_store (7 bytes)
+
+static PatchStatus PatchIsOnlineStore() {
     PatchStatus st;
     st.expected = 1;
-    const size_t n = sizeof(kIsOnlineStore);
-    uint8_t* const end = text.base + text.size;
-    uint8_t* hit = nullptr;
-    for (uint8_t* p = text.base; p + n <= end; ++p) {
-        p = static_cast<uint8_t*>(memchr(p, kIsOnlineStore[0], static_cast<size_t>(end - p) - n + 1));
-        if (!p) break;
-        if (memcmp(p, kIsOnlineStore, n) != 0) continue;
-        if (!hit) hit = p;
-        ++st.sites;
-    }
-    if (st.sites != st.expected) { st.result = st.sites ? PatchResult::WrongMatchCount : PatchResult::NotFound; return st; }
-    if (!WriteCode(hit, kIsOnlineCleared, n, st.err)) { st.result = PatchResult::ProtectFailed; return st; }
+    if (!OfflineCapReady("offline.force_offline")) { st.result = PatchResult::NotFound; return st; }
+    uint8_t* hit = sco::Sig("offline.is_online_store");
+    st.sites = 1;
+    if (!WriteCode(hit, kIsOnlineCleared, sizeof(kIsOnlineCleared), st.err)) { st.result = PatchResult::ProtectFailed; return st; }
     st.result = PatchResult::Applied;
     st.at = hit;
     return st;
@@ -28,67 +62,30 @@ static PatchStatus PatchIsOnlineStore(const Section& text) {
 static const uint8_t kNop6[] = { 0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00 };
 const uint8_t* g_isOnlineFlag;
 
-static PatchStatus PatchHandshakeGate(const Section& text, const Section& rdata) {
+static PatchStatus PatchHandshakeGate() {
     PatchStatus st;
-    st.expected = 4;
-    const uint8_t* guid = FindCString(rdata, "sessionGuid");
-    if (!guid) { st.result = PatchResult::NotFound; return st; }
+    st.expected = off::kHandshakeSites;
+    if (!OfflineCapReady("offline.handshake")) { st.result = PatchResult::NotFound; return st; }
 
-    uint8_t* sites[4] = {};
-    const uint8_t* flag = nullptr;
-    bool sameFlag = true;
-    uint8_t* const end = text.base + text.size - 32;
-    for (uint8_t* p = text.base; p < end; ++p) {
-        p = static_cast<uint8_t*>(memchr(p, 0x44, static_cast<size_t>(end - p)));
-        if (!p) break;
-        if (p[1] != 0x38 || (p[2] & 0xC7) != 0x05 || p[7] != 0x0F || p[8] != 0x84) continue;
-
-        bool loadsGuid = false;
-        for (const uint8_t* q = p + 13; q < p + 25; ++q)
-            if (q[0] == 0x48 && q[1] == 0x8D && q[2] == 0x15 && q + 7 + Rel32(q + 3) == guid) { loadsGuid = true; break; }
-        if (!loadsGuid) continue;
-
-        const uint8_t* cmpTarget = p + 7 + Rel32(p + 3);
-        if (flag && cmpTarget != flag) sameFlag = false;
-        flag = cmpTarget;
-        if (st.sites < 4) sites[st.sites] = p + 7;
-        ++st.sites;
-    }
-    if (st.sites != st.expected || !sameFlag) { st.result = st.sites ? PatchResult::WrongMatchCount : PatchResult::NotFound; return st; }
+    uint8_t* sites[off::kHandshakeSites] = {};
+    for (int k = 1; k <= off::kHandshakeSites; ++k) sites[k - 1] = SigN("offline.handshake_gate", k) + off::kHandshakeJe;
+    st.sites = off::kHandshakeSites;
     for (uint8_t* s : sites)
         if (!WriteCode(s, kNop6, sizeof(kNop6), st.err)) { st.result = PatchResult::ProtectFailed; return st; }
-    g_isOnlineFlag = flag;
+    g_isOnlineFlag = sco::Sig("offline.is_online_flag");
     st.result = PatchResult::Applied;
     st.at = sites[0];
     return st;
 }
 
 static const uint8_t kNop5[] = { 0x0F, 0x1F, 0x44, 0x00, 0x00 };
-static const uint8_t kToLowerPrologue[] = { 0x4C, 0x8B, 0x09, 0x4C, 0x8B, 0xD1, 0x41, 0x0F, 0xB6, 0x01, 0x84, 0xC0 };
 
-static PatchStatus PatchMegamapCase(const Section& text, const Section& rdata) {
+static PatchStatus PatchMegamapCase() {
     PatchStatus st;
     st.expected = 1;
-    const uint8_t* help = FindCString(rdata, "Load a map, same usage as 'megamap' cvar.");
-    uint8_t* reg = help ? FindRipLea(text, 0x48, 0x8D, 0x15, help) : nullptr;
-    if (!reg) { st.result = PatchResult::NotFound; return st; }
-
-    const uint8_t* handler = nullptr;
-    for (uint8_t* q = reg + 7; q < reg + 7 + 32; ++q)
-        if (q[0] == 0x4C && q[1] == 0x8D && q[2] == 0x05) { handler = q + 7 + Rel32(q + 3); break; }
-    if (!handler || handler < text.base || handler >= text.base + text.size - 0x80) { st.result = PatchResult::NotFound; return st; }
-
-    static const uint8_t leaRcx[] = { 0x48, 0x8D, 0x4C, 0x24, 0x30, 0xE8 };
-    uint8_t* call = nullptr;
-    for (const uint8_t* h = handler; h < handler + 0x60; ++h) {
-        if (memcmp(h, leaRcx, 6) != 0 || memcmp(h + 10, leaRcx, 6) != 0) continue;
-        const uint8_t* callee = h + 20 + Rel32(h + 16);
-        if (callee < text.base || callee + sizeof(kToLowerPrologue) > text.base + text.size) continue;
-        if (memcmp(callee, kToLowerPrologue, sizeof(kToLowerPrologue)) != 0) continue;
-        call = const_cast<uint8_t*>(h + 15);
-        ++st.sites;
-    }
-    if (st.sites != st.expected) { st.result = st.sites ? PatchResult::WrongMatchCount : PatchResult::NotFound; return st; }
+    if (!OfflineCapReady("offline.megamap_case")) { st.result = PatchResult::NotFound; return st; }
+    uint8_t* call = sco::Sig("offline.megamap_tolower_call");
+    st.sites = 1;
     if (!WriteCode(call, kNop5, sizeof(kNop5), st.err)) { st.result = PatchResult::ProtectFailed; return st; }
     st.result = PatchResult::Applied;
     st.at = call;
@@ -101,28 +98,17 @@ static bool BootIntoAllSystems() {
     return n > 0 && n < sizeof(value) && _stricmp(value, "PU_All") == 0;
 }
 
-static PatchStatus PatchBootIntoPU(const Section& text, const Section& rdata) {
+static const char* BootCap() { return BootIntoAllSystems() ? "offline.boot_pu_all" : "offline.boot_pu"; }
+
+static PatchStatus PatchBootIntoPU() {
     PatchStatus st;
     st.expected = 1;
-    const uint8_t* frontend   = FindCString(rdata, "Frontend_Main");
-    const uint8_t* scFrontend = FindCString(rdata, "SC_Frontend");
-    const uint8_t* allMap     = BootIntoAllSystems() ? FindCString(rdata, "MegaMap.PU_All") : nullptr;
-    const uint8_t* pu         = allMap ? allMap + 8 : FindCString(rdata, "PU");
-    const uint8_t* scDefault  = FindCString(rdata, "SC_Default");
-    if (!frontend || !scFrontend || !pu || !scDefault) { st.result = PatchResult::NotFound; return st; }
-
-    uint8_t* site = nullptr;
-    uint8_t* const end = text.base + text.size - 14;
-    for (uint8_t* p = text.base; p < end; ++p) {
-        p = static_cast<uint8_t*>(memchr(p, 0x4C, static_cast<size_t>(end - p)));
-        if (!p) break;
-        if (p[1] != 0x8D || p[2] != 0x05 || p + 7 + Rel32(p + 3) != scFrontend) continue;
-        const uint8_t* q = p + 7;
-        if (q[0] != 0x48 || q[1] != 0x8D || q[2] != 0x15 || q + 7 + Rel32(q + 3) != frontend) continue;
-        if (!site) site = p;
-        ++st.sites;
-    }
-    if (st.sites != st.expected) { st.result = st.sites ? PatchResult::WrongMatchCount : PatchResult::NotFound; return st; }
+    if (!OfflineCapReady(BootCap())) { st.result = PatchResult::NotFound; return st; }
+    uint8_t* site = sco::Sig("offline.boot_frontend_request");
+    const uint8_t* pu = BootIntoAllSystems() ? sco::Sig("offline.str_megamap_pu_all") + off::kMegaMapPuAllName
+                                             : sco::Sig("offline.str_pu");
+    const uint8_t* scDefault = sco::Sig("offline.str_sc_default");
+    st.sites = 1;
 
     const int32_t relRules = static_cast<int32_t>(scDefault - (site + 7));
     const int32_t relMap   = static_cast<int32_t>(pu - (site + 14));
@@ -142,23 +128,14 @@ static bool BootIntoPURequested() {
     return n > 0 && n < sizeof(value) && (_stricmp(value, "PU") == 0 || _stricmp(value, "PU_All") == 0);
 }
 
-static PatchStatus PatchOfflineDbPath(const Section& text, const Section& rdata) {
+static PatchStatus PatchOfflineDbPath() {
     PatchStatus st;
-    st.expected = 2;
-    const uint8_t* offlineDb = FindCString(rdata, "Libs/OfflineDB");
-    const uint8_t* user      = FindCString(rdata, "%USER%");
-    if (!offlineDb || !user) { st.result = PatchResult::NotFound; return st; }
-
-    uint8_t* sites[2] = {};
-    uint8_t* const end = text.base + text.size - 7;
-    for (uint8_t* p = text.base; p < end; ++p) {
-        p = static_cast<uint8_t*>(memchr(p, 0x4C, static_cast<size_t>(end - p)));
-        if (!p) break;
-        if (p[1] != 0x8D || p[2] != 0x05 || p + 7 + Rel32(p + 3) != offlineDb) continue;
-        if (st.sites < 2) sites[st.sites] = p;
-        ++st.sites;
-    }
-    if (st.sites != st.expected) { st.result = st.sites ? PatchResult::WrongMatchCount : PatchResult::NotFound; return st; }
+    st.expected = off::kOfflineDbSites;
+    if (!OfflineCapReady("offline.db_path")) { st.result = PatchResult::NotFound; return st; }
+    const uint8_t* user = sco::Sig("offline.str_user");
+    uint8_t* sites[off::kOfflineDbSites] = {};
+    for (int k = 1; k <= off::kOfflineDbSites; ++k) sites[k - 1] = SigN("offline.offline_db_path", k);
+    st.sites = off::kOfflineDbSites;
     for (uint8_t* s : sites) {
         const int32_t rel = static_cast<int32_t>(user - (s + 7));
         uint8_t patched[7];
@@ -171,71 +148,51 @@ static PatchStatus PatchOfflineDbPath(const Section& text, const Section& rdata)
     return st;
 }
 
-static PatchStatus PatchOrLoopBound(const Section& text) {
+static PatchStatus PatchOrLoopBound() {
+    namespace feat = sco::game::features;
     PatchStatus st;
-    st.expected = 4;
-    static const char* const kPattern = 
-        "44 8B A4 24 E8 00 00 00 8B 8C 24 D8 00 00 00 FF C3 48 FF C6 49 81 C7 90 00 00 00 "
-        "48 3B 74 24 68 0F 8C ?? ?? ?? ?? 4C 8D 77 78 89 6F 08 41 8B 45 18";
+    st.expected = feat::kOrLoopSites;
+    if (!OfflineCapReady("offline.or_loop_bound")) { st.result = PatchResult::NotFound; return st; }
     static const uint8_t kFixed[] = { 0x41, 0x3B, 0x5D, 0x18, 0x90 };
-    uint8_t* sites[4] = {};
-    st.sites = FindPattern(text, kPattern, sites, 4);
-    if (st.sites != st.expected) { st.result = st.sites ? PatchResult::WrongMatchCount : PatchResult::NotFound; return st; }
+    uint8_t* sites[feat::kOrLoopSites] = {};
+    for (int k = 1; k <= feat::kOrLoopSites; ++k) sites[k - 1] = SigN("offline.or_loop_bound", k);
+    st.sites = feat::kOrLoopSites;
     for (uint8_t* s : sites)
-        if (!WriteCode(s + 27, kFixed, sizeof(kFixed), st.err)) { st.result = PatchResult::ProtectFailed; return st; }
+        if (!WriteCode(s + feat::kOrLoopPatch, kFixed, sizeof(kFixed), st.err)) { st.result = PatchResult::ProtectFailed; return st; }
     st.result = PatchResult::Applied;
-    st.at = sites[0] + 27;
+    st.at = sites[0] + feat::kOrLoopPatch;
     return st;
 }
 
-static PatchStatus PatchAsopShardGate(const Section& text, const Section& rdata) {
+// Needs the handshake patch (g_isOnlineFlag); the rows check that both gates read the byte after it.
+static PatchStatus PatchAsopShardGate() {
     PatchStatus st;
     st.expected = 2;
-    if (!g_isOnlineFlag) { st.result = PatchResult::NotFound; return st; }
-    const uint8_t* persisted = g_isOnlineFlag + 1;
-
-    int n = 0;
-    uint8_t* open = FindUniquePattern(text,
-        "44 89 AD D0 00 00 00 44 38 2D ?? ?? ?? ?? 0F 85 ?? ?? ?? ?? 48 8B 51 08 48 8D 8D D0 00 00 00 E8", n);
-    st.sites += n;
-    uint8_t* valid = FindUniquePattern(text,
-        "80 3D ?? ?? ?? ?? 00 75 ?? 48 8D 44 24 60 C7 44 24 60 E3 00 00 00 48 89 44 24 70 4C 8D 0D", n);
-    st.sites += n;
-    const uint8_t* msg = FindCString(rdata, "Can only perform ASOP operations in the PU.");
-    if (!open || !valid || !msg
-        || open + 14 + Rel32(open + 10) != persisted
-        || valid + 7 + Rel32(valid + 2) != persisted
-        || valid + 34 + Rel32(valid + 30) != msg) {
-        st.result = st.sites > st.expected ? PatchResult::WrongMatchCount : PatchResult::NotFound;
-        return st;
-    }
+    if (!g_isOnlineFlag || !OfflineCapReady("offline.asop_shard_gate")) { st.result = PatchResult::NotFound; return st; }
+    uint8_t* open  = sco::Sig("offline.asop_gate_open") + off::kAsopGateOpenJne;          // jne rel32 (6 bytes)
+    uint8_t* valid = sco::Sig("offline.asop_gate_validation") + off::kAsopGateValidationJne;   // jne rel8
+    st.sites = 2;
 
     uint8_t jmp[6] = { 0xE9, 0, 0, 0, 0, 0x90 };
-    const int32_t rel = Rel32(open + 16) + 1;
+    const int32_t rel = Rel32(open + 2) + 1;
     memcpy(jmp + 1, &rel, sizeof(rel));
     static const uint8_t kJmpShort[] = { 0xEB };
-    if (!WriteCode(open + 14, jmp, sizeof(jmp), st.err)
-        || !WriteCode(valid + 7, kJmpShort, sizeof(kJmpShort), st.err)) {
+    if (!WriteCode(open, jmp, sizeof(jmp), st.err)
+        || !WriteCode(valid, kJmpShort, sizeof(kJmpShort), st.err)) {
         st.result = PatchResult::ProtectFailed;
         return st;
     }
     st.result = PatchResult::Applied;
-    st.at = open + 14;
+    st.at = open;
     return st;
 }
 
-static PatchStatus PatchNoRestrictedAreaImpound(const Section& text, const Section& rdata) {
+static PatchStatus PatchNoRestrictedAreaImpound() {
     PatchStatus st;
     st.expected = 1;
-    uint8_t* f = FindUniquePattern(text,
-        "40 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 38 FE FF FF 48 81 EC C8 02 00 00 33 D2 48 8B F1 E8", st.sites);
-    const uint8_t* msg = FindCString(rdata, "$$: Vehicle '$$' [$$] impounded (or destroyed) by restricted area '$$' [$$]");
-    const uint8_t* tag = FindCString(rdata, "Boundary Violation");
-    if (!f || !msg || !tag || !BytesMatch(f + 0x59, "4C 8D 0D") || f + 0x60 + Rel32(f + 0x5C) != msg
-        || !BytesMatch(f + 0x79, "4C 8D 05") || f + 0x80 + Rel32(f + 0x7C) != tag) {
-        st.result = st.sites > 1 ? PatchResult::WrongMatchCount : PatchResult::NotFound;
-        return st;
-    }
+    if (!OfflineCapReady("offline.no_impound")) { st.result = PatchResult::NotFound; return st; }
+    uint8_t* f = sco::Sig("offline.restricted_area_impound");
+    st.sites = 1;
     static const uint8_t kRet[] = { 0xC3 };
     if (!WriteCode(f, kRet, sizeof(kRet), st.err)) { st.result = PatchResult::ProtectFailed; return st; }
     st.result = PatchResult::Applied;
@@ -243,21 +200,12 @@ static PatchStatus PatchNoRestrictedAreaImpound(const Section& text, const Secti
     return st;
 }
 
-static PatchStatus PatchOfflineMissionServices(const Section& text, const Section& rdata) {
+static PatchStatus PatchOfflineMissionServices() {
     PatchStatus st;
     st.expected = 2;
-    const char* const names[] = { "contract_broker.use_service", "contract_broker.use_online_mission_service" };
-    uint8_t* defaults[2] = {};
-    for (int i = 0; i < 2; ++i) {
-        const uint8_t* name = FindCString(rdata, names[i]);
-        uint8_t* lea = name ? FindRipLea(text, 0x48, 0x8D, 0x15, name) : nullptr;
-        if (!lea || !BytesMatch(lea - 6, "41 B9 01 00 00 00") || !BytesMatch(lea - 0xF, "4C 8D 43")) {
-            st.result = PatchResult::NotFound;
-            return st;
-        }
-        defaults[i] = lea - 6;
-        ++st.sites;
-    }
+    if (!OfflineCapReady("offline.mission_services")) { st.result = PatchResult::NotFound; return st; }
+    uint8_t* defaults[2] = { sco::Sig("offline.use_service_default"), sco::Sig("offline.use_online_mission_service_default") };
+    st.sites = 2;
     static const uint8_t kOff[] = { 0x41, 0xB9, 0x00, 0x00, 0x00, 0x00 };
     for (uint8_t* d : defaults)
         if (!WriteCode(d, kOff, sizeof(kOff), st.err)) { st.result = PatchResult::ProtectFailed; return st; }
@@ -281,51 +229,27 @@ static bool __fastcall StubSameGroup(uintptr_t, const uint64_t* a, const uint64_
 static uintptr_t __fastcall ServicesOrStub(uintptr_t) {
     const uintptr_t env = *reinterpret_cast<const uintptr_t*>(g_servicesGlobal);
     if (env)
-        if (const uintptr_t services = VCall<uintptr_t>(env, 0x18)) return services;
+        if (const uintptr_t services = VCall<uintptr_t>(env, off::kEnvServicesSlot)) return services;
     return reinterpret_cast<uintptr_t>(&g_stubServices);
 }
 
-static PatchStatus PatchSocialGroupQueries(const Section& text) {
+static PatchStatus PatchSocialGroupQueries() {
     PatchStatus st;
-    static const uint8_t kSlotB0[4] = { 0xB0, 0x00, 0x00, 0x00 };
-    uint8_t* sites[64];
-    const uint8_t* global = nullptr;
-    const uint8_t* const end = text.base + text.size - 0xA0;
-    for (uint8_t* p = text.base; p < end; ++p) {
-        if (p[0] != 0x48 || p[1] != 0x8B || p[2] != 0x0D) continue;
-        const uint8_t* call = nullptr;
-        for (const uint8_t* q = p + 7; q < p + 7 + 0x30 && !call; ++q)
-            if (q[0] == 0x48 && q[1] == 0x8B && q[2] == 0x01 && q[3] == 0xFF && q[4] == 0x50 && q[5] == 0x18) call = q + 6;
-        if (!call) continue;
-        const uint8_t* social = nullptr;
-        for (const uint8_t* q = call; q < call + 0x18 && !social; ++q) {
-            if ((q[0] == 0x48 || q[0] == 0x4C) && q[1] == 0x8B && (q[2] & 0xC0) == 0x40 && q[3] == 0x70) social = q + 4;
-            else if (q[0] == 0xFF && (q[1] & 0xF8) == 0x50 && q[2] == 0x70) social = q + 3;
-        }
-        if (!social) continue;
-        bool sameGroup = false;
-        for (const uint8_t* q = social; q < social + 0x50 && !sameGroup; ++q)
-            sameGroup = ((q[0] == 0x48 || q[0] == 0x4C) && q[1] == 0x8B && (q[2] & 0xC0) == 0x80 && !memcmp(q + 3, kSlotB0, 4))
-                     || (q[0] == 0xFF && (q[1] & 0xF8) == 0x90 && !memcmp(q + 2, kSlotB0, 4));
-        if (!sameGroup) continue;
-        const uint8_t* g = p + 7 + Rel32(p + 3);
-        if (global && g != global) { st.result = PatchResult::WrongMatchCount; return st; }
-        global = g;
-        if (st.sites < 64) sites[st.sites] = p;
-        ++st.sites;
-    }
-    st.expected = st.sites;
-    if (!st.sites) { st.result = PatchResult::NotFound; return st; }
-    if (st.sites > 64) { st.result = PatchResult::WrongMatchCount; return st; }
+    st.expected = off::kSocialGroupSites;
+    if (!OfflineCapReady("offline.social_group")) { st.result = PatchResult::NotFound; return st; }
+    uint8_t* sites[off::kSocialGroupSites];
+    for (int k = 1; k <= off::kSocialGroupSites; ++k) sites[k - 1] = SigN("offline.social_group", k);
+    const uint8_t* global = sco::Sig("offline.services_env");
+    st.sites = off::kSocialGroupSites;
     uint8_t* slot = NearData(8);
     if (!slot) { st.result = PatchResult::ProtectFailed; return st; }
     g_servicesGlobal = global;
     for (void*& f : g_envVtable) f = reinterpret_cast<void*>(&StubReturnZero);
     for (void*& f : g_servicesVtable) f = reinterpret_cast<void*>(&StubReturnZero);
     for (void*& f : g_socialVtable) f = reinterpret_cast<void*>(&StubReturnZero);
-    g_envVtable[0x18 / 8] = reinterpret_cast<void*>(&ServicesOrStub);
-    g_servicesVtable[0x70 / 8] = reinterpret_cast<void*>(&StubSocialApi);
-    g_socialVtable[0xB0 / 8] = reinterpret_cast<void*>(&StubSameGroup);
+    g_envVtable[off::kEnvServicesSlot / 8] = reinterpret_cast<void*>(&ServicesOrStub);
+    g_servicesVtable[off::kSocialApiSlot / 8] = reinterpret_cast<void*>(&StubSocialApi);
+    g_socialVtable[off::kSameGroupSlot / 8] = reinterpret_cast<void*>(&StubSameGroup);
     *reinterpret_cast<StubObject**>(slot) = &g_stubEnv;
     for (int i = 0; i < st.sites; ++i) {
         const int64_t rel = slot - (sites[i] + 7);
@@ -338,68 +262,43 @@ static PatchStatus PatchSocialGroupQueries(const Section& text) {
     return st;
 }
 
-static const uint8_t* FindLeaFrom(const Section& text, const uint8_t* target, const uint8_t* from) {
-    const uint8_t* const end = text.base + text.size - 7;
-    for (const uint8_t* p = from; target && p < end; ++p) {
-        p = static_cast<const uint8_t*>(memchr(p, 0x8D, static_cast<size_t>(end - p)));
-        if (!p) break;
-        if (p > text.base && (p[-1] == 0x48 || p[-1] == 0x4C) && (p[1] & 0xC7) == 0x05 && p + 6 + Rel32(p + 2) == target)
-            return p - 1;
-    }
-    return nullptr;
-}
-
-static PatchStatus PatchServiceStreams(const Section& text, const Section& rdata) {
-    static const char* const kServices[] = { "presence::v1::PresenceService", "analytics::v1::AnalyticsService",
-                                           "trace::v1::TraceService", "echo::v1::EchoService" };
+static PatchStatus PatchServiceStreams() {
+    // presence, analytics, trace, echo: echo has two stream functions.
+    static const char* const kStreams[] = { "offline.service_stream.presence", "offline.service_stream.analytics",
+                                            "offline.service_stream.trace", "offline.service_stream.echo.1",
+                                            "offline.service_stream.echo.2" };
     PatchStatus st;
-    st.expected = sizeof(kServices) / sizeof(kServices[0]);
-    int services = 0;
-    for (const char* service : kServices) {
-        char name[256];
-        sprintf_s(name, "auto __cdecl CAsyncClient<class sc::external::services::%s>::CreateClientStream::<lambda_3>::operator ()(const char *) const", service);
-        const uint8_t* s = FindCString(rdata, name);
-        bool found = false;
-        for (const uint8_t* lea = FindLeaFrom(text, s, text.base); lea; lea = FindLeaFrom(text, s, lea + 8)) {
-            DWORD64 base = 0;
-            PRUNTIME_FUNCTION rf = RtlLookupFunctionEntry(reinterpret_cast<DWORD64>(lea), &base, nullptr);
-            uint8_t* fn = rf ? reinterpret_cast<uint8_t*>(base + rf->BeginAddress) : nullptr;
-            if (!fn || lea - fn > 0x200) continue;
-            if (fn[0] == 0xC3) { found = true; continue; }
-            if (!BytesMatch(fn, "48 89 5C 24 18 55 56 57 41 56 41 57")) continue;
-            static const uint8_t kRet[] = { 0xC3 };
-            if (!WriteCode(fn, kRet, sizeof(kRet), st.err)) { st.result = PatchResult::ProtectFailed; return st; }
-            if (!st.at) st.at = fn;
-            found = true;
-        }
-        services += found;
+    st.expected = 4;
+    if (!OfflineCapReady("offline.service_streams")) { st.result = PatchResult::NotFound; return st; }
+    static const uint8_t kRet[] = { 0xC3 };
+    for (const char* row : kStreams) {
+        uint8_t* fn = sco::Sig(row);
+        if (!WriteCode(fn, kRet, sizeof(kRet), st.err)) { st.result = PatchResult::ProtectFailed; return st; }
+        if (!st.at) st.at = fn;
     }
-    st.sites = services;
-    st.result = services ? PatchResult::Applied : PatchResult::NotFound;
+    st.sites = 4;
+    st.result = PatchResult::Applied;
     return st;
 }
 
-static PatchStatus PatchRemoteConsoleLocal(const Section& text, const Section& rdata) {
+static PatchStatus PatchRemoteConsoleLocal() {
     PatchStatus st;
     st.expected = 1;
-    const uint8_t* lea = FindLeaFrom(text, FindCString(rdata, "Remote console listening on: %u\n"), text.base);
-    for (const uint8_t* p = lea ? lea - 0x100 : nullptr; p && p < lea; ++p)
-        if (BytesMatch(p, "33 C9 FF 15 ?? ?? ?? ?? 0F B7 CB 66 89 7C 24 48 89 44 24 4C")) {
-            if (!st.at) st.at = const_cast<uint8_t*>(p);
-            ++st.sites;
-        }
-    if (st.sites != st.expected) { st.result = st.sites ? PatchResult::WrongMatchCount : PatchResult::NotFound; return st; }
+    if (!OfflineCapReady("offline.remote_console")) { st.result = PatchResult::NotFound; return st; }
+    st.at = sco::Sig("offline.remote_console_bind");
+    st.sites = 1;
     static const uint8_t kLocalhost[] = { 0xB8, 0x7F, 0x00, 0x00, 0x01, 0x0F, 0x1F, 0x00 };
     if (!WriteCode(static_cast<uint8_t*>(st.at), kLocalhost, sizeof(kLocalhost), st.err)) { st.result = PatchResult::ProtectFailed; return st; }
     st.result = PatchResult::Applied;
     return st;
 }
 
-static PatchStatus PatchNoProfilerServer(const Section& text) {
+static PatchStatus PatchNoProfilerServer() {
     PatchStatus st;
     st.expected = 1;
-    uint8_t* site = FindUniquePattern(text, "73 ?? 0F 1F 40 00 0F 1F 84 00 00 00 00 00 48 8B BD ?? ?? ?? ?? 0F B7 CE 66 44 89 67 10 44 89 7F 14 FF 15", st.sites);
-    if (!site) { st.result = st.sites ? PatchResult::WrongMatchCount : PatchResult::NotFound; return st; }
+    if (!OfflineCapReady("offline.profiler_server")) { st.result = PatchResult::NotFound; return st; }
+    uint8_t* site = sco::Sig("offline.profiler_listen_branch");
+    st.sites = 1;
     static const uint8_t kJmp[] = { 0xEB };
     if (!WriteCode(site, kJmp, sizeof(kJmp), st.err)) { st.result = PatchResult::ProtectFailed; return st; }
     st.result = PatchResult::Applied;
@@ -426,42 +325,42 @@ bool ApplyOfflinePatches() {
     if (!text.base || !rdata.base) { g_isOnlinePatch.result = PatchResult::NotFound; return false; }
     g_text = text;
     g_rdata = rdata;
-    g_isOnlinePatch = PatchIsOnlineStore(text);
+    g_isOnlinePatch = PatchIsOnlineStore();
     if (g_isOnlinePatch.result == PatchResult::Applied)
-        g_handshakePatch = PatchHandshakeGate(text, rdata);
-    g_megamapCasePatch = PatchMegamapCase(text, rdata);
+        g_handshakePatch = PatchHandshakeGate();
+    g_megamapCasePatch = PatchMegamapCase();
     if (g_isOnlinePatch.result != PatchResult::Applied) return false;
     if (BootIntoPURequested())
-        g_bootIntoPUPatch = PatchBootIntoPU(text, rdata);
-    g_offlineDbPatch = PatchOfflineDbPath(text, rdata);
-    g_orLoopPatch = PatchOrLoopBound(text);
-    g_asopPatch = PatchAsopShardGate(text, rdata);
-    g_noImpoundPatch = PatchNoRestrictedAreaImpound(text, rdata);
-    g_missionServicesPatch = PatchOfflineMissionServices(text, rdata);
-    g_socialGroupPatch = PatchSocialGroupQueries(text);
-    g_serviceStreamsPatch = PatchServiceStreams(text, rdata);
-    g_remoteConsolePatch = PatchRemoteConsoleLocal(text, rdata);
-    g_profilerServerPatch = PatchNoProfilerServer(text);
+        g_bootIntoPUPatch = PatchBootIntoPU();
+    g_offlineDbPatch = PatchOfflineDbPath();
+    g_orLoopPatch = PatchOrLoopBound();
+    g_asopPatch = PatchAsopShardGate();
+    g_noImpoundPatch = PatchNoRestrictedAreaImpound();
+    g_missionServicesPatch = PatchOfflineMissionServices();
+    g_socialGroupPatch = PatchSocialGroupQueries();
+    g_serviceStreamsPatch = PatchServiceStreams();
+    g_remoteConsolePatch = PatchRemoteConsoleLocal();
+    g_profilerServerPatch = PatchNoProfilerServer();
     return true;
 }
 
 void LogOfflinePatches() {
-    LogPatch("offline-force (IsOnline = 0)", g_isOnlinePatch);
-    LogPatch("local handshake (accept frontend connection)", g_handshakePatch);
-    LogPatch("megamap keeps record-name case", g_megamapCasePatch);
+    LogOfflinePatch("offline-force (IsOnline = 0)", g_isOnlinePatch, "offline.force_offline");
+    LogOfflinePatch("local handshake (accept frontend connection)", g_handshakePatch, "offline.handshake");
+    LogOfflinePatch("megamap keeps record-name case", g_megamapCasePatch, "offline.megamap_case");
     if (g_bootIntoPUPatch.result == PatchResult::NotRun)
         Log("[-] boot into PU: off (set SC_OFFLINE_BOOT_MAP=PU to enable)");
     else if (BootIntoAllSystems())
-        LogPatch("boot into PU, every system (frontend request -> PU_All/SC_Default)", g_bootIntoPUPatch);
+        LogOfflinePatch("boot into PU, every system (frontend request -> PU_All/SC_Default)", g_bootIntoPUPatch, BootCap());
     else
-        LogPatch("boot into PU (frontend request -> PU/SC_Default)", g_bootIntoPUPatch);
-    LogPatch("offline player data from %USER%\\default_1.xml", g_offlineDbPatch);
-    LogPatch("query OR-loop bound fix", g_orLoopPatch);
-    LogPatch("ASOP / fleet manager allowed on offline shard", g_asopPatch);
-    LogPatch("landing zones don't destroy spawned ships", g_noImpoundPatch);
-    LogPatch("offline contract broker + mission service (mobiGlas contracts)", g_missionServicesPatch);
-    LogPatch("party/group checks without the social service (ramming, hostility, law)", g_socialGroupPatch);
-    LogPatch("no reconnecting service streams (presence, analytics, trace, echo)", g_serviceStreamsPatch);
-    LogPatch("remote console only on this PC (127.0.0.1)", g_remoteConsolePatch);
-    LogPatch("no Optick profiler server (TCP 31318 closed)", g_profilerServerPatch);
+        LogOfflinePatch("boot into PU (frontend request -> PU/SC_Default)", g_bootIntoPUPatch, BootCap());
+    LogOfflinePatch("offline player data from %USER%\\default_1.xml", g_offlineDbPatch, "offline.db_path");
+    LogOfflinePatch("query OR-loop bound fix", g_orLoopPatch, "offline.or_loop_bound");
+    LogOfflinePatch("ASOP / fleet manager allowed on offline shard", g_asopPatch, "offline.asop_shard_gate");
+    LogOfflinePatch("landing zones don't destroy spawned ships", g_noImpoundPatch, "offline.no_impound");
+    LogOfflinePatch("offline contract broker + mission service (mobiGlas contracts)", g_missionServicesPatch, "offline.mission_services");
+    LogOfflinePatch("party/group checks without the social service (ramming, hostility, law)", g_socialGroupPatch, "offline.social_group");
+    LogOfflinePatch("no reconnecting service streams (presence, analytics, trace, echo)", g_serviceStreamsPatch, "offline.service_streams");
+    LogOfflinePatch("remote console only on this PC (127.0.0.1)", g_remoteConsolePatch, "offline.remote_console");
+    LogOfflinePatch("no Optick profiler server (TCP 31318 closed)", g_profilerServerPatch, "offline.profiler_server");
 }
