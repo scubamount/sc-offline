@@ -397,6 +397,13 @@ static int EnsureFleetShips() {
 static void __fastcall Hook_EntitlementsResult(uintptr_t self, uintptr_t result) {
     bool failed = false;
     __try { failed = Rd<uint8_t>(result) != 1; } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    if (failed && Fleet_UseGameList()) {
+        static volatile LONG told = 0;
+        if (!InterlockedExchange(&told, 1))
+            Log("[fleet] asop_fleet_list = game: the game's own ship list, not ships.txt (its entitlement query failed, so it lists nothing; asop_fleet_list = ships lists ships.txt)");
+        g_origEntitlementsResult(self, result);
+        return;
+    }
     const int n = failed ? EnsureFleetShips() : 0;
     if (!n) { g_origEntitlementsResult(self, result); return; }
     struct { uint8_t ok; uint8_t pad[7]; uint8_t* begin; uint8_t* end; uint8_t* cap; uint8_t spare[64]; } fake = {};

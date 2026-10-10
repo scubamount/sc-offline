@@ -155,6 +155,9 @@ LiftRequestFn    g_liftOpen = nullptr;
 LiftHandlerFn    g_liftHandlerOrig = nullptr;
 
 uint8_t*   g_open = nullptr;              // OnRequestOpen
+volatile uintptr_t g_openKiosk = 0;       // the last opened kiosk (diagnostics)
+volatile uintptr_t g_openKioskVtable = 0;
+volatile DWORD     g_openKioskAt = 0;
 uintptr_t* g_gameSlot = nullptr;          // &gEnv->pGame
 size_t     g_callerSlot = 0;              // pGame vtable offset of the caller lookup
 uint8_t    g_inventoryKind = 0;
@@ -452,11 +455,18 @@ bool ReadKioskStation(uintptr_t kiosk, uint64_t& atc, uint32_t& location) {
 }
 
 // OnRequestOpen: after it, the kiosk holds its ATC and the player's location there (doc 5.2, 12.5).
+uintptr_t ReadVtable(uintptr_t object);
+
 uintptr_t __fastcall Hook_OnRequestOpen(uintptr_t kiosk, uintptr_t a2, uintptr_t a3, uintptr_t a4) {
     const uintptr_t r = g_openOrig(kiosk, a2, a3, a4);
     uint64_t atc = 0;
     uint32_t location = 0;
     if (On(kTerminal) && ReadKioskStation(kiosk, atc, location) && atc && location) RememberStation(atc, location);
+    if (On(kTerminal)) {
+        g_openKioskVtable = ReadVtable(kiosk);
+        g_openKiosk = kiosk;
+        g_openKioskAt = GetTickCount();
+    }
     return r;
 }
 
@@ -1165,6 +1175,79 @@ void EnsureDeliverySystem(DWORD now) {
     logged |= ok;
 }
 
+// ---- terminal diagnostics ----------------------------------------------------------------------
+//
+// What the open terminal's screen is bound to, read from CEntityComponentShipInsuranceProvider on
+// 4.10.196.36804 (log only; a fault or a moved field just stops the lines). Kiosk bindings: a field
+// object per binding, bool value at +0x41, int at +0x48. Rows: vector at kiosk +0xF0 / +0xF8,
+// 0x16C0 bytes per row (UpdateBindingsElement), same field layout (InsuredVehicle table).
+struct TerminalSnapshot {
+    int64_t rows, selected, deliverySystem, capacity, used;
+    int64_t deliverable, deliverOk;           // rows with CanBeDelivered, and with it not disabled
+    int64_t info, canDeliver, deliverDisabled, canRetrieve, retrieveDisabled, canClaim, claimDisabled,
+            claimedThisPatch, sameLocation, matchesFilter;   // the selected row (or row 0)
+};
+
+bool ReadTerminal(uintptr_t kiosk, TerminalSnapshot& s) {
+    __try {
+        const uintptr_t begin = Rd<uintptr_t>(kiosk + 0xF0), end = Rd<uintptr_t>(kiosk + 0xF8);
+        if (end < begin || (end - begin) % 0x16C0 || (end - begin) / 0x16C0 > 8192) return false;
+        s.rows = static_cast<int64_t>((end - begin) / 0x16C0);
+        s.selected = Rd<int64_t>(kiosk + 0x278 + 0x48);        // CurrentVehicleIndex
+        s.deliverySystem = Rd<int64_t>(kiosk + 0x198 + 0x48);  // DeliverySystemSetup
+        s.capacity = Rd<int64_t>(kiosk + 0x400 + 0x48);        // StorageCapacity
+        s.used = Rd<int64_t>(kiosk + 0x450 + 0x48);            // StorageUsed
+        s.deliverable = s.deliverOk = 0;
+        for (uintptr_t e = begin; e < end; e += 0x16C0) {
+            const bool can = Rd<uint8_t>(e + 0x4D0 + 0x41) != 0;
+            s.deliverable += can;
+            s.deliverOk += can && !Rd<uint8_t>(e + 0x518 + 0x41);
+        }
+        const int64_t pick = s.selected >= 0 && s.selected < s.rows ? s.selected : 0;
+        const uintptr_t e = begin + static_cast<uintptr_t>(pick) * 0x16C0;
+        if (!s.rows) return true;
+        s.info = Rd<int64_t>(e + 0x138 + 0x48);                // Information (13 = Deliverable)
+        s.canDeliver = Rd<uint8_t>(e + 0x4D0 + 0x41);
+        s.deliverDisabled = Rd<uint8_t>(e + 0x518 + 0x41);
+        s.canRetrieve = Rd<uint8_t>(e + 0x368 + 0x41);
+        s.retrieveDisabled = Rd<uint8_t>(e + 0x3B0 + 0x41);
+        s.canClaim = Rd<uint8_t>(e + 0x560 + 0x41);
+        s.claimDisabled = Rd<uint8_t>(e + 0x5A8 + 0x41);
+        s.claimedThisPatch = Rd<uint8_t>(e + 0x7E8 + 0x41);
+        s.sameLocation = Rd<uint8_t>(e + 0xAC0 + 0x41);
+        s.matchesFilter = Rd<uint8_t>(e + 0xC30 + 0x41);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// Every 500 ms for 3 minutes after a terminal opens: one line whenever what it shows changes
+// (a row click changes "selected").
+void WatchTerminal(DWORD now) {
+    static DWORD last = 0;
+    static TerminalSnapshot shown = {};
+    static uintptr_t shownKiosk = 0;
+    static int lines = 0;
+    const uintptr_t kiosk = g_openKiosk;
+    if (!kiosk || now - g_openKioskAt > 180000 || now - last < 500 || lines > 300) return;
+    last = now;
+    if (ReadVtable(kiosk) != g_openKioskVtable) return;   // the terminal streamed out
+    TerminalSnapshot s = {};
+    if (!ReadTerminal(kiosk, s)) return;
+    if (kiosk == shownKiosk && !memcmp(&s, &shown, sizeof(s))) return;
+    shown = s;
+    shownKiosk = kiosk;
+    ++lines;
+    Log("[asop] terminal: %lld rows, %lld CanBeDelivered (%lld not disabled), selected %lld, DeliverySystemSetup %lld, storage %lld/%lld",
+        s.rows, s.deliverable, s.deliverOk, s.selected, s.deliverySystem, s.used, s.capacity);
+    if (s.rows)
+        Log("[asop] terminal row %lld: info %lld, CanBeDelivered %lld IsDeliverDisabled %lld, CanBeRetrieved %lld IsRetrieveDisabled %lld, "
+            "CanBeClaimed %lld IsClaimDisabled %lld, HasBeenClaimedInCurrentPatch %lld, IsOnSameLocation %lld, matchesFilter %lld",
+            s.selected >= 0 && s.selected < s.rows ? s.selected : 0, s.info, s.canDeliver, s.deliverDisabled, s.canRetrieve,
+            s.retrieveDisabled, s.canClaim, s.claimDisabled, s.claimedThisPatch, s.sameLocation, s.matchesFilter);
+}
+
 // Swaps pGame's caller-lookup slot once pGame exists (doc 6).
 void InstallCallerLookup() {
     static bool done = false;
@@ -1252,6 +1335,17 @@ bool Fleet_IsSettlingStoredId(uint64_t id) {
 }
 
 bool AsopEnabled() { return g_enabled; }
+
+bool Fleet_UseGameList() {
+    // asop_fleet_list = game|ships in sc-offline.ini (SC_OFFLINE_ASOP_FLEET_LIST); unset = game.
+    static int cached = -1;
+    if (cached < 0) {
+        char v[16];
+        const DWORD n = GetEnvironmentVariableA("SC_OFFLINE_ASOP_FLEET_LIST", v, sizeof(v));
+        cached = n && n < sizeof(v) && _stricmp(v, "ships") == 0 ? 0 : 1;
+    }
+    return g_enabled && cached == 1;
+}
 
 bool AsopCapabilityRows(const char* capability, char* why, size_t n) {
     size_t count = 0;
@@ -1385,6 +1479,7 @@ void ProcessFleet(DWORD now) {
     if (On(kCaller)) InstallCallerLookup();
     if (On(kClaim)) ShortenClaimTimeout();
     if (On(kDeliver)) EnsureDeliverySystem(now);
+    if (On(kTerminal)) WatchTerminal(now);
 
     // What the hooks queued.
     std::vector<DeliverRequest> delivers;

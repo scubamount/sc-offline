@@ -10,6 +10,9 @@
 // sc-offline.ini `asop = on|off` (SC_OFFLINE_ASOP from the launcher; unset = on). Off: nothing of
 // this module or of services.cpp's hangar module is installed.
 bool AsopEnabled();
+// sc-offline.ini `asop_fleet_list = game|ships` (SC_OFFLINE_ASOP_FLEET_LIST; unset = game). True with
+// ASOP on and `game`: hooks.cpp leaves the game's own ship list alone instead of listing ships.txt.
+bool Fleet_UseGameList();
 
 // The rows of one sco::game::asop capability ("asop.terminal") are all OK. Otherwise false, with
 // "needs <row> (<STATE>)" in why.

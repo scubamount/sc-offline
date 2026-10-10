@@ -62,6 +62,7 @@ When one of these files is present, `src/contracts.cpp` or `src/spawner.cpp` cha
 | `SC_OFFLINE_START_SHIP` | The ship you start in, from `start_ship` |
 | `SC_OFFLINE_START` | From `start`. `Daymar` starts you over Daymar |
 | `SC_OFFLINE_PLUGINS` | From `plugins`: `on` loads plugins from `plugins\` beside the ship list (`data\plugins`); anything else is off |
+| `SC_OFFLINE_ASOP_FLEET_LIST` | From `asop_fleet_list`: `ships` lists `ships.txt` at the terminals; unset or anything else leaves the game's own list (with `asop` on) |
 | `SC_OFFLINE_ASOP` | From `asop`: `off` (or `0`, `no`, `false`) leaves the ship terminals, hangars and ATC alone; unset or anything else is on |
 | `SC_OFFLINE_SHIPS_FILE` | Where the ship list is read from |
 | `SC_OFFLINE_SPAWN_FILE` | Where the F7 position is stored |
