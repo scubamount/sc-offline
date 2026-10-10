@@ -11,7 +11,6 @@
 // The Crew tab (crew_ui.cpp) still runs on spawner.cpp's seat code; CrewTabTick keeps that going.
 #include "builtins.h"
 #include "tabs.h"
-#include "../version.h"
 #include "sco_api.h"
 #include "sc_actors.h"
 #include "sc_spatial.h"

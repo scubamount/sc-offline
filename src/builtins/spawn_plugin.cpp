@@ -12,8 +12,6 @@
 #include "tabs.h"
 #include "mover.h"
 #include "../spawner.h"
-#include "../version.h"
-#include "sco/runtime.h"
 #include <cstdio>
 #include <cstring>
 

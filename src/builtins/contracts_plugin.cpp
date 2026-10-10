@@ -10,7 +10,6 @@
 #include "builtin_store.h"
 #include "../contracts.h"
 #include "../teleport.h"
-#include "../version.h"
 #include <cstdio>
 
 namespace {

@@ -1,0 +1,36 @@
+# src/builtins/ includes that are not in the SDK zip (tools/sdk-headers.py reads this).
+#
+# Format: header | files (comma-separated path globs) | reason. One line per header, a reason on every line.
+# The header is named by where it lives: src/<path> for the product's own, the include as written for
+# sco-core's internal headers. A header or file pattern that no longer matches fails the gate, so this
+# list can only shrink: delete a line the moment its includes are gone.
+#
+# Not a way to add a dependency. A new built-in include of a non-SDK header fails CI; the way out is a
+# game.* service or a built-in-local header, and only what the SDK cannot express yet is listed here.
+# build_plugin.cpp, build_ui.cpp and teleport_plugin.cpp appear only until the build/teleport PR (which
+# owns them) lands.
+sco/plugins.h | builtins.h | the Builtin registration type (id + query/load/unload table): built-ins load through the host kit, not as a DLL, so the SDK has no form for it
+src/version.h | build_plugin.cpp, builtins.h, teleport_plugin.cpp | SCO_VERSION, which each built-in reports in its sco_plugin_info; no SDK call returns the product version. Every built-in but the two sibling-owned files gets it through builtins.h
+src/common.h | builtin_store.h, mining_plugin.cpp, titanlink/titanlink_overlay.cpp, titanlink/titanlink_plugin.cpp, voxel_bridge/voxel_plugin.cpp | the product's Log(), Rd<> and Section helpers; an SDK plugin logs through api->log, which these helpers (storage wrapper, bridges, mining) have no plugin handle for
+src/menu.h | ammo_plugin.cpp, build_plugin.cpp, build_ui.cpp, crew_ui.cpp, loadout_plugin.cpp, loadout_ui.cpp, multiplayer_plugin.cpp, npc_ui.cpp, quantum_ui.cpp, spawn_ui.cpp | the menu shell's shared state: Menu_Set* toggles, the spawn options and the status line; sco_ui.h has nowhere to hold it
+src/menu_ui.h | build_ui.cpp, crew_ui.cpp, loadout_ui.cpp, multiplayer_ui.cpp, npc_ui.cpp, quantum_ui.cpp, spawn_ui.cpp, titanlink/titanlink_ui.cpp, voxel_bridge/voxel_ui.cpp | the menu shell's look and widgets (SectionHeading, Hint, PrimaryButton, kMuted); sco_ui.h gives a tab a draw callback, not the product's widgets
+src/teleport.h | ammo_plugin.cpp, build_plugin.cpp, contracts_plugin.cpp, crew_ui.cpp, loadout_plugin.cpp, mining_plugin.cpp, multiplayer_plugin.cpp, quantum_plugin.cpp, teleport_plugin.cpp, voxel_bridge/voxel_plugin.cpp | g_tp, the resolved entity-system pointers ticks and tabs read directly; game.entities and game.actors cover only some of those reads
+src/spawner.h | crew_ui.cpp, loadout_ui.cpp, mining_plugin.cpp, spawn_plugin.cpp, voxel_bridge/voxel_plugin.cpp | the spawner engine (ship list, ProcessShipMenu, ProcessCrew, ActorsCapability); game.vehicles/game.actors/game.entities cover the commands, not the engine or its tabs
+src/build.h | build_plugin.cpp, loadout_ui.cpp, teleport_plugin.cpp, voxel_bridge/voxel_plugin.cpp | build mode's engine (ProcessBuild, PlaceNearPlayer, GroundRay) in src/build.cpp, which the build/teleport PR owns
+src/ammo.h | ammo_plugin.cpp | the magazine-setter hook and tick (src/ammo.cpp); no game.* service writes ammo (creative/cheats stay for the same reason)
+src/contracts.h | contracts_plugin.cpp | the contracts engine (src/contracts.cpp: mission system, contract broker); no game.* service for missions
+src/loadout.h | loadout_plugin.cpp | the gear loader (src/loadout.cpp); no game.* service for inventories
+src/outfits.h | loadout_plugin.cpp | the outfit loader tick (src/outfits.cpp); no game.* service for inventories
+src/quantum.h | quantum_plugin.cpp | the quantum drive and boost (src/quantum.cpp); no game.* service for quantum travel
+src/travel.h | quantum_plugin.cpp, quantum_ui.cpp | the location teleporter's places and tick (src/travel.cpp), read by the quantum built-in and its tab
+src/npc.h | multiplayer_plugin.cpp, voxel_bridge/voxel_plugin.cpp | src/npc.cpp's tracking and removal (TrackSpawnedNpc, RemoveEntityById), still called by multiplayer and the voxel bridge; the npc built-in itself already uses game.actors
+src/cvars.h | loadout_ui.cpp, titanlink/titanlink_plugin.cpp | game cvar read/write and the Squadron 42 settings (src/cvars.cpp); no game.* service for cvars
+src/patches.h | mining_plugin.cpp | OfflineCapReady/LogOfflinePatch (src/patches.cpp): mining checks the offline.* capability rows through it
+src/hotkeys.h | teleport_plugin.cpp | kReservedChords, used by teleport_plugin.cpp, which the sibling teleport PR owns
+sco/runtime.h | teleport_plugin.cpp | teleport_plugin.cpp only, and nothing from it appears used; the sibling teleport PR owns that file and should drop the include
+sco/caps.h | mining_plugin.cpp | mining_plugin.cpp: sco::caps::SetFromSignatures publishes the 'mining' capability from the game.mining rows; the SDK has no row API
+sco/game/mining.h | mining_plugin.cpp | mining_plugin.cpp: the game.mining row table (cell function, cell flags); it is rows plus a detour, not an SDK service
+sco/hook.h | mining_plugin.cpp | mining_plugin.cpp: sco::hook::InstallDetour on the cell function; the SDK has no hook API
+sco/signatures.h | mining_plugin.cpp | mining_plugin.cpp: sco::Sig, the resolved address of the game.mining row; the SDK has no row API
+sco/net/session.h | multiplayer_plugin.cpp | sco::net::Host/Join/Leave/GetState and the LAN-scope helpers; sco_net.h's table covers messaging and peers, not session control
+sco/game/services.h | mover.h | mover.h: RegisterPlayerVehicle is game-pack-internal (no SDK form); ZoneOfEntity/PoseToZone have one in sc_spatial.h but are called outside a plugin load, with no api to query it from

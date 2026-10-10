@@ -4,6 +4,7 @@
 // in a table instead of exported from the DLL. StartHostKit hands kBuiltins to sco::app::Start,
 // which loads them before any plugin folder, with plugins on or off.
 #include "sco/plugins.h"
+#include "../version.h"   // SCO_VERSION: every built-in reports it in its sco_plugin_info
 #include <cstdint>
 #include <cstring>
 

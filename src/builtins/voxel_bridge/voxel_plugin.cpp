@@ -25,7 +25,6 @@
 #include "../../npc.h"
 #include "../../spawner.h"
 #include "../../teleport.h"
-#include "../../version.h"
 #include <sc_spatial.h>
 #include <sco_ipc.h>
 #include <cmath>

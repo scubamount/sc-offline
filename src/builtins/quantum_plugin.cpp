@@ -13,7 +13,6 @@
 #include "../quantum.h"
 #include "../teleport.h"
 #include "../travel.h"
-#include "../version.h"
 #include <cstdio>
 
 namespace {

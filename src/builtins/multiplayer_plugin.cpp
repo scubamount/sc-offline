@@ -31,7 +31,6 @@
 #include "../menu.h"
 #include "../npc.h"
 #include "../teleport.h"
-#include "../version.h"
 #include <cmath>
 #include <cstddef>
 #include <cstdio>

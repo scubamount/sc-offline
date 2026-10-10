@@ -10,7 +10,6 @@
 #include "../ammo.h"
 #include "../menu.h"
 #include "../teleport.h"
-#include "../version.h"
 #include <cstdio>
 
 namespace {

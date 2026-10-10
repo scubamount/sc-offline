@@ -47,7 +47,8 @@ jobs:
           echo "src/third_party/imgui and external/sco-core/sdk/third_party/imgui match"
 
   # Its own job, not a step of `check`: `build` waits for `check`, so a failing scan gate there
-  # would also hide whether the sources compile. The two answers are independent.
+  # would also hide whether the sources compile. The two answers are independent. Like every job
+  # here it runs on pull requests and on each push to main, so a green main shows the gate holds.
   no-scans:
     runs-on: ubuntu-24.04
     steps:
@@ -57,6 +58,21 @@ jobs:
 
       - name: Zero raw pattern scans under src/
         run: tools/no-scans.sh
+
+  # src/builtins/ is a consumer of the sco SDK: it may include only the SDK zip's public headers and
+  # its own files. The header list comes from external/sco-core/sdk/package.py (hence the submodule);
+  # the exceptions, one reason each, are in tools/sdk-headers-allow.txt. Its own job for the same
+  # reason as no-scans.
+  sdk-headers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - name: Built-ins include only SDK headers
+        run: python3 tools/sdk-headers.py
 
   build:
     needs: check

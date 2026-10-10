@@ -9,7 +9,7 @@
 #include "sco_api.h"
 #include "sc_actors.h"
 #include "sc_spatial.h"
-#include "sco/plugins.h"
+#include "builtins.h"
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>

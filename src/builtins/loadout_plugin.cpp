@@ -11,7 +11,6 @@
 #include "../menu.h"
 #include "../outfits.h"
 #include "../teleport.h"
-#include "../version.h"
 #include <cstdio>
 
 namespace {

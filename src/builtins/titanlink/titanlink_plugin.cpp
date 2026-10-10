@@ -21,7 +21,6 @@
 #include "../tabs.h"
 #include "../../common.h"
 #include "../../cvars.h"
-#include "../../version.h"
 #include <sc_spatial.h>
 #include <tlhelp32.h>
 #include <cmath>
