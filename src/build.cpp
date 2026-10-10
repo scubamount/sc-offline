@@ -30,6 +30,10 @@ static uintptr_t g_entityRayProxy = 0, g_entitySkipAdd = 0;
 
 static uintptr_t SigAddr(const char* id) { return reinterpret_cast<uintptr_t>(sco::Sig(id)); }
 
+// The camera's position and rotation offsets are checked by sco-core's build.camera_fields row,
+// in the code the game's own teleport-to-camera reads them with.
+static bool g_cameraOk = false;
+
 // The addresses come from sco-core's build.* rows (sco/game/world.h).
 bool ResolveBuildApi(const Section&, const Section&) {
     if (WorldCapability("build.ground_ray")) {
@@ -48,6 +52,8 @@ bool ResolveBuildApi(const Section&, const Section&) {
     } else {
         Log("[build] entity move/rotate functions not found; the preview won't follow the camera (see the [core] lines in mod.log)");
     }
+    g_cameraOk = WorldCapability("build.camera");
+    if (!g_cameraOk) Log("[build] camera fields not confirmed; build mode can't aim (see the [core] lines in mod.log)");
     if (WorldCapability("build.free_cam")) {
         g_freeCamOn   = reinterpret_cast<FreeCamOnFn>(sco::Sig("build.free_cam_on"));
         g_freeCamOff  = reinterpret_cast<FreeCamOffFn>(sco::Sig("build.free_cam_off"));
@@ -254,9 +260,9 @@ static bool Target(double reach, double yaw, double lift, uint64_t previewId, do
     if (!GetLocalPlayer(actor, entity)) return false;
     const uintptr_t cam = Rd<uintptr_t>(actor + 0x208);
     const uintptr_t zone = VCall<uintptr_t>(entity, 0x6B8);
-    if (!cam || !zone) return false;
-    const double* p = reinterpret_cast<const double*>(cam + 0x6D18);
-    const float*  q = reinterpret_cast<const float*>(cam + 0x6D30);
+    if (!cam || !zone || !g_cameraOk) return false;
+    const double* p = reinterpret_cast<const double*>(cam + sco::game::world::kCameraPosition);
+    const float*  q = reinterpret_cast<const float*>(cam + sco::game::world::kCameraRotation);
     const double fwd[3] = { 2.0 * (q[0] * q[1] - q[3] * q[2]),
                             1.0 - 2.0 * (q[0] * q[0] + q[2] * q[2]),
                             2.0 * (q[1] * q[2] + q[3] * q[0]) };
