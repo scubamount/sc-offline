@@ -4,6 +4,7 @@
 #include "teleport.h"
 #include "hooks.h"
 #include "menu.h"
+#include "sco/game/missions.h"
 #include "world_caps.h"
 #include <share.h>
 #include <cstring>
@@ -133,10 +134,10 @@ static void AddOurScripts() {
         return;
     }
     const uintptr_t manager = VCall<uintptr_t>(subsumption, 0xA0);
-    const uint8_t* loadAll = manager ? reinterpret_cast<const uint8_t*>(Rd<uintptr_t>(Rd<uintptr_t>(manager) + 0x48)) : nullptr;
-    if (!loadAll || !BytesMatch(loadAll + 0x32, "48 8B 4B")) { Log("[missions] the mission manager's script library wasn't found"); return; }
-    const uintptr_t library = Rd<uintptr_t>(manager + loadAll[0x35]);
-    if (!library) { Log("[missions] the script library isn't there yet"); return; }
+    // sco-core's game pack finds it (sco/game/missions.h): the reads and the canary live there.
+    const char* why = nullptr;
+    const uintptr_t library = sco::game::missions::ScriptLibrary(manager, &why);
+    if (!library) { Log("[missions] %s", why); return; }
 
     uint8_t* slot = reinterpret_cast<uint8_t*>(Rd<uintptr_t>(system) + kLoadXmlFileSlot);
     if (!g_loadXmlFileOrig) {
