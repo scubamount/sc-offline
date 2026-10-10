@@ -47,7 +47,8 @@ jobs:
           echo "src/third_party/imgui and external/sco-core/sdk/third_party/imgui match"
 
   # Its own job, not a step of `check`: `build` waits for `check`, so a failing scan gate there
-  # would also hide whether the sources compile. The two answers are independent.
+  # would also hide whether the sources compile. The two answers are independent. Like every job
+  # here it runs on pull requests and on each push to main, so a green main shows the gate holds.
   no-scans:
     runs-on: ubuntu-24.04
     steps:
@@ -57,6 +58,21 @@ jobs:
 
       - name: Zero raw pattern scans under src/
         run: tools/no-scans.sh
+
+  # src/builtins/ is a consumer of the sco SDK: it may include only the SDK zip's public headers and
+  # its own files. The header list comes from external/sco-core/sdk/package.py (hence the submodule);
+  # the exceptions, one reason each, are in tools/sdk-headers-allow.txt. Its own job for the same
+  # reason as no-scans.
+  sdk-headers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - name: Built-ins include only SDK headers
+        run: python3 tools/sdk-headers.py
 
   build:
     needs: check
@@ -148,6 +164,17 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      # The creative plugin's DLL (plugins/creative, built from the SDK's headers only). Its plugin.ini
+      # and the `disabled` marker are tracked under data/plugins/creative, so the release's
+      # `git ls-files data` copy ships them; the release job adds this DLL beside them.
+      - name: Upload creative plugin
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: creative-plugin
+          path: build/data/plugins/creative/creative.dll
+          if-no-files-found: error
+          retention-days: 30
+
       # Test plugins for in-game checks (tools/test-plugins). Never part of a release.
       - name: Upload test plugins
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -217,6 +244,12 @@ jobs:
           name: dinput8-release
           path: built
 
+      - name: Download creative plugin artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: creative-plugin
+          path: built-creative
+
       # The player download: everything to play, in one folder, with the DLL CI just built.
       # manifest.json (#31) lists every other file in the folder with its SHA-256; the launcher's
       # self-update copies only listed files whose hash matches. Writing it fails when the tag
@@ -233,6 +266,10 @@ jobs:
           cp launcher/sc-offline.ini launcher/sc-offline.sh README.md CHANGELOG.md LICENSE "stage/$pkg/"
           git ls-files -z docs | xargs -0 -r cp --parents -t "stage/$pkg/"
           git ls-files -z data | xargs -0 cp --parents -t "stage/$pkg/"
+          # The creative plugin: its DLL from CI next to the tracked plugin.ini and `disabled` marker
+          # (off until the player turns it on in the launcher's Plugins page).
+          cp built-creative/creative.dll "stage/$pkg/data/plugins/creative/"
+          for f in plugin.ini disabled creative.dll; do test -f "stage/$pkg/data/plugins/creative/$f"; done
           chmod +x "stage/$pkg/sc-offline.sh"
           python3 tools/release-manifest.py write "stage/$pkg" --tag "$TAG" --commit "$SHA" --version-h src/version.h
           (cd stage && zip -qrX "../$pkg.zip" "$pkg")

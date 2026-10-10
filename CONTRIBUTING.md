@@ -24,6 +24,7 @@ Questions and ideas: open an issue or ask in the [Discord](https://discord.gg/NJ
 3. Build and check as described in [docs/build.md](docs/build.md):
    - Windows: build **Release** x64 with CMake (Visual Studio opens the folder, or `cmake` from the command line).
    - macOS or Linux: `tools/check.sh` must report `0 new` diagnostics. It isn't a build; CI's MSVC build is the real check.
+   - `python3 tools/sdk-headers.py` must pass if you touched `src/builtins/`: built-ins include only SDK headers (see [docs/build.md](docs/build.md#include-and-scan-gates)).
    - Touching the self-update: run `tools/update-test/run.sh` under Wine (see [docs/build.md](docs/build.md#self-update-tests-under-wine)).
 4. Test in game if you can, and say in the PR what you tested and what you didn't.
 5. Update the docs your change affects (`README.md`, `docs/`, `sc-offline.ini` comments) in the same PR.

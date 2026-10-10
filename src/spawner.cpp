@@ -29,8 +29,6 @@ using ForceDelinkFn     = void(__fastcall*)(uintptr_t actorLink);
 using IsLinkedFn        = bool(__fastcall*)(uintptr_t actor);
 using FindByNameFn      = uint64_t*(__fastcall*)(uintptr_t entitySystem, uint64_t* handle, const char* name);
 using ToggleFlightReadyFn = void(__fastcall*)(uintptr_t entitySystem, uintptr_t dashboard, const void* callback);
-using RequestFlyModeFn  = uint16_t(__fastcall*)(uintptr_t actionHandler, int mode);
-using SetGodModeFn      = void(__fastcall*)(uintptr_t godModeState, uint8_t state);
 
 struct SpawnApi {
     bool              ok = false;
@@ -50,11 +48,6 @@ struct SpawnApi {
     IsLinkedFn        isLinked = nullptr;
     FindByNameFn      findEntityByName = nullptr;
     ToggleFlightReadyFn toggleFlightReady = nullptr;
-    RequestFlyModeFn  requestFlyMode = nullptr;
-    uintptr_t*        gameCVars = nullptr;
-    uint32_t          flySpeedOffset = 0;
-    SetGodModeFn      setGodMode = nullptr;
-    uint32_t          godModeByte = 0;
     uintptr_t*        system = nullptr;
     int32_t           pathMgrSlot = 0, pathIdSlot = 0, attrSetSlot = 0;
     uint32_t          (__fastcall* attrTypeId)() = nullptr;
@@ -129,18 +122,6 @@ bool ResolveSpawnApi(const Section&, const Section&) {
 
     if (ActorsCapability("spawn.flight_ready", "ship", "Flight Ready event (will press R instead)"))
         g_sp.toggleFlightReady = Row<ToggleFlightReadyFn>("spawn.toggle_flight_ready");
-
-    if (ActorsCapability("spawn.fly_mode", "noclip", "noclip"))
-        g_sp.requestFlyMode = Row<RequestFlyModeFn>("spawn.request_fly_mode");
-    if (ActorsCapability("spawn.fly_speed", "noclip", "fly speed setting (speed stays at the game's default)")) {
-        g_sp.gameCVars      = Row<uintptr_t*>("spawn.game_cvars");
-        g_sp.flySpeedOffset = static_cast<uint32_t>(Rel32(sco::Sig("spawn.fly_speed_scaler") + actors::kFlySpeedDisp));
-    }
-
-    if (ActorsCapability("spawn.god_mode", "god", "god mode")) {
-        g_sp.setGodMode  = Row<SetGodModeFn>("spawn.set_god_mode");
-        g_sp.godModeByte = static_cast<uint32_t>(Rel32(sco::Sig("spawn.set_god_mode") + actors::kGodModeByteDisp));
-    }
 
     if (ActorsCapability("spawn.prefabs", "build", "prefab spawning (outposts/prefabs)")) {
         const uint8_t* s = sco::Sig("spawn.prefab_site");
@@ -244,25 +225,6 @@ void Menu_RequestSpawn(int index, const MenuSpawnOptions& options) {
     g_spawnRequest.opt.seatName[sizeof(g_spawnRequest.opt.seatName) - 1] = 0;
     ReleaseSRWLockExclusive(&g_menuLock);
 }
-
-static struct { bool modePending; bool on; bool speedPending; float speed; } g_noclipRequest;
-
-void Menu_SetNoclip(bool on, float speed) {
-    AcquireSRWLockExclusive(&g_menuLock);
-    g_noclipRequest = { true, on, true, speed };
-    ReleaseSRWLockExclusive(&g_menuLock);
-}
-
-void Menu_SetNoclipSpeed(float speed) {
-    AcquireSRWLockExclusive(&g_menuLock);
-    g_noclipRequest.speedPending = true;
-    g_noclipRequest.speed = speed;
-    ReleaseSRWLockExclusive(&g_menuLock);
-}
-
-static volatile LONG g_godModeOn = 1;
-
-void Menu_SetGodMode(bool on) { InterlockedExchange(&g_godModeOn, on ? 1 : 0); }
 
 void Menu_GetStatus(char* out, size_t n) {
     if (!sco::GetStatus(out, n)) strncpy_s(out, n, kMenuStatusDefault, _TRUNCATE);
@@ -939,22 +901,6 @@ static const char* TargetShipImIn() {
     return nullptr;
 }
 
-uint64_t TargetShipId() { return g_target.shipId; }
-
-uint64_t PlayerShipId() {
-    __try {
-        uintptr_t actor, entity;
-        if (!GetLocalPlayer(actor, entity)) return 0;
-        const uintptr_t zone = VCall<uintptr_t>(entity, 0x6B8);
-        if (!zone) return 0;
-        const uint64_t id = ZoneId(zone);
-        const uintptr_t ship = EntityById(id);
-        return ship && EntityComponent(ship, "IItemPortContainer") ? id : 0;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
-}
-
 int Menu_GetSeats(MenuSeat* out, int max, char* shipName, size_t shipNameLen) {
     InterlockedExchange(&g_seatPanelSeen, static_cast<LONG>(GetTickCount()));
     AcquireSRWLockShared(&g_menuLock);
@@ -1222,21 +1168,6 @@ static int CollectShipItems(uint64_t shipId, DWORD now) {
     return g_shipItemCount;
 }
 
-int ShipPartComponents(uint64_t shipId, const char* type, uintptr_t* components, char (*names)[96], int max) {
-    if (!shipId) return 0;
-    const int n = CollectShipItems(shipId, GetTickCount());   // cached for 3 s
-    int found = 0;
-    for (int i = 0; i < n && found < max; ++i) {
-        uintptr_t c = 0;
-        __try { c = EntityComponent(g_shipItems[i].entity, type); } __except (EXCEPTION_EXECUTE_HANDLER) { c = 0; }
-        if (!c) continue;
-        components[found] = c;
-        strcpy_s(names[found], 96, g_shipItems[i].name);
-        ++found;
-    }
-    return found;
-}
-
 // --- power ----------------------------------------------------------------------------------
 //
 // Powering on uses the game's own Flight Ready dashboard event (the same thing the R key ends up
@@ -1482,56 +1413,8 @@ static void StartDaymarArrival(const char* shipClass, DWORD now) {
                   shipClass, kArrivalAltitude / 1000);
 }
 
-static void ProcessNoclip() {
-    AcquireSRWLockExclusive(&g_menuLock);
-    const auto req = g_noclipRequest;
-    g_noclipRequest.modePending = g_noclipRequest.speedPending = false;
-    ReleaseSRWLockExclusive(&g_menuLock);
-    if (req.speedPending && g_sp.gameCVars && g_sp.flySpeedOffset) {
-        __try {
-            if (const uintptr_t cvars = *g_sp.gameCVars) *reinterpret_cast<float*>(cvars + g_sp.flySpeedOffset) = req.speed;
-        } __except (EXCEPTION_EXECUTE_HANDLER) {}
-    }
-    if (!req.modePending) return;
-    if (!g_sp.requestFlyMode || !g_sp.actorLink) { SetMenuStatus("Noclip isn't available (fly mode not found)."); return; }
-    const char* err = nullptr;
-    __try {
-        uintptr_t actor, entity;
-        if (!GetLocalPlayer(actor, entity)) err = "you're not spawned yet";
-        else if (const uintptr_t comp = EntityComponent(entity, "Actor")) g_sp.requestFlyMode(g_sp.actorLink(comp), req.on ? 2 : 0);
-        else err = "no Actor component";
-    } __except (EXCEPTION_EXECUTE_HANDLER) { err = "fault"; }
-    if (err) SetMenuStatus("Noclip %s failed: %s", req.on ? "on" : "off", err);
-    else SetMenuStatus("Noclip %s (speed %.0f).", req.on ? "on" : "off", req.speed);
-}
-
-static void ProcessGodMode(DWORD now) {
-    static DWORD lastCheck = 0;
-    static bool  wasOn = false;
-    if (!g_sp.setGodMode || now - lastCheck < 500) return;
-    lastCheck = now;
-    const bool on = g_godModeOn != 0;
-    if (!on && !wasOn) return;
-    __try {
-        uintptr_t actor, entity;
-        if (!GetLocalPlayer(actor, entity)) return;
-        const uintptr_t comp = EntityComponent(entity, "Actor");
-        const uintptr_t data = comp ? Rd<uintptr_t>(comp + actors::kGodModeData) : 0;
-        if (!data) return;
-        const uintptr_t state = data + actors::kGodModeState;
-        const uint8_t want = on ? 2 : 0;
-        if (Rd<uint8_t>(state + g_sp.godModeByte) != want) {
-            g_sp.setGodMode(state, want);
-            Log("[god] god mode %s", on ? "on (no damage)" : "off");
-        }
-        wasOn = on;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {}
-}
-
 void ProcessShipMenu(DWORD now) {
     if (!g_sp.ok) return;
-    ProcessNoclip();
-    ProcessGodMode(now);
     RefreshEnemySide();
     if (g_menuShipCount < 0 && g_menuWantShips) {
         uintptr_t actor, entity;

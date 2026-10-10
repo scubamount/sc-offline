@@ -28,6 +28,12 @@ constexpr int32_t kTabVoxel     = 810;  // voxel_bridge.voxel (optional bridge, 
 
 // Draw functions (sco_ui_draw_fn), in <feature>_ui.cpp.
 void DrawPlayerTab(void* frame, void* ctx);     // loadout_ui.cpp
+void RegisterPlayerTab(const sco_api* api, sco_plugin* self);   // loadout_ui.cpp: the Player tab, with the invoke handle below
+// The Player and Vehicles tabs' cheat toggles run the optional creative plugin's commands
+// (data/plugins/creative) through sco_api's invoke; the reply lands in the status strip, and a
+// refusal (the plugin is off, or its game.creative capability is missing) puts *flag back.
+void InvokeCreativeToggle(const char* command, bool on, bool* flag);   // loadout_ui.cpp
+void InvokeCreativeSpeed(float metresPerSecond);                      // loadout_ui.cpp
 void DrawSq42Tab(void* frame, void* ctx);       // loadout_ui.cpp
 void DrawTravelTab(void* frame, void* ctx);     // quantum_ui.cpp
 void DrawVehiclesTab(void* frame, void* ctx);   // spawn_ui.cpp

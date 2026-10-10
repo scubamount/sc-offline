@@ -40,6 +40,15 @@ tools/check.sh
 
 This runs in a few seconds. It parses every `src/*.cpp`, `src/builtins/*.cpp` and `launcher/*.cpp` file with clang against mingw-w64's Windows headers. It also screens `src/` for MSVC error C2712 (`__try` in a function that owns an object needing unwinding, such as a `std::string`). It is not a build: only MSVC's build is. Known clang-only diagnostics are listed in `tools/check-baseline.txt`, and only new ones fail the check. You need clang and mingw-w64 (`brew install llvm mingw-w64` on macOS).
 
+### Include and scan gates
+
+```bash
+python3 tools/sdk-headers.py
+tools/no-scans.sh
+```
+
+`tools/sdk-headers.py` checks that every file under `src/builtins/` includes only headers the sco SDK zip ships (read from `external/sco-core/sdk/package.py`, ImGui's public headers included), other files in `src/builtins/`, or toolchain headers. Anything else fails with file and line. The exceptions are in `tools/sdk-headers-allow.txt`: one line per header, a reason on each, and a line whose includes are gone fails too, so the list only shrinks. A new built-in that needs something the SDK doesn't offer yet fails CI; the fix is a `game.*` service in sco-core, not a new line there. `tools/no-scans.sh` allows no raw pattern scan under `src/`.
+
 ### Self-update tests under Wine
 
 ```bash
@@ -52,11 +61,13 @@ Builds the launcher with `-DSCO_UPDATE_TEST` and runs 14 update scenarios (good 
 
 [`.github/workflows/build.yml`](../.github/workflows/build.yml) runs on pushes to `main`, on pull requests, and on `v*` tags:
 
-Both jobs check out `external/sco-core` (`submodules: true`).
+The `check`, `sdk-headers`, `build` and `bridges` jobs check out `external/sco-core` (`submodules: true`).
 
 1. `check` runs `tools/check.sh` and the release manifest tests (`python3 tools/test_release_manifest.py`) on Linux.
-2. `build` configures and builds Release x64 with CMake and MSVC on Windows, then checks the binaries with `dumpbin` and `mt`: `dinput8.dll` exports `DirectInput8Create` forwarded to System32's `dinput8.dll`, both files are x64, neither imports the dynamic C runtime, and `sc-offline.exe`'s manifest asks for `asInvoker` (the launcher asks for administrator rights itself when it needs them). It uploads both as `dinput8-release`.
-3. `release` runs on tags only. It publishes `sc-offline-<tag>.zip` and a standalone `dinput8.dll`, with notes generated from the commits. The zip contains the launcher, the DLL, `sc-offline.ini`, `sc-offline.sh`, `data/`, `docs/`, the README, the CHANGELOG, the LICENSE and `manifest.json`.
+2. `no-scans` runs `tools/no-scans.sh`: no raw game-memory pattern scan under `src/`. It is its own job so a failure there doesn't hide whether the sources compile. It runs on pull requests and on every push to `main`.
+3. `sdk-headers` runs `tools/sdk-headers.py` (above).
+4. `build` configures and builds Release x64 with CMake and MSVC on Windows, then checks the binaries with `dumpbin` and `mt`: `dinput8.dll` exports `DirectInput8Create` forwarded to System32's `dinput8.dll`, both files are x64, neither imports the dynamic C runtime, and `sc-offline.exe`'s manifest asks for `asInvoker` (the launcher asks for administrator rights itself when it needs them). It uploads both as `dinput8-release`.
+5. `release` runs on tags only. It publishes `sc-offline-<tag>.zip` and a standalone `dinput8.dll`, with notes generated from the commits. The zip contains the launcher, the DLL, `sc-offline.ini`, `sc-offline.sh`, `data/`, `docs/`, the README, the CHANGELOG, the LICENSE and `manifest.json`.
 
 ### `manifest.json`
 

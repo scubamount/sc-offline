@@ -17,7 +17,7 @@ The menu shows the tabs registered through `sco.ui` by ascending `order`, ties i
 | 700 | Squadron 42 | `loadout` | `loadout.sq42` |
 | — | Menu | sc-offline | (not in `sco.ui`) |
 
-To put a tab between two of these, give it an order in between. An order above 700 puts it after Squadron 42. `teleport`, `ammo` and `contracts` have no page of their own: their controls sit on the Player, Vehicles and Travel tabs, or they have no menu controls at all.
+To put a tab between two of these, give it an order in between. An order above 700 puts it after Squadron 42. `teleport` and `contracts` have no page of their own: their controls sit on the Player, Vehicles and Travel tabs, or they have no menu controls at all. The creative plugin has none either: the Player and Vehicles tabs' cheat checkboxes run its commands.
 
 ## Drawing: ImGui through sc-offline's frame
 

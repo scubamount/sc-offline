@@ -24,7 +24,6 @@
 #include "../patches.h"
 #include "../spawner.h"
 #include "../teleport.h"
-#include "../version.h"
 #include "sco/caps.h"
 #include "sco/game/mining.h"
 #include "sco/hook.h"

@@ -11,7 +11,6 @@
 #include "../menu.h"
 #include "../outfits.h"
 #include "../teleport.h"
-#include "../version.h"
 #include <cstdio>
 
 namespace {
@@ -107,7 +106,7 @@ sco_result LoadoutLoad(const sco_api* api, sco_plugin* self) {
     if (r == SCO_OK) r = api->subscribe(self, "tick", OnTick, nullptr);
     if (r != SCO_OK) return r;   // the host releases what was registered
     // Its page of the menu (and keys), through sco.ui; the menu shell draws it (tabs.h).
-    RegisterBuiltinTab(api, self, "loadout.player", "Player", kTabPlayer, DrawPlayerTab);
+    RegisterPlayerTab(api, self);
     RegisterBuiltinTab(api, self, "loadout.sq42", "Squadron 42", kTabSq42, DrawSq42Tab);
     g_ticking = true;
     return SCO_OK;

@@ -107,7 +107,6 @@ add_library(dinput8 SHARED
   src/missions.cpp
   src/contracts.cpp
   src/quantum.cpp
-  src/ammo.cpp
   src/services.cpp
   src/fleet.cpp
   src/outfits.cpp
@@ -120,7 +119,6 @@ add_library(dinput8 SHARED
   src/builtins/crew_plugin.cpp
   src/builtins/npc_plugin.cpp
   src/builtins/loadout_plugin.cpp
-  src/builtins/ammo_plugin.cpp
   src/builtins/quantum_plugin.cpp
   src/builtins/build_plugin.cpp
   src/builtins/contracts_plugin.cpp
@@ -210,7 +208,7 @@ set_target_properties(spawn_probe PROPERTIES
   ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib/test-plugins")
 configure_file(tools/test-plugins/spawn_probe/plugin.ini "${_probe_dir}/plugin.ini" COPYONLY)
 
-# builtins_probe exercises the feature built-ins' commands in game (crew, npc, loadout, ammo, quantum,
+# builtins_probe exercises the feature built-ins' commands in game (crew, npc, loadout, quantum,
 # build, contracts); same layout as spawn_probe.
 add_library(builtins_probe SHARED tools/test-plugins/builtins_probe/builtins_probe.c)
 target_include_directories(builtins_probe PRIVATE external/sco-core/include)
@@ -237,3 +235,27 @@ set_target_properties(ui_probe PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY "${_uprobe_dir}/$<0:>"
   ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib/test-plugins")
 configure_file(tools/test-plugins/ui_probe/plugin.ini "${_uprobe_dir}/plugin.ini" COPYONLY)
+
+# --- the creative plugin (plugins/creative, data/plugins/creative) ---------------------------------
+# sc-offline's cheats (god mode, noclip, infinite ammo) as an optional native plugin on sco-core's
+# game.creative service: built only from the sco SDK's headers (tools/sdk-headers.py checks this
+# folder too, with no allow-list entry). The output is laid out the way the game reads it,
+# build/data/plugins/creative/creative.dll next to plugin.ini; the folder in the repo
+# (data/plugins/creative) holds plugin.ini and the `disabled` marker the release ships, and CI's
+# release job adds the DLL. Not part of dinput8.dll.
+add_library(sc-offline-creative MODULE plugins/creative/creative.cpp)
+target_include_directories(sc-offline-creative PRIVATE external/sco-core/include)
+target_compile_definitions(sc-offline-creative PRIVATE ${SCO_COMMON_DEFINES})
+target_compile_options(sc-offline-creative PRIVATE ${SCO_COMMON_OPTIONS} /W4 /WX)
+set(_creative_dir "${CMAKE_BINARY_DIR}/data/plugins/creative")
+set_target_properties(sc-offline-creative PROPERTIES
+  OUTPUT_NAME creative
+  PREFIX ""
+  SUFFIX ".dll"
+  CXX_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN ON
+  INTERPROCEDURAL_OPTIMIZATION_RELEASE ON
+  RUNTIME_OUTPUT_DIRECTORY "${_creative_dir}/$<0:>"
+  LIBRARY_OUTPUT_DIRECTORY "${_creative_dir}/$<0:>"
+  ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib/plugins")
+configure_file(data/plugins/creative/plugin.ini "${_creative_dir}/plugin.ini" COPYONLY)
