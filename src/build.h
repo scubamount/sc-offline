@@ -1,8 +1,13 @@
 #pragma once
 #include "common.h"
+#include <sc_entities.h>
 
 bool ResolveBuildApi(const Section& text, const Section& rdata);
 void ProcessBuild();
+// The build built-in hands build mode the game.entities table and its plugin handle (null when
+// the service is missing or the built-in unloads): props are then spawned, moved and removed
+// through it. Game thread.
+void BuildUseEntities(const sc_entities_v1* ent, sco_plugin* self);
 bool PlaceNearPlayer(double ahead, double side, double lift, double pos[3], double rot[4]);
 bool GroundRay(uintptr_t zone, const double from[3], const double to[3], double hit[3]);
 // Moves any entity within its zone: pos and, when rot isn't null, rot (x, y, z, w) in the frame of

@@ -12,6 +12,8 @@
 #include "../menu.h"
 #include "../teleport.h"
 #include "../version.h"
+#include <sc_entities.h>
+#include <cstddef>
 #include <cstdio>
 
 namespace {
@@ -101,6 +103,15 @@ sco_result BuildLoad(const sco_api* api, sco_plugin* self) {
         "Places one buildable without entering build mode; it joins the base, so undo and clear remove it", Place, place, 2);
     if (r == SCO_OK) r = api->subscribe(self, "tick", OnTick, nullptr);
     if (r != SCO_OK) return r;   // the host releases what was registered
+    // Props go through game.entities (sc_entities.h, published by sco-core's game pack); without
+    // it, or when its capabilities are off on this game build, build mode uses the spawner as before.
+    const sc_entities_v1* ent = nullptr;
+    if (api->size > offsetof(sco_api, query_service) &&
+        api->query_service(SC_ENTITIES_NAME, SC_ENTITIES_VERSION_1_0, reinterpret_cast<const void**>(&ent)) == SCO_OK && ent &&
+        ent->size > offsetof(sc_entities_v1, last_error))
+        BuildUseEntities(ent, self);
+    else
+        Log("[build] game.entities isn't available: props are placed through the spawner");
     // Its page of the menu (and keys), through sco.ui; the menu shell draws it (tabs.h).
     RegisterBuiltinTab(api, self, "build.build", "Build", kTabBuild, DrawBuildTab);
     BindBuiltinHotkey(api, self, "f6", "build.toggle");
@@ -109,7 +120,10 @@ sco_result BuildLoad(const sco_api* api, sco_plugin* self) {
 }
 
 // A crash leaves g_ticking set, so dllmain doesn't take ProcessBuild back.
-void BuildUnload() { g_ticking = false; }
+void BuildUnload() {
+    g_ticking = false;
+    BuildUseEntities(nullptr, nullptr);   // the host despawns what this plugin spawned through game.entities
+}
 
 }  // namespace
 

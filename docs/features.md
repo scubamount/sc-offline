@@ -57,6 +57,10 @@ Spawn any of 2239 NPC archetypes in front of you, and remove them again (`npcs.t
 - Prefabs show as a flag while the camera moves, then as the real building once it stops.
 - **Undo** and **Clear base** remove what you placed.
 
+### Build mode and `game.entities`
+
+Build mode doesn't touch the game's entity code for props: it asks sco-core's `game.entities` service (`sc_entities.h`, published by the game pack) to spawn a prop in your zone, move the preview with `set_transform` while you aim, and `despawn` it on Undo, Clear base or when you pick another object. Props you place belong to the `build` plugin, so the game pack removes them if it unloads or crashes. If the service or its `game.entities.spawn` / `game.entities.transform` capabilities aren't ready on your game build, `mod.log` says `[build] game.entities isn't available: props are placed through the spawner` and build mode works as before. Prefabs (`.socpak`) and NPCs always use the spawner. The `spawn_probe` test plugin's **Ctrl+Alt+=** exercises the service on its own and logs every result.
+
 ## Contracts
 
 `contract_scripts.txt` lists the 796 contracts that run without any of CIG's mission scripts (hauling and similar). The mobiGlas list leaves out Pyro and Nyx contracts and anything named test, debug or tutorial (`src/contracts.cpp` `Listable`). `mod.log` records the counts at startup: `[contracts] N contracts known; M run ...`.

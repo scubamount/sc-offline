@@ -370,18 +370,72 @@ bool PlaceNearPlayer(double ahead, double side, double lift, double pos[3], doub
 constexpr int   kMaxPlaced = 2048;
 static uint64_t g_placed[kMaxPlaced];
 static int      g_placedCount = 0;
+static bool     g_placedEnt[kMaxPlaced];   // g_placed[i] came from game.entities
 static bool     g_active = false;
 static uint64_t g_previewId = 0;
+static bool     g_previewEnt = false;
 static int      g_previewIndex = -1;
 static double   g_yaw = 0;
 
 int  Menu_BuildPlacedCount() { return g_placedCount; }
 bool Menu_BuildModeActive() { return g_active; }
 
-static const char* SpawnBuildable(const char* name, const double pos[3], const double rot[4], uint64_t& id) {
+// Props are spawned, moved and removed through game.entities (sco-core's game pack; the build
+// built-in hands us the table and its plugin handle). What it can't carry stays on the spawner:
+// prefabs (.socpak), NPCs, and everything when the service or its capability is missing.
+static const sc_entities_v1* g_ent = nullptr;
+static sco_plugin*           g_entSelf = nullptr;
+
+void BuildUseEntities(const sc_entities_v1* ent, sco_plugin* self) {
+    g_ent = ent;
+    g_entSelf = self;
+}
+
+// The id of the zone you're in (what game.entities takes), or 0. No C++ objects with destructors
+// here: MSVC C2712.
+static uint64_t PlayerZoneId() {
+    __try {
+        uintptr_t actor, entity;
+        if (!GetLocalPlayer(actor, entity)) return 0;
+        const uintptr_t zone = VCall<uintptr_t>(entity, 0x6B8);
+        if (!zone) return 0;
+        const uint64_t zoneId = ZoneId(zone);
+        return zoneId && ZoneFromId(zoneId) == zone ? zoneId : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+// The service's reason for the last refusal; the text is valid until the next call.
+static const char* EntitiesError(sco_result r) {
+    static char text[192];
+    uint32_t size = sizeof(text);
+    if (g_ent->last_error(g_entSelf, text, &size) != SCO_OK || !text[0]) snprintf(text, sizeof(text), "game.entities answered %d", static_cast<int>(r));
+    return text;
+}
+
+// viaEntities: true when the id belongs to game.entities (so it's despawned and moved there).
+static const char* SpawnBuildable(const char* name, const double pos[3], const double rot[4], uint64_t& id, bool npc, bool& viaEntities) {
+    viaEntities = false;
     const size_t len = strlen(name);
     if (len > 7 && _stricmp(name + len - 7, ".socpak") == 0) return SpawnPrefabInPlayerZone(name, pos, rot, id);
+    if (g_ent && !npc) {
+        if (const uint64_t zoneId = PlayerZoneId()) {
+            const sco_result r = g_ent->spawn(g_entSelf, name, zoneId, pos, rot, &id);
+            if (r == SCO_OK) {
+                viaEntities = true;
+                return nullptr;
+            }
+            if (r != SCO_UNAVAILABLE) return EntitiesError(r);   // unavailable: no capability on this build; use the spawner
+        }
+    }
     return SpawnEntityInPlayerZone(name, pos, rot, id);
+}
+
+// Removes what SpawnBuildable spawned.
+static void RemoveBuilt(uint64_t id, bool viaEntities) {
+    if (viaEntities && g_ent && g_ent->despawn(g_entSelf, id) == SCO_OK) return;
+    RemoveEntityById(id);
 }
 
 static bool IsPrefab(const char* name) {
@@ -417,13 +471,14 @@ static struct {
 } g_ghost;
 
 static void RemoveGhost() {
-    if (g_ghost.id) RemoveEntityById(g_ghost.id);
+    if (g_ghost.id) RemoveBuilt(g_ghost.id, false);
     g_ghost.id = 0;
 }
 
 static void RemovePreview() {
-    if (g_previewId) RemoveEntityById(g_previewId);
+    if (g_previewId) RemoveBuilt(g_previewId, g_previewEnt);
     g_previewId = 0;
+    g_previewEnt = false;
     g_previewIndex = -1;
     RemoveGhost();
 }
@@ -475,11 +530,12 @@ static void Exit() {
 
 static void Undo() {
     if (!g_placedCount) return;
-    RemoveEntityById(g_placed[--g_placedCount]);
+    --g_placedCount;
+    RemoveBuilt(g_placed[g_placedCount], g_placedEnt[g_placedCount]);
 }
 
 static void Clear() {
-    while (g_placedCount) RemoveEntityById(g_placed[--g_placedCount]);
+    while (g_placedCount) Undo();
     Log("[build] base cleared");
 }
 
@@ -497,7 +553,15 @@ bool MoveEntityLocal(uint64_t id, const double pos[3], const double rot[4]) {
     }
 }
 
-static void MovePreview(const double pos[3], const double rot[4]) { MoveEntityLocal(g_previewId, pos, rot); }
+// A fresh spawn takes seconds to stream in; until it has, there's nothing to move.
+static void MovePreview(const double pos[3], const double rot[4]) {
+    if (g_previewEnt && g_ent) {
+        if (!g_ent->alive(g_previewId)) return;
+        if (const uint64_t zoneId = PlayerZoneId()) g_ent->set_transform(g_entSelf, g_previewId, zoneId, pos, rot);
+        return;
+    }
+    MoveEntityLocal(g_previewId, pos, rot);
+}
 
 static bool GameWindowInFront() {
     wchar_t title[64] = L"";
@@ -541,9 +605,11 @@ void ProcessBuild() {
             if (!ok) Log("[build] no spot %s", where);
             else {
                 uint64_t id = 0;
-                if (const char* err = SpawnBuildable(g_build[idx], pos, rot, id))
+                bool viaEnt = false;
+                if (const char* err = SpawnBuildable(g_build[idx], pos, rot, id, g_buildNpc[idx], viaEnt))
                     Log("[build] spawning %s failed: %s", g_build[idx], err);
                 else {
+                    g_placedEnt[g_placedCount] = viaEnt;
                     g_placed[g_placedCount++] = id;
                     Log("[build] spawned %s %s (%d in the base)", g_build[idx], where, g_placedCount);
                 }
@@ -578,9 +644,11 @@ void ProcessBuild() {
     if (index != g_previewIndex) {
         RemovePreview();
         uint64_t id = 0;
+        bool viaEnt = false;
         const char* marker = IsPrefab(g_build[index]) ? PrefabMarker() : nullptr;
-        if (const char* err = SpawnBuildable(marker ? marker : g_build[index], pos, rot, id)) { Log("[build] preview of %s failed: %s", g_build[index], err); g_previewIndex = index; return; }
+        if (const char* err = SpawnBuildable(marker ? marker : g_build[index], pos, rot, id, g_buildNpc[index], viaEnt)) { Log("[build] preview of %s failed: %s", g_build[index], err); g_previewIndex = index; return; }
         g_previewId = id;
+        g_previewEnt = viaEnt;
         g_previewIndex = index;
         Log("[build] previewing %s %s %.1f m from you%s", g_build[index], where, g_fromYou, marker ? " (marker: the prefab is built where the flag stands)" : "");
     } else if (!g_ghost.id) {
@@ -599,7 +667,8 @@ void ProcessBuild() {
             RemoveGhost();
         } else if (!g_ghost.id && !g_ghost.suppressed && now - g_ghost.stillSince > 500) {
             uint64_t id = 0;
-            if (!SpawnBuildable(g_build[index], pos, rot, id)) {
+            bool viaEnt = false;
+            if (!SpawnBuildable(g_build[index], pos, rot, id, g_buildNpc[index], viaEnt)) {   // a prefab: never via game.entities
                 g_ghost.id = id;
                 memcpy(g_ghost.pos, pos, sizeof(g_ghost.pos));
                 memcpy(g_ghost.rot, rot, sizeof(g_ghost.rot));
@@ -609,14 +678,17 @@ void ProcessBuild() {
 
     if (Pressed(VK_LBUTTON, lmb, keys) && g_placedCount < kMaxPlaced) {
         uint64_t id = 0;
+        bool viaEnt = false;
         if (prefab && g_ghost.id) {                      // keep the preview as the real thing
+            g_placedEnt[g_placedCount] = false;
             g_placed[g_placedCount++] = g_ghost.id;
             g_ghost.id = 0;
             g_ghost.suppressed = true;                   // no second preview on top until the camera moves
             Log("[build] placed %s %s %.1f m from you (%d)", g_build[index], where, g_fromYou, g_placedCount);
-        } else if (const char* err = SpawnBuildable(g_build[index], prefab && g_ghost.id ? g_ghost.pos : pos, rot, id)) {
+        } else if (const char* err = SpawnBuildable(g_build[index], prefab && g_ghost.id ? g_ghost.pos : pos, rot, id, g_buildNpc[index], viaEnt)) {
             Log("[build] placing %s failed: %s", g_build[index], err);
         } else {
+            g_placedEnt[g_placedCount] = viaEnt;
             g_placed[g_placedCount++] = id;
             Log("[build] placed %s %s %.1f m from you (%d)", g_build[index], where, g_fromYou, g_placedCount);
         }
