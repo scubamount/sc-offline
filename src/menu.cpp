@@ -536,10 +536,6 @@ static std::atomic<bool> g_typing{ false };   // the menu has focus and a text b
 static volatile LONG g_nudged = 0;            // a WM_NULL is on its way to the game
 constexpr DWORD kMenuWaitMs = 50;
 
-// For the [menu] timing line: game-thread passes and build time, read by the menu thread.
-static volatile LONG   g_gamePasses = 0;
-static volatile LONG64 g_buildTicks = 0;
-
 static bool GameThreadBuilding() { return g_frameState == Frame_Building; }
 
 static LONG64 Now() {
@@ -554,7 +550,6 @@ static double TicksToMs(LONG64 ticks) {
 }
 
 void Menu_GameThreadFrame() {
-    InterlockedIncrement(&g_gamePasses);
     InterlockedExchange(&g_nudged, 0);
     if (InterlockedCompareExchange(&g_frameState, Frame_Building, Frame_Wanted) != Frame_Wanted) return;
     // The menu thread may call the Win32 backend's NewFrame more than once per built frame (each
@@ -567,7 +562,6 @@ void Menu_GameThreadFrame() {
     ImGui::NewFrame();
     g_frameKeepOpen = DrawMenu();
     ImGui::Render();
-    InterlockedAdd64(&g_buildTicks, Now() - start);
     InterlockedExchange(&g_frameState, Frame_Built);
     SetEvent(g_frameBuilt);
 }
@@ -624,8 +618,6 @@ static DWORD WINAPI MenuThread(LPVOID) {
     if (SUCCEEDED(com)) CoUninitialize();
 
     bool visible = false, wasDown = false;
-    LONG64 requestedAt = 0, waitTicks = 0, statsFrom = Now();
-    LONG   statsFrames = 0, statsPasses = g_gamePasses;
     for (;;) {
         // Take ImGui back from a request the game thread hasn't started; let one it has finish.
         InterlockedCompareExchange(&g_frameState, Frame_Idle, Frame_Wanted);
@@ -646,37 +638,20 @@ static DWORD WINAPI MenuThread(LPVOID) {
 
         if (g_frameState == Frame_Built) {
             InterlockedExchange(&g_frameState, Frame_Idle);
-            if (requestedAt) { waitTicks += Now() - requestedAt; requestedAt = 0; }
             if (visible) {
                 const float clear[4] = { kSoil.x, kSoil.y, kSoil.z, 1.0f };
                 g_context->OMSetRenderTargets(1, &g_rtv, nullptr);
                 g_context->ClearRenderTargetView(g_rtv, clear);
                 ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
                 g_swap->Present(1, 0);
-                ++statsFrames;
                 if (!g_frameKeepOpen) { visible = false; ShowMenu(false); }
             }
         }
-        if (!visible) { g_typing = false; requestedAt = 0; Sleep(50); continue; }
+        if (!visible) { g_typing = false; Sleep(50); continue; }
         KeepCursorInMenu();
         // Visible but not focused: keep the last picture and stop asking the game thread for
         // frames, so the game runs at full speed until the menu is focused again.
         if (GetForegroundWindow() != g_wnd) { Sleep(50); continue; }
-
-        // Once a second while the menu is slow, where its frames' time went.
-        const LONG64 now = Now();
-        if (TicksToMs(now - statsFrom) >= 1000.0) {
-            const LONG passes = g_gamePasses;
-            const LONG64 built = InterlockedExchange64(&g_buildTicks, 0);
-            if (statsFrames < 30)
-                Log("[menu] %ld frames in %.0f ms: waited %.1f ms, built %.1f ms on the game thread (avg), %ld game messages",
-                    statsFrames, TicksToMs(now - statsFrom), statsFrames ? TicksToMs(waitTicks) / statsFrames : 0.0,
-                    statsFrames ? TicksToMs(built) / statsFrames : 0.0, passes - statsPasses);
-            statsFrom = now;
-            statsFrames = 0;
-            statsPasses = passes;
-            waitTicks = 0;
-        }
 
         if (g_resizeW && g_resizeH) {
             ReleaseRenderTarget();
@@ -685,7 +660,6 @@ static DWORD WINAPI MenuThread(LPVOID) {
             CreateRenderTarget();
         }
 
-        if (!requestedAt) requestedAt = now;
         RequestFrame();
         // Wakes for the built frame or the window's next message, whichever comes first.
         MsgWaitForMultipleObjects(1, &g_frameBuilt, FALSE, kMenuWaitMs, QS_ALLINPUT);

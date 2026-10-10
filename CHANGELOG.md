@@ -33,6 +33,11 @@
 - Docs and `sc-offline.ini`: `start_ship` only applies with `start = Daymar`, the wallet lives in `data\wallet.txt`, and a new **Not available offline** list in `docs/features.md` covers ASOP, the vehicle manager and character creation ([#26](https://github.com/scubamount/sc-offline/issues/26)).
 - README: 0.6.1 has been played in game on Windows; the "nobody has played it" note is gone. Linux through Wine is still untested.
 
+## 0.7.3 (2026-10-10) — EXPERIMENTAL
+
+- **The menu no longer slows the game to a crawl.** The menu used to wait on the game for every frame it drew; now it never waits. While the game is building the menu's next picture, the menu keeps answering its window and the M key and shows its last picture, so a busy game can't stall the menu and the menu can't stall the game. Keeps 0.7.2's changes: the cursor is clamped only when the menu window moves, and the menu stops asking the game for pictures while it isn't focused.
+- The 0.7.2 `[menu] perf:` diagnostic line is gone.
+
 ## 0.7.2 (2026-10-10) — EXPERIMENTAL
 
 - **Fixes the menu making the game stutter to a near-standstill** while the menu is open and focused, with the game running normally again the moment the menu loses focus. Two changes: the cursor is now clamped to the menu window only when the window actually moves or resizes instead of on every frame (clamping the cursor is a synchronous, cross-process call, and doing it every frame while the menu has focus was enough to starve the game's own thread); and while the menu is visible but does not have focus the menu freezes its picture and stops asking the game thread to rebuild it, so the game runs at full speed until you focus the menu again. The frame is still built on the game thread, as before — that keeps a plugin's drawing inside the game's crash guard — this only stops doing it while the menu isn't focused.
