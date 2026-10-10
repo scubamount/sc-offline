@@ -63,6 +63,16 @@ Spawn any of 2239 NPC archetypes in front of you, and remove them again (`npcs.t
 
 Build mode doesn't touch the game's entity code for props: it asks sco-core's `game.entities` service (`sc_entities.h`, published by the game pack) to spawn a prop in your zone, move the preview with `set_transform` while you aim, and `despawn` the preview when you pick another object. Props you place stay in the world when the build built-in unloads or reloads: build mode calls `keep` (`game.entities` 1.1) on each one as it spawns, so nobody owns it afterwards, and Undo and Clear base remove it through the game's own entity removal. (Against a game pack that only has `game.entities` 1.0, `mod.log` says `[build] game.entities has no keep() (1.0)` once, and props stay owned by the `build` plugin: the game pack removes them if it unloads or crashes.) If the service or its `game.entities.spawn` / `game.entities.transform` capabilities aren't ready on your game build, `mod.log` says `[build] game.entities isn't available: props are placed through the spawner` and build mode works as before. Prefabs (`.socpak`) and NPCs always use the spawner. The `spawn_probe` test plugin's **Ctrl+Alt+=** exercises the service on its own and logs every result.
 
+### Build mode and `game.world`
+
+Where your cursor lands and where a ray finds the ground come from sco-core's `game.world` service (`sc_world.h`, published by the game pack, capabilities `game.world.raycast` and `game.world.camera`):
+
+- The camera build mode aims from is `game.world.camera`.
+- The ray that skips nothing is `game.world.raycast`. It places `build.place` and the Squadron 42 tab's Spawn objects in front of you or at your feet, and it is the ground check the contracts and the voxel bridge use. The hit position is a point only: 1.0 doesn't say what was hit or the surface normal.
+- The aim ray that moves the preview while you build still reads the game through sco-core's `build.ground_ray` rows. It has to skip the preview prop, and `raycast` 1.0 has no skip list, so the preview would hit itself.
+
+If `game.world` isn't published or a capability isn't ready on your game build, `mod.log` says `[build] game.world isn't available: ...` once (or `game.world.raycast isn't ready` / `game.world.camera isn't ready` at the first use) and build mode reads the rows exactly as before. The teleport built-in (F7, F8) doesn't use `game.world`.
+
 ## Contracts
 
 `contract_scripts.txt` lists the 796 contracts that run without any of CIG's mission scripts (hauling and similar). The mobiGlas list leaves out Pyro and Nyx contracts and anything named test, debug or tutorial (`src/contracts.cpp` `Listable`). `mod.log` records the counts at startup: `[contracts] N contracts known; M run ...`.

@@ -206,6 +206,63 @@ struct PhysSkipList {
 static_assert(sizeof(PhysSkipList) == 0x60, "PhysSkipList layout");
 static PhysSkipList g_skip = { {}, 0, 0, 8, 0, -1, 0, {} };
 
+// game.world (sc_world.h), when the build built-in found it: the ray with nothing skipped, and the camera.
+// An unavailable answer (the capability isn't ready on this game build) switches that function back to
+// the rows, once, with a log line.
+static const sc_world_v1* g_world = nullptr;
+static sco_plugin*        g_worldSelf = nullptr;
+static bool               g_worldRayOk = true, g_worldCameraOk = true;
+
+void BuildUseWorld(const sc_world_v1* world, sco_plugin* self) {
+    g_world = world;
+    g_worldSelf = self;
+}
+
+static const char* WorldError() {
+    static char text[192];
+    uint32_t size = sizeof(text);
+    text[0] = 0;
+    if (g_world->size <= offsetof(sc_world_v1, last_error) || g_world->last_error(g_worldSelf, text, &size) != SCO_OK || !text[0])
+        snprintf(text, sizeof(text), "no reason given");
+    return text;
+}
+
+enum class WorldRay { Hit, Miss, Unavailable };
+
+// One ray between two world positions through game.world.raycast, which tries the zone and up to two of
+// its parents like RayHit does. Unavailable: use the rows (no service, its capability isn't ready, or the
+// zone has no id the service can take). No C++ objects with destructors here: MSVC C2712.
+static WorldRay WorldRayHit(uintptr_t zone, const double from[3], const double to[3], double hit[3]) {
+    if (!g_world || !g_worldRayOk) return WorldRay::Unavailable;
+    const uint64_t zoneId = ZoneId(zone);
+    if (!zoneId || ZoneFromId(zoneId) != zone) return WorldRay::Unavailable;
+    double o[3], e[3];
+    if (!WorldToLocal(zone, from, o) || !WorldToLocal(zone, to, e)) return WorldRay::Miss;
+    const double d[3] = { e[0] - o[0], e[1] - o[1], e[2] - o[2] };
+    const double len = sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    if (len < 0.01) return WorldRay::Miss;
+    sc_world_hit h = {};
+    h.size = sizeof(h);
+    const sco_result r = g_world->raycast(zoneId, o, d, len, &h);
+    if (r == SCO_OK) {
+        LocalToWorld(zone, h.pos, hit);
+        return WorldRay::Hit;
+    }
+    if (r == SCO_UNAVAILABLE) {
+        g_worldRayOk = false;
+        Log("[build] game.world.raycast isn't ready on this game build (%s): the ground ray reads the game through sco-core's build rows", WorldError());
+        return WorldRay::Unavailable;
+    }
+    if (r != SCO_NOT_FOUND) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            Log("[build] game.world.raycast answered %d: %s (no ground found; logged once)", static_cast<int>(r), WorldError());
+        }
+    }
+    return WorldRay::Miss;
+}
+
 static double CastInZone(uintptr_t zone, const double from[3], const double to[3]) {
     double o[3], e[3];
     if (!WorldToLocal(zone, from, o) || !WorldToLocal(zone, to, e)) return -1;
@@ -243,11 +300,40 @@ static bool RayHit(uintptr_t zone, const double from[3], const double to[3], dou
     return false;
 }
 
-bool GroundRay(uintptr_t zone, const double from[3], const double to[3], double hit[3]) {
+// A ray that skips nothing (your own body can be hit): game.world.raycast when it's there, else the rows'
+// ray with an empty skip list, as before.
+static bool PlainRayHit(uintptr_t zone, const double from[3], const double to[3], double hit[3]) {
+    switch (WorldRayHit(zone, from, to, hit)) {
+        case WorldRay::Hit:  return true;
+        case WorldRay::Miss: return false;
+        case WorldRay::Unavailable: break;
+    }
     uintptr_t actor, entity;
-    if (!zone || !GetLocalPlayer(actor, entity) || !RaySlotsOk(entity)) return false;
+    if (!GetLocalPlayer(actor, entity) || !RaySlotsOk(entity)) return false;
     g_skip.count = 0;
     return RayHit(zone, from, to, hit);
+}
+
+bool GroundRay(uintptr_t zone, const double from[3], const double to[3], double hit[3]) {
+    return zone && PlainRayHit(zone, from, to, hit);
+}
+
+// The camera build mode aims from: game.world.camera (world frame, x y z w), else the offsets sco-core's
+// build.camera_fields row checks. False when there is no camera to read (not spawned, or a fault).
+static bool ReadCamera(uintptr_t actor, double p[3], double q[4]) {
+    if (g_world && g_worldCameraOk) {
+        const sco_result r = g_world->camera(p, q, nullptr);
+        if (r == SCO_OK) return true;
+        if (r != SCO_UNAVAILABLE) return false;
+        g_worldCameraOk = false;
+        Log("[build] game.world.camera isn't ready on this game build (%s): build mode reads the camera through sco-core's build rows", WorldError());
+    }
+    const uintptr_t cam = Rd<uintptr_t>(actor + 0x208);
+    if (!cam || !g_cameraOk) return false;
+    memcpy(p, reinterpret_cast<const double*>(cam + sco::game::world::kCameraPosition), 3 * sizeof(double));
+    const float* f = reinterpret_cast<const float*>(cam + sco::game::world::kCameraRotation);
+    for (int i = 0; i < 4; ++i) q[i] = f[i];
+    return true;
 }
 
 static double g_fromYou = 0;
@@ -258,11 +344,9 @@ static double g_camPos[3], g_camFwd[3];   // camera, as of the last Target() cal
 static bool Target(double reach, double yaw, double lift, uint64_t previewId, double pos[3], double rot[4]) {
     uintptr_t actor, entity;
     if (!GetLocalPlayer(actor, entity)) return false;
-    const uintptr_t cam = Rd<uintptr_t>(actor + 0x208);
     const uintptr_t zone = VCall<uintptr_t>(entity, 0x6B8);
-    if (!cam || !zone || !g_cameraOk) return false;
-    const double* p = reinterpret_cast<const double*>(cam + sco::game::world::kCameraPosition);
-    const float*  q = reinterpret_cast<const float*>(cam + sco::game::world::kCameraRotation);
+    double p[3], q[4];
+    if (!zone || !ReadCamera(actor, p, q)) return false;
     const double fwd[3] = { 2.0 * (q[0] * q[1] - q[3] * q[2]),
                             1.0 - 2.0 * (q[0] * q[0] + q[2] * q[2]),
                             2.0 * (q[1] * q[2] + q[3] * q[0]) };
@@ -332,15 +416,14 @@ bool PlaceNearPlayer(double ahead, double side, double lift, double pos[3], doub
 
     double world[3];
     for (int i = 0; i < 3; ++i) world[i] = spotW[i] - upW[i] * 1.2;
-    if (RaySlotsOk(entity)) {
-        g_skip.count = 0;
+    {
         double hit[3], down[3], floor[3];
         const double d[3] = { spotW[0] - chestW[0], spotW[1] - chestW[1], spotW[2] - chestW[2] };
         const double len = sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
-        if (len > 0.6 && RayHit(zone, chestW, spotW, hit))
+        if (len > 0.6 && PlainRayHit(zone, chestW, spotW, hit))
             for (int i = 0; i < 3; ++i) spotW[i] = hit[i] - d[i] / len * 0.5;
         for (int i = 0; i < 3; ++i) down[i] = spotW[i] - upW[i] * 50.0;
-        if (RayHit(zone, spotW, down, floor)) memcpy(world, floor, sizeof(world));
+        if (PlainRayHit(zone, spotW, down, floor)) memcpy(world, floor, sizeof(world));
     }
     for (int i = 0; i < 3; ++i) world[i] += upW[i] * lift;
     if (!WorldToLocal(zone, world, pos)) return false;
