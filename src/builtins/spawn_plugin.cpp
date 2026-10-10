@@ -108,21 +108,50 @@ const char* SvcSpawnAs(sco_plugin* self, const char* cls, const double offset[3]
     return err;
 }
 
+// Why set_entity_transform answered 0, logged once per id and reason so plugin authors can tell
+// the 0s apart without mod.log filling up when a plugin retries every tick.
+enum class Refusal : uint8_t { BadArgument, NotYours, NotStreamedIn, NoZone, ZoneConversion, MoveFailed };
+struct Logged { uint64_t id; Refusal why; };
+std::vector<Logged> g_logged;
+constexpr size_t kMaxLogged = 1024;   // forgotten all at once past it: at worst a reason is logged again
+
+int Refuse(uint64_t id, Refusal why) {
+    for (const Logged& l : g_logged)
+        if (l.id == id && l.why == why) return 0;
+    if (g_logged.size() >= kMaxLogged) g_logged.clear();
+    g_logged.push_back({ id, why });
+    static const char* const kWhy[] = {
+        "bad argument (null self, id 0, or a position or rotation that isn't finite or a zero rotation)",
+        "not yours (move only entities you spawned with spawn_as)",
+        "not streamed in yet (a fresh spawn takes seconds; wait for entity_alive)",
+        "zone conversion failed (the entity isn't in a zone yet)",
+        "zone conversion failed (the target zone or the entity's zone can't be placed)",
+        "the game refused the move (entity move slots don't match this build)",
+    };
+    char msg[192];
+    snprintf(msg, sizeof(msg), "set_entity_transform(%llu) -> 0: %s", static_cast<unsigned long long>(id),
+             kWhy[static_cast<int>(why)]);
+    if (g_api) g_api->log(g_self, SCO_LOG_WARN, msg);
+    return 0;
+}
+
 int SvcSetEntityTransform(sco_plugin* self, uint64_t id, uint64_t zoneId, const double pos[3], const double rot[4]) {
-    if (!sco::OnGameThread() || !SpawnerReady() || !self || !id || !pos || !rot) return 0;
-    if (!MayMove(self, id)) return 0;
+    if (!sco::OnGameThread() || !SpawnerReady()) return 0;   // the documented no-ops: nothing to explain per id
+    if (!self || !id || !pos || !rot) return Refuse(id, Refusal::BadArgument);
+    if (!MayMove(self, id)) return Refuse(id, Refusal::NotYours);
     double q[4], n = 0;
     for (int i = 0; i < 4; ++i) n += rot[i] * rot[i];
     n = std::sqrt(n);
-    if (!std::isfinite(n) || n < 1e-9) return 0;
+    if (!std::isfinite(n) || n < 1e-9) return Refuse(id, Refusal::BadArgument);
     for (int i = 0; i < 4; ++i) q[i] = rot[i] / n;
     for (int i = 0; i < 3; ++i)
-        if (!std::isfinite(pos[i])) return 0;
+        if (!std::isfinite(pos[i])) return Refuse(id, Refusal::BadArgument);
+    if (!EntityAlive(id)) return Refuse(id, Refusal::NotStreamedIn);
     const uint64_t in = TeleportZoneOfEntity(id);   // the zone the entity is in: MoveEntityLocal's frame
-    if (!in) return 0;
+    if (!in) return Refuse(id, Refusal::NoZone);
     double localPos[3], localRot[4];
-    if (!TeleportPoseToZone(zoneId, in, pos, q, localPos, localRot)) return 0;
-    return MoveEntityLocal(id, localPos, localRot) ? 1 : 0;
+    if (!TeleportPoseToZone(zoneId, in, pos, q, localPos, localRot)) return Refuse(id, Refusal::ZoneConversion);
+    return MoveEntityLocal(id, localPos, localRot) ? 1 : Refuse(id, Refusal::MoveFailed);
 }
 int SvcClassExists(const char* cls) {
     return sco::OnGameThread() && SpawnerReady() && cls && *cls && ClassExists(cls) ? 1 : 0;
@@ -207,6 +236,7 @@ void SpawnUnload() {
     if (g_releaseHook) sco::RemoveReleaseHook(OnRelease);
     g_releaseHook = false;
     g_owned.clear();
+    g_logged.clear();
     g_ticking = false;
     g_api = nullptr;
     g_self = nullptr;
