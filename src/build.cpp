@@ -441,8 +441,26 @@ static bool CameraStill() {
     return false;
 }
 
+// Reads buildables.txt once you're spawned: when the Build tab first asks for the list, or when F6
+// enters build mode before the tab was ever opened.
+static void LoadBuildList() {
+    uintptr_t actor, entity;
+    bool live = false;
+    __try { live = GetLocalPlayer(actor, entity); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    if (!live) return;
+    int n = 0;
+    __try { n = BuildList(); } __except (EXCEPTION_EXECUTE_HANDLER) { n = 0; Log("[build] fault while reading buildables.txt"); }
+    InterlockedExchange(&g_buildCount, n);
+}
+
 static void Enter() {
-    if (!g_freeCamOn || g_buildCount <= 0) { Log("[build] build mode isn't available yet"); return; }
+    if (g_freeCamOn && g_buildCount < 0) LoadBuildList();
+    if (!g_freeCamOn || g_buildCount <= 0) {
+        Log("[build] build mode isn't available yet (%s)", !g_freeCamOn ? "no free camera on this game build"
+                                                     : g_buildCount < 0 ? "you're not spawned yet"
+                                                                        : "nothing to place from buildables.txt");
+        return;
+    }
     __try { g_freeCamOn(const_cast<void**>(kFreeCamArgs)); } __except (EXCEPTION_EXECUTE_HANDLER) { Log("[build] fault while enabling the free camera"); return; }
     g_active = true;
     Log("[build] build mode on: left click = place, R = rotate, [ ] = shorter / longer reach, Backspace = undo, F6 = exit");
@@ -496,16 +514,7 @@ static bool Pressed(int vk, bool& was, bool allowed) {
 void ProcessBuild() {
     if (!g_tp.ok || !SpawnerReady()) return;
     if (!g_freeCamOn) return;
-    if (g_buildCount < 0 && g_buildWanted) {
-        uintptr_t actor, entity;
-        bool live = false;
-        __try { live = GetLocalPlayer(actor, entity); } __except (EXCEPTION_EXECUTE_HANDLER) {}
-        if (live) {
-            int n = 0;
-            __try { n = BuildList(); } __except (EXCEPTION_EXECUTE_HANDLER) { n = 0; Log("[build] fault while reading buildables.txt"); }
-            InterlockedExchange(&g_buildCount, n);
-        }
-    }
+    if (g_buildCount < 0 && g_buildWanted) LoadBuildList();
 
     // F6 is the build built-in's hotkey (build.toggle through sco.ui), which sets g_ui.toggle. The
     // keys below are build mode's own, reserved for the product (hotkeys.h).

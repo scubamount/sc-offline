@@ -109,6 +109,13 @@ jobs:
           Check ($m -match "requestedExecutionLevel\s+level=['""]asInvoker['""]\s+uiAccess=['""]false['""]") 'sc-offline.exe requestedExecutionLevel asInvoker, uiAccess false (as the MSBuild build)'
           Check ($m -match "name=['""]Microsoft\.Windows\.Common-Controls['""]") 'sc-offline.exe depends on Common-Controls 6 (launcher.cpp manifestdependency)'
 
+          # The optional bridges (SCO_BRIDGE_TITANLINK / SCO_BRIDGE_VOXEL) are off in this build, the one
+          # the release packages: their commands must not be in the DLL.
+          '--- dinput8.dll without the bridges'
+          $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($dll))
+          Check (-not $text.Contains('titanlink.pilot')) 'dinput8.dll has no titanlink built-in (SCO_BRIDGE_TITANLINK off)'
+          Check (-not $text.Contains('voxel_bridge.toggle')) 'dinput8.dll has no voxel_bridge built-in (SCO_BRIDGE_VOXEL off)'
+
           '--- dinput8.dll manifest'
           & $mt -nologo "-inputresource:$dll;#2" -out:dll.manifest
           $d = Get-Content dll.manifest -Raw
@@ -139,6 +146,47 @@ jobs:
             build/test-plugins/*/plugin.ini
           if-no-files-found: error
           retention-days: 30
+
+  # The optional bridges (docs/bridges.md) built ON, only so they keep compiling. A test build: the
+  # release job packages the build job's DLL and never downloads this job's artifact.
+  bridges:
+    needs: check
+    runs-on: windows-2025-vs2026
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - name: Configure (x64, bridges on)
+        run: cmake -S . -B build -G "Visual Studio 18 2026" -A x64 -DSCO_BRIDGE_TITANLINK=ON -DSCO_BRIDGE_VOXEL=ON
+
+      - name: Build (Release)
+        run: cmake --build build --config Release --parallel
+
+      - name: The bridges are in this DLL
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes('build/bin/Release/dinput8.dll'))
+          $failed = 0
+          foreach ($cmd in 'titanlink.pilot', 'voxel_bridge.toggle') {
+            if ($text.Contains($cmd)) { "PASS  dinput8.dll has $cmd" } else { "FAIL  dinput8.dll lacks $cmd"; $failed++ }
+          }
+          if (-not (Test-Path 'build/bin/Release/bridge-peer.exe')) { 'FAIL  bridge-peer.exe missing'; $failed++ } else { 'PASS  bridge-peer.exe built' }
+          if ($failed) { exit 1 }
+
+      # For in-game tests of the bridges only (docs/bridges.md). Never part of a release.
+      - name: Upload bridges test build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bridges-test
+          path: |
+            build/bin/Release/dinput8.dll
+            build/bin/Release/bridge-peer.exe
+          if-no-files-found: error
+          retention-days: 14
 
   release:
     needs: build

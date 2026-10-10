@@ -9,6 +9,9 @@
  *                  spawn_as by this plugin (expect 0 for each);
  *               3. set_entity_transform in the small ship's own zone frame: to 25 m beside you,
  *                  turned as you stand (expect 1).
+ *               Steps 2 and 3 need the small ship streamed in (entity_alive): until it is, the
+ *               press logs "waiting for <id> to stream in" and the step runs by itself once it
+ *               has, or gives up after 60 s.
  *   Ctrl+Alt+3  logs what the teleport.spatial service answers about you (pose, zone name, a
  *               local -> world -> local round trip, zone_of_entity) and spawn.entities 1.1's
  *               entity_alive for you and for a made-up id.
@@ -28,6 +31,7 @@ static const sco_api* g_api;
 static sco_plugin*    g_self;
 static int            g_down1, g_down2, g_down3;
 static int            g_moverStep;      /* Ctrl+Alt+2: 0 spawn, 1 world frame, 2 zone frame */
+static ULONGLONG      g_waitUntil;      /* GetTickCount64 deadline while a step waits for g_mine; 0 = none */
 static uint64_t       g_mine, g_theirs; /* spawned with spawn_as / spawn_near_player */
 
 static const sco_plugin_info kInfo = {
@@ -67,6 +71,13 @@ static const void* service(const char* name, uint32_t version) {
     r = g_api->query_service(name, version, &table);
     say("query_service(%s %u.%u) -> %s", name, version >> 16, version & 0xFFFFu, result_name(r));
     return r == SCO_OK ? table : NULL;
+}
+
+/* service() without its log line, for the per-tick wait. */
+static const void* quiet_service(const char* name, uint32_t version) {
+    const void* table = NULL;
+    if (g_api->size <= offsetof(sco_api, query_service) || !g_api->query_service) return NULL;
+    return g_api->query_service(name, version, &table) == SCO_OK ? table : NULL;
 }
 
 static const sc_spawn_service_v1* spawn_service(void) {
@@ -141,12 +152,13 @@ static void mover_zone(const sc_spawn_service_v1* s, const sc_spatial_v1* sp) {
     const double ident[4] = { 0.0, 0.0, 0.0, 1.0 };
     double pos[3], rot[4], target[3], local[3] = { 0 };
     uint64_t zone = 0, shipZone = 0;
-    int ok = sp->player_pose(pos, rot, &zone) && sp->zone_of_entity(g_mine, &shipZone);
-    if (ok) {
-        target[0] = pos[0] + 25.0; target[1] = pos[1]; target[2] = pos[2] + 2.0;
-        ok = sp->zone_to_zone(zone, shipZone, target, local);
+    if (!sp->player_pose(pos, rot, &zone)) { say("mover: player_pose failed; are you spawned?"); return; }
+    if (!sp->zone_of_entity(g_mine, &shipZone)) { say("mover: zone_of_entity(mine %llu) failed", (unsigned long long)g_mine); return; }
+    target[0] = pos[0] + 25.0; target[1] = pos[1]; target[2] = pos[2] + 2.0;
+    if (!sp->zone_to_zone(zone, shipZone, target, local)) {
+        say("mover: zone_to_zone(%llu -> %llu) failed", (unsigned long long)zone, (unsigned long long)shipZone);
+        return;
     }
-    if (!ok) { say("mover: player_pose / zone_of_entity(mine %llu) / zone_to_zone failed", (unsigned long long)g_mine); return; }
     say("set_entity_transform(mine %llu, its zone %llu (%s yours), 25 m beside you) -> %d (expect 1)",
         (unsigned long long)g_mine, (unsigned long long)shipZone, shipZone == zone ? "same as" : "differs from",
         s->set_entity_transform(g_self, g_mine, shipZone, local, shipZone == zone ? rot : ident));
@@ -157,6 +169,13 @@ static void run_mover(void) {
     const sc_spatial_v1* sp = (const sc_spatial_v1*)service(SC_SPATIAL_SERVICE_NAME, SC_SPATIAL_SERVICE_VERSION);
     if (!s || !sp) return;
     if (s->size <= offsetof(sc_spawn_service_v1, spawn_as)) { say("spawn.entities table is older than 1.2 (size %u)", s->size); return; }
+    if (g_moverStep > 0 && !g_mine) { say("mover: no spawn_as ship to move; spawning first"); g_moverStep = 0; }
+    g_waitUntil = 0;
+    if (g_moverStep > 0 && !s->entity_alive(g_mine)) {
+        say("waiting for %llu to stream in (step %d runs when it has; up to 60 s)", (unsigned long long)g_mine, g_moverStep + 1);
+        g_waitUntil = GetTickCount64() + 60000;
+        return;
+    }
     say("mover step %d of 3", g_moverStep + 1);
     if (g_moverStep == 0) mover_spawn(s);
     else if (g_moverStep == 1) mover_world(s, sp);
@@ -217,6 +236,14 @@ static void on_tick(const char* event, const void* data, void* ctx) {
     (void)event; (void)data; (void)ctx;
     if (down1 && !g_down1) run_checks();
     if (down2 && !g_down2) run_mover();
+    else if (g_waitUntil) {   /* a step waiting for the small ship to stream in */
+        const sc_spawn_service_v1* s = (const sc_spawn_service_v1*)quiet_service(SC_SPAWN_SERVICE_NAME, SC_SPAWN_SERVICE_VERSION);
+        if (s && s->entity_alive(g_mine)) run_mover();
+        else if (GetTickCount64() > g_waitUntil) {
+            say("gave up waiting for %llu after 60 s; press Ctrl+Alt+2 to wait again", (unsigned long long)g_mine);
+            g_waitUntil = 0;
+        }
+    }
     if (down3 && !g_down3) run_spatial();
     g_down1 = down1;
     g_down2 = down2;

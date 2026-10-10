@@ -147,6 +147,36 @@ target_link_libraries(dinput8 PRIVATE imgui d3d11 shlwapi advapi32 windowscodecs
 # detour engine, the zone tree (sco/engine/zone.h) and the CryPak adapter (sco/game/pak.h, with sco_vfs).
 target_link_libraries(dinput8 PRIVATE sco_app sco_lua sco_hook sco_engine sco_pak)
 
+# --- optional bridges (docs/bridges.md) ------------------------------------------------------------
+# Built-ins that link the game to another program on the same PC through sco-core's sco.ipc. Off by
+# default and never in a release: the release job packages the default build's dinput8.dll, and CI
+# builds these ON in a job of its own (artifact "bridges-test") only so they keep compiling.
+option(SCO_BRIDGE_TITANLINK "Build the Titanfall 2 bridge built-in (titanlink)" OFF)
+option(SCO_BRIDGE_VOXEL "Build the voxel-game bridge built-in (voxel_bridge)" OFF)
+if(SCO_BRIDGE_TITANLINK)
+  target_sources(dinput8 PRIVATE
+    src/builtins/titanlink/titanlink_plugin.cpp
+    src/builtins/titanlink/titanlink_overlay.cpp
+    src/builtins/titanlink/titanlink_ui.cpp)
+  target_compile_definitions(dinput8 PRIVATE SCO_BRIDGE_TITANLINK)
+  # The overlay's own window: DXGI flip swap chain through DirectComposition (d3d11 is linked above).
+  target_link_libraries(dinput8 PRIVATE dxgi dcomp)
+endif()
+if(SCO_BRIDGE_VOXEL)
+  target_sources(dinput8 PRIVATE
+    src/builtins/voxel_bridge/voxel_plugin.cpp
+    src/builtins/voxel_bridge/voxel_ui.cpp)
+  target_compile_definitions(dinput8 PRIVATE SCO_BRIDGE_VOXEL)
+endif()
+if(SCO_BRIDGE_TITANLINK OR SCO_BRIDGE_VOXEL)
+  # A stand-in for the other program, for testing a bridge without Titanfall 2 or the voxel game:
+  # it opens a channel with nothing but sc_ipc.h and the layout headers (tools/bridge-peer).
+  add_executable(bridge-peer tools/bridge-peer/bridge_peer.cpp)
+  target_include_directories(bridge-peer PRIVATE external/sco-core/include src/builtins)
+  target_compile_definitions(bridge-peer PRIVATE ${SCO_COMMON_DEFINES})
+  target_compile_options(bridge-peer PRIVATE ${SCO_COMMON_OPTIONS} /W3)
+endif()
+
 # WholeProgramOptimization + LinkTimeCodeGeneration in Release (/GL, /LTCG).
 set_target_properties(imgui dinput8 PROPERTIES INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
 

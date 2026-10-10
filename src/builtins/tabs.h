@@ -22,6 +22,8 @@ constexpr int32_t kTabCrew     = 400;   // crew.crew
 constexpr int32_t kTabNpcs     = 500;   // npc.npcs
 constexpr int32_t kTabBuild    = 600;   // build.build
 constexpr int32_t kTabSq42     = 700;   // loadout.sq42
+constexpr int32_t kTabTitanLink = 800;  // titanlink.titanfall (optional bridge, SCO_BRIDGE_TITANLINK)
+constexpr int32_t kTabVoxel     = 810;  // voxel_bridge.voxel (optional bridge, SCO_BRIDGE_VOXEL)
 
 // Draw functions (sco_ui_draw_fn), in <feature>_ui.cpp.
 void DrawPlayerTab(void* frame, void* ctx);     // loadout_ui.cpp
@@ -31,6 +33,8 @@ void DrawVehiclesTab(void* frame, void* ctx);   // spawn_ui.cpp
 void DrawCrewTab(void* frame, void* ctx);       // crew_ui.cpp
 void DrawNpcsTab(void* frame, void* ctx);       // npc_ui.cpp
 void DrawBuildTab(void* frame, void* ctx);      // build_ui.cpp
+void DrawTitanLinkTab(void* frame, void* ctx);  // titanlink/titanlink_ui.cpp (optional)
+void DrawVoxelTab(void* frame, void* ctx);      // voxel_bridge/voxel_ui.cpp (optional)
 
 // The NPC picker the NPCs and Crew tabs share (npc_ui.cpp): a search box and a combo over
 // npcs.txt. False while the list isn't there (a hint is shown instead). g_npcPick is the pick.
