@@ -220,6 +220,9 @@ static void StartHostKit() {
     // F6, F7 and F8 to their commands through sco.ui like any plugin.
     pf.reservedChords = kReservedChords;
     pf.nReservedChords = kReservedChordCount;
+    // sco-core's game pack publishes teleport.spatial (and, later, the game.* services) under the
+    // owner "game" before the built-ins load; the teleport built-in no longer provides it.
+    pf.gameServices = true;
     g_hostKitStarted = sco::app::Start(pf);
 }
 
