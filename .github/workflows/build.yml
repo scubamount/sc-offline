@@ -37,6 +37,15 @@ jobs:
       - name: Release manifest tests
         run: python3 tools/test_release_manifest.py
 
+      # The ImGui headers sco-core's SDK ships for plugin UI must be the ones this product links.
+      - name: ImGui headers match the SDK's
+        run: |
+          set -eu
+          for f in imconfig.h imgui.h LICENSE.txt; do
+            cmp "src/third_party/imgui/$f" "external/sco-core/sdk/third_party/imgui/$f"
+          done
+          echo "src/third_party/imgui and external/sco-core/sdk/third_party/imgui match"
+
   build:
     needs: check
     # Pinned: the project builds with the v145 toolset, which this image carries (VS 2026).

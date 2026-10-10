@@ -5,7 +5,7 @@
 // and F8 to them through sco.ui, and the product dispatches those keys (hotkeys.cpp). The
 // mechanics stay in teleport.cpp. Commands run on the game thread, where F7 and F8 always ran.
 //
-// It also publishes the teleport.spatial service (spatial_service.h): a tick subscription feeds a
+// It also publishes the teleport.spatial service (sc_spatial.h): a tick subscription feeds a
 // sco::engine::ZoneTree with your zone chain, read with teleport.cpp's zone readers, and the
 // service's conversions read through that tree. The tree holds ids and transforms only, never a
 // game pointer, and is rebuilt every tick; a zone queried that isn't in it yet is read on the spot.
@@ -15,7 +15,7 @@
 // DirectInput8Create.
 #include "builtins.h"
 #include "builtin_store.h"
-#include "spatial_service.h"
+#include <sc_spatial.h>
 #include "tabs.h"
 #include "../build.h"
 #include "../hotkeys.h"
@@ -60,7 +60,7 @@ sco_result Register(const char* name, const char* title, const char* help, sco_c
     return g_api->register_command(g_self, &c);
 }
 
-// ---- teleport.spatial (spatial_service.h) -----------------------------------------------------
+// ---- teleport.spatial (sc_spatial.h) ----------------------------------------------------------
 
 using sco::engine::Quatd;
 using sco::engine::Transform;

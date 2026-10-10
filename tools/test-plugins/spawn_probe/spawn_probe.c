@@ -9,7 +9,7 @@
  * Every result goes to mod.log as "[spawn_probe] ...". */
 #include "sco_api.h"
 #include "spawn_service.h"
-#include "spatial_service.h"
+#include <sc_spatial.h>
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <math.h>
