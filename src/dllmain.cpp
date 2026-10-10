@@ -29,6 +29,7 @@
 #include "sco/signatures.h"
 #include "sco/game/signatures.h"
 #include "sco/game/system.h"
+#include "sco/game/offline.h"
 #include "sco/runtime.h"
 #include "sco_lua.h"
 #include <filesystem>
@@ -120,7 +121,7 @@ static void StartOffline() {
     g_signaturesResolved = true;
     g_offline = ApplyOfflinePatches();
     if (!g_offline) return;
-    InstallHooks(g_text);
+    InstallHooks();
     ResolveQuantumApi(g_text, g_rdata);
     EnableQuantumDrive();   // the pak.* rows: the new quantum drive's game data, served as it loads
     InstallQuitHook();
@@ -180,6 +181,7 @@ static void SetFeatureCaps() {
     SetCap("quantum", g_tp.ok);   // the Travel tab's requests all go through teleport
     SetCap("build", g_buildOk && SpawnerReady());
     SetCap("contracts", ContractsReady());
+    SetMiningCaps();   // game.mining, from sco-core's mining.cell row
 #ifdef SCO_BRIDGE_TITANLINK
     SetCap("titanlink", g_tp.ok);   // your pose and zone conversions come from teleport.spatial
 #endif
@@ -220,6 +222,9 @@ static void StartHostKit() {
     // F6, F7 and F8 to their commands through sco.ui like any plugin.
     pf.reservedChords = kReservedChords;
     pf.nReservedChords = kReservedChordCount;
+    // sco-core's game pack publishes teleport.spatial (and, later, the game.* services) under the
+    // owner "game" before the built-ins load; the teleport built-in no longer provides it.
+    pf.gameServices = true;
     g_hostKitStarted = sco::app::Start(pf);
 }
 
@@ -257,7 +262,7 @@ static bool QuitEndsProcess(void* system) {
     void* cvar = *reinterpret_cast<void**>(sys + g_quitCVarOffset);
     if (cvar) {
         using GetIValFn = int(__fastcall*)(void* cvar);
-        if ((*reinterpret_cast<GetIValFn* const*>(cvar))[2](cvar) != 0) return true;
+        if ((*reinterpret_cast<GetIValFn* const*>(cvar))[sco::game::offline::kCVarGetIValSlot / sizeof(void*)](cvar) != 0) return true;
     }
     return sys[g_quitTestModeOffset] != 0;
 }
@@ -275,15 +280,16 @@ static void InstallQuitHook() {
         g_quitHookStatus = "not installed (system.quit isn't OK, see [core] signatures; WM_QUIT only)";
         return;
     }
+    // system.quit_fast_shutdown (system.quit +0x31a) checks the test:
     // +0x31a  mov rcx,[r14+cvar]; test rcx,rcx; je; mov rax,[rcx]; call [rax+10h]; test eax,eax; jne
     // +0x330  cmp byte ptr [r14+testMode],0; je (PostQuitMessage)
-    if (!BytesMatch(q.fn + 0x31a, "49 8B 8E ?? ?? ?? ?? 48 85 C9 74 0A 48 8B 01 FF 50 10 85 C0 75 0E "
-                                  "41 80 BE ?? ?? ?? ?? 00 0F 84")) {
-        g_quitHookStatus = "not installed (CSystem::Quit's fast-shutdown test moved; WM_QUIT only)";
+    if (!OfflineCapReady("system.quit_hook")) {
+        g_quitHookStatus = "not installed (CSystem::Quit's fast-shutdown test moved: system.quit_fast_shutdown isn't OK, see [core] signatures; WM_QUIT only)";
         return;
     }
-    g_quitCVarOffset     = *reinterpret_cast<const int32_t*>(q.fn + 0x31d);
-    g_quitTestModeOffset = *reinterpret_cast<const int32_t*>(q.fn + 0x333);
+    const uint8_t* test = sco::Sig("system.quit_fast_shutdown");
+    g_quitCVarOffset     = *reinterpret_cast<const int32_t*>(test + sco::game::offline::kQuitCVarDisp);
+    g_quitTestModeOffset = *reinterpret_cast<const int32_t*>(test + sco::game::offline::kQuitTestModeDisp);
     if (!HookFunction(q.fn, q.stolenBytes, reinterpret_cast<void*>(&QuitDetour), reinterpret_cast<void**>(&g_quitOriginal))) {
         g_quitHookStatus = "not installed (hook failed; WM_QUIT only)";
         return;
@@ -297,7 +303,7 @@ static void RunFeatureTicks(DWORD now) {
     if (!SpawnBuiltinOwnsTick()) ProcessShipMenu(now);
     if (!CrewBuiltinOwnsTick()) ProcessCrew(now);
     if (!LoadoutBuiltinOwnsTick()) { ProcessLoadout(); ProcessOutfits(); }
-    if (!NpcBuiltinOwnsTick()) ProcessNpcs();
+    ProcessNpcs();   // npcs.txt, removals; the npc built-in spawns through game.actors and has no tick
     if (!BuildBuiltinOwnsTick()) ProcessBuild();
     ProcessCVars();
     if (!QuantumBuiltinOwnsTick()) { ProcessQuantum(); ProcessTravel(now); }

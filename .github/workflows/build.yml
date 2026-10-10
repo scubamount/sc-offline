@@ -46,6 +46,18 @@ jobs:
           done
           echo "src/third_party/imgui and external/sco-core/sdk/third_party/imgui match"
 
+  # Its own job, not a step of `check`: `build` waits for `check`, so a failing scan gate there
+  # would also hide whether the sources compile. The two answers are independent.
+  no-scans:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Zero raw pattern scans under src/
+        run: tools/no-scans.sh
+
   build:
     needs: check
     # Pinned: the project builds with the v145 toolset, which this image carries (VS 2026).

@@ -3,6 +3,8 @@
 #include "tabs.h"
 #include "../menu.h"
 #include "../menu_ui.h"
+#include "../spawner.h"
+#include "../teleport.h"
 #include "../third_party/imgui/imgui.h"
 #include <cstdio>
 #include <cstring>
@@ -32,6 +34,11 @@ static void PrettySeatNames(const MenuSeat* seats, int n, const char* ship, char
         if (total > 1) snprintf(out[i], 64, "%s %d", base[i], before + 1);
         else strcpy_s(out[i], 64, base[i]);
     }
+}
+
+// Run by the crew built-in's tick: the tab's buttons queue spawner.cpp's seat actions, which this carries out.
+void CrewTabTick(uint32_t now) {
+    if (g_tp.ok) ProcessCrew(now);
 }
 
 void DrawCrewTab(void*, void*) {

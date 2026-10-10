@@ -41,15 +41,17 @@ Limits: one ship out at a time. Stored and retrieved ships last for the session.
 
 Each part of this switches itself off when the game's code for it isn't found on your game version, and `mod.log` lists every part at startup: `[+] ship terminal open (rc1): ready (...)`, or `[!] ship terminal Deliver (rc3): needs atc.store_vehicle (MISSING)`. With `asop = off` it reads `[-] ship terminals, hangars and ATC (ASOP): off`. Each step of a Deliver, Retrieve or Store is logged with `[asop]`, and hangar and ATC steps with `[iim]` and `[atc]`. The parts are also capabilities that plugins can ask about: `asop.terminal`, `asop.caller`, `asop.list`, `asop.deliver`, `asop.claim_timeout`, `asop.retrieve`, `hangar.lift`, `atc.store`, `hangar.instance`, `atc.tokens` and `asop.diagnostics`.
 
-Your retrieved ship is registered with the spawn built-in, so plugins may move it with `set_entity_transform` (`sc_spawn.h`).
+Your retrieved ship is registered with the game pack's spawn.entities mover, so plugins may move it with `set_entity_transform` (`sc_spawn.h`).
 
 ## Crew
 
 Lists every seat on your ship and who is in it. From here you can sit in a seat, make an NPC stand up, remove an NPC, or add one. NPCs you add will sit in a seat but won't fly the ship or operate turrets.
 
+The `crew.*` commands (below) work on sco-core's `game.vehicles` and `game.actors` services, not on this tab's seat code. They act on the ship you're aboard, or the one `crew.target` pinned. Some entries in a ship's seat list are not crew seats (turret items and remote-operated parts: the game's own seat picker skips them). `crew.fill` seats NPCs only in seats that are empty and usable, and says how many it skipped: `Seating 10 x <npc> (5 seats skipped: not interactable)`. `mod.log` has one `interactable yes|no` line per seat, written by the game pack, and `crew.sit` refuses a seat that isn't usable.
+
 ## NPCs
 
-Spawn any of 2239 NPC archetypes in front of you, and remove them again (`npcs.txt`). If the game refuses to delete an NPC offline, the mod moves it far out of range instead.
+Spawn any of 2239 NPC archetypes in front of you, and remove them again (`npcs.txt`). The `npc` built-in spawns through sco-core's `game.actors` service (`spawn_npc` and `despawn`, `sc_actors.h`), so the game pack owns the NPCs: **Remove spawned NPCs** and `npc.clear` despawn them, and unloading or reloading the built-in despawns whatever it spawned. The tab's remove button also takes out the crew's NPCs. NPCs appear 3 m ahead at your feet's height with no ground check, so on a slope they can start a little above or inside the ground.
 
 ## Build (F6)
 
@@ -57,11 +59,23 @@ Spawn any of 2239 NPC archetypes in front of you, and remove them again (`npcs.t
 - Prefabs show as a flag while the camera moves, then as the real building once it stops.
 - **Undo** and **Clear base** remove what you placed.
 
+### Build mode and `game.entities`
+
+Build mode doesn't touch the game's entity code for props: it asks sco-core's `game.entities` service (`sc_entities.h`, published by the game pack) to spawn a prop in your zone, move the preview with `set_transform` while you aim, and `despawn` the preview when you pick another object. Props you place stay in the world when the build built-in unloads or reloads: build mode calls `keep` (`game.entities` 1.1) on each one as it spawns, so nobody owns it afterwards, and Undo and Clear base remove it through the game's own entity removal. (Against a game pack that only has `game.entities` 1.0, `mod.log` says `[build] game.entities has no keep() (1.0)` once, and props stay owned by the `build` plugin: the game pack removes them if it unloads or crashes.) If the service or its `game.entities.spawn` / `game.entities.transform` capabilities aren't ready on your game build, `mod.log` says `[build] game.entities isn't available: props are placed through the spawner` and build mode works as before. Prefabs (`.socpak`) and NPCs always use the spawner. The `spawn_probe` test plugin's **Ctrl+Alt+=** exercises the service on its own and logs every result.
+
 ## Contracts
 
 `contract_scripts.txt` lists the 796 contracts that run without any of CIG's mission scripts (hauling and similar). The mobiGlas list leaves out Pyro and Nyx contracts and anything named test, debug or tutorial (`src/contracts.cpp` `Listable`). `mod.log` records the counts at startup: `[contracts] N contracts known; M run ...`.
 
 This repository ships none of CIG's Subsumption mission scripts. Contracts that need them (bounty, delivery-with-combat, salvage and others) are not offered.
+
+## Natural mining
+
+Experimental, and off by default: `mining = on` in `sc-offline.ini` (see [launcher](launcher.md#sc-offlineini)). The `mining` built-in detours the game's `CBiomeBuilder::BuildLargeScaleEcoSystem`, the function that builds each ecosystem cell around you. A cell that has built only its physics (rule flags `0x6`) is passed to the game with the spawning bit set (`0xE`), so the game builds its harvestable rocks as it does online. Only that flag changes: the game's own provider, location and depletion checks, transforms and materials still decide what appears, and nothing is spawned, edited or written by the mod. It acts only for the builder's cell path (type 0), cells whose harvestable LOD is not built yet, and while the offline session is up and the game's online flag is 0. It needs sco-core's `game.mining` capability (the `mining.cell` row, found in any game build); without it `mining.status` is unavailable and `mod.log` says so.
+
+`mining.status` reports the state (off, unavailable, waiting for the offline session, active) and how many cells were seen and promoted. `mining_debug = on` also writes `[mining/trace]` lines to `mod.log` while the counts change: cells seen, promoted, why others were skipped, and read faults. A read fault switches natural mining off until you restart.
+
+The idea and the working native contract come from the `junikka/sc-offline-mining` fork (GPL-3.0). It confirmed in game, on an earlier game build, that natural Titanium (Ore) is highlighted in mining mode, shows its composition, responds to the mining laser and can be extracted. This built-in is a port onto sco-core's row for 4.10.196 and is not yet tested in game: see the pull request for the steps. Leaving and returning to an area, depletion and persistence across restarts are unverified.
 
 ## Squadron 42
 
@@ -103,27 +117,27 @@ sc-offline can load plugins built with the [sco SDK](https://github.com/scubamou
    ...
    ```
 
-   A plugin that can't load is listed with the reason (`refused: built for api 2.0`, `missing capability 'teleport'`, ...); the others still load. To switch one plugin off, put an empty file named `disabled` in its folder.
+   A plugin that can't load is listed with the reason (`refused: built for api 2.0`, `missing capability 'teleport'`, ...); the others still load. To switch one plugin off, put an empty file named `disabled` in its folder (the launcher's Plugins page does the same, see [launcher.md](launcher.md#the-plugins-page)).
 
-With `plugins = off`, `mod.log` shows `[plugin] 10 found, 10 loaded (plugins = off)`: only the ten built-in plugins load.
+With `plugins = off`, `mod.log` shows `[plugin] 11 found, 11 loaded (plugins = off)`: only the eleven built-in plugins load.
 
 ### Built-in plugins
 
-sc-offline's features are ten plugins compiled into `dinput8.dll`: `teleport`, `spawn`, `crew`, `loadout`, `npc`, `ammo`, `quantum`, `build`, `contracts` and `multiplayer`, loaded in that order. They load first, with `plugins` on or off, and are listed as `builtin` in the `[plugin]` report (`[plugin] loaded teleport <version> (api 1.1) built in`). Each runs its feature's per-tick work from a `tick` subscription, so a fault there switches that feature off (`[plugin] <id> ... crashed`) instead of crashing the game. Each built-in also draws its own tabs in the menu through sco-core's `sco.ui` service, and binds its keys there: `build` binds F6, and `teleport` binds F7 and F8. The menu looks and works as before. A fault while a tab is drawn switches off only the built-in that owns it, along with its tabs. Their commands are the ones plugins call through the SDK's `invoke`; a command that ran but couldn't do it (an unknown name, a list not loaded yet) answers `failed` with the reason:
+sc-offline's features are eleven plugins compiled into `dinput8.dll`: `teleport`, `spawn`, `crew`, `loadout`, `npc`, `ammo`, `quantum`, `build`, `contracts`, `mining` and `multiplayer`, loaded in that order. They load first, with `plugins` on or off, and are listed as `builtin` in the `[plugin]` report (`[plugin] loaded teleport <version> (api 1.1) built in`). Each runs its feature's per-tick work from a `tick` subscription, so a fault there switches that feature off (`[plugin] <id> ... crashed`) instead of crashing the game. Each built-in also draws its own tabs in the menu through sco-core's `sco.ui` service, and binds its keys there: `build` binds F6, and `teleport` binds F7 and F8. The menu looks and works as before. A fault while a tab is drawn switches off only the built-in that owns it, along with its tabs. Their commands are the ones plugins call through the SDK's `invoke`; a command that ran but couldn't do it (an unknown name, a list not loaded yet) answers `failed` with the reason:
 
 | Command | Does | Key |
 | --- | --- | --- |
 | `teleport.save` | Saves where you're standing (`data/storage/teleport.db`); the reply names the spot | **F7** |
 | `teleport.go` | Teleports to the saved spot; the reply says where you went, or why not | **F8** |
 | `spawn.ship <class> <height>` | Spawns a ship `<height>` m (0 to 10000) above you, as the Vehicles tab does, and makes it the Crew & seats target; the status strip says when it's there. An unknown class answers `failed` | |
-| `crew.target` | Makes the ship you're in the Crew & seats target | |
-| `crew.sit <seat>` | Puts you in the target ship's first seat whose name has these words (`pilot`, `turret left`), removing an NPC in it | |
-| `crew.stand_all` | You and every NPC on the target ship get out of the seats | |
-| `crew.fill <npc>` | Puts an NPC of this archetype (`npcs.txt`) in every empty seat of the target ship | |
-| `crew.clear` | Removes every NPC from the target ship's seats | |
+| `crew.target` | Pins the ship you're in as the target of the `crew.*` commands (without it they use the ship you're aboard) | |
+| `crew.sit <seat>` | Puts you in the target ship's first seat whose name has these words (`pilot`, `turret left`), removing a crew NPC in it | |
+| `crew.stand_all` | You and the NPCs `crew.fill` added on the target ship get out of the seats | |
+| `crew.fill <npc>` | Puts an NPC of this archetype (`npcs.txt`) in every empty, usable seat of the target ship and says how many seats it skipped | |
+| `crew.clear` | Removes the NPCs `crew.fill` added to the target ship | |
 | `crew.power_on` | Sends the game's Flight Ready event to the target ship | |
-| `npc.spawn <npc> <count>` | Spawns 1 to 10 NPCs of an archetype (`npcs.txt`) in front of you | |
-| `npc.clear` | Removes the NPCs you spawned | |
+| `npc.spawn <npc> <count>` | Spawns 1 to 10 NPCs of an archetype (`npcs.txt`) about 3 m in front of you, through the game pack's `game.actors`; an unknown archetype answers `failed` with the game pack's reason | |
+| `npc.clear` | Despawns the NPCs `npc.spawn` made (the crew's NPCs aren't included; `crew.clear` removes those) | |
 | `loadout.equip <items>` | Equips items from `items.txt` (separated by spaces or commas, one per slot; the other slots are empty, as in the gear menu) | |
 | `loadout.wear <outfit>` | Wears a Squadron 42 outfit from `outfits.txt` | |
 | `ammo.infinite <on>` | Infinite ammo on or off (the menu's checkbox doesn't follow it) | |
@@ -137,15 +151,16 @@ sc-offline's features are ten plugins compiled into `dinput8.dll`: `teleport`, `
 | `build.clear` | Removes everything you placed | |
 | `build.place <object> <ahead>` | Places one buildable (`buildables.txt`) `<ahead>` m in front of you (0 = at your feet, up to 100) without entering build mode | |
 | `contracts.status` | How many contracts are known, offered and running, and your wallet's balance | |
+| `mining.status` | Whether natural mining is on, and how many ecosystem cells it has seen and promoted | |
 | `multiplayer.status` | The session's state and how many other players are in it | |
 | `multiplayer.leave` | Leaves the session (or stops hosting) | |
 | `multiplayer.goto <player>` | Teleports you next to that player's ghost | |
 
-Each built-in's commands need the capability named after it (`teleport`, `spawn.ship`, `crew`, `npc`, `loadout`, `ammo`, `quantum`, `build`, `contracts`); one is missing when this game build's addresses for that feature aren't found, and the rest of the plugin system still starts. A built-in owns its id, command prefix and services, so a plugin folder named after one (`teleport`, `spawn`, `crew`, ...) is refused (`the id belongs to a built-in plugin`), whatever its kind.
+Each built-in's commands need the capability named after it (`teleport`, `spawn.ship`, `crew`, `npc`, `loadout`, `ammo`, `quantum`, `build`, `contracts`, `game.mining`); one is missing when this game build's addresses for that feature aren't found, and the rest of the plugin system still starts. A built-in owns its id, command prefix and services, so a plugin folder named after one (`teleport`, `spawn`, `crew`, ...) is refused (`the id belongs to a built-in plugin`), whatever its kind.
 
-The `spawn` built-in's tick runs the Vehicles tab's spawns and the seat job that puts you in a seat; the `crew` built-in's runs the Crew & seats actions and crew jobs. For plugin authors it publishes a service, `spawn.entities` 1.2: a C function table to spawn an entity class near you, look up your entity and ship ids, ask whether an entity id still resolves in the game (`entity_alive`, 1.1), and (new in 1.2) move and turn an entity in the world frame or a zone's frame (`set_entity_transform`), without going through command replies. A plugin may move only what it spawned itself through `spawn_as` (1.2: `spawn_near_player` with the plugin's handle; what `spawn_near_player` and `spawn.ship` spawn belongs to nobody), forgotten when that plugin unloads, or your own vehicle once sc-offline registers it as retrieved or delivered by ATC (not yet). A plugin built against 1.0 or 1.1 keeps working; one that uses a later function checks the table's `size` first. Its header is [`sc_spawn.h`](../external/sco-core/include/sc_spawn.h), shipped in sco-core's SDK; find it with `query_service` (sco_api 1.1). A plugin runs its own code in the game, so only install plugins you trust.
+The `spawn` built-in's tick runs the Vehicles tab's spawns and the seat job that puts you in a seat; the `crew` built-in's runs the Crew tab's seat actions and the seat jobs of the `crew.*` commands. For plugin authors sco-core's game pack publishes `spawn.entities` 1.2 (the `spawn` built-in published it before, with the same table): a C function table to spawn an entity class near you, look up your entity and ship ids, ask whether an entity id still resolves in the game (`entity_alive`, 1.1), and (new in 1.2) move and turn an entity in the world frame or a zone's frame (`set_entity_transform`), without going through command replies. A plugin may move only what it spawned itself through `spawn_as` (1.2: `spawn_near_player` with the plugin's handle; what `spawn_near_player` and `spawn.ship` spawn belongs to nobody), forgotten when that plugin unloads, or your own vehicle once ASOP registers it as retrieved or delivered by ATC. A plugin built against 1.0 or 1.1 keeps working; one that uses a later function checks the table's `size` first. Its header is [`sc_spawn.h`](../external/sco-core/include/sc_spawn.h), shipped in sco-core's SDK; find it with `query_service` (sco_api 1.1). A plugin runs its own code in the game, so only install plugins you trust.
 
-The `teleport` built-in publishes `teleport.spatial` 1.0 ([`sc_spatial.h`](../external/sco-core/include/sc_spatial.h), shipped in sco-core's SDK): your position and orientation in the zone you're in, the zone an entity is in, a zone's name, and positions converted between a zone and the world or between two zones. Zones are the game's nested frames (star system > planet > city or station > ship > room); every id is the game's own 64-bit id and every position is in metres. Each tick the built-in reads your zone chain from the game into sco-core's zone tree, and a zone you ask about that isn't in it is read on the spot; nothing about the game is kept from one tick to the next, so an id that has streamed out simply answers 0. Like `spawn.entities`, it works from the game thread only.
+sco-core's game pack publishes `teleport.spatial` 1.0 (since game pack 0.1.0; the `teleport` built-in published it before, with the same table) ([`sc_spatial.h`](../external/sco-core/include/sc_spatial.h), shipped in sco-core's SDK): your position and orientation in the zone you're in, the zone an entity is in, a zone's name, and positions converted between a zone and the world or between two zones. Zones are the game's nested frames (star system > planet > city or station > ship > room); every id is the game's own 64-bit id and every position is in metres. Each tick the built-in reads your zone chain from the game into sco-core's zone tree, and a zone you ask about that isn't in it is read on the spot; nothing about the game is kept from one tick to the next, so an id that has streamed out simply answers 0. Like `spawn.entities`, it works from the game thread only.
 
 ### Menu tabs and hotkeys for plugins
 

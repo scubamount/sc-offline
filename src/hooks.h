@@ -3,7 +3,7 @@
 
 extern bool g_hooksInstalled;
 
-void InstallHooks(const Section& text);
+void InstallHooks();
 void LogHooks();
 bool HookFunction(uint8_t* target, size_t stolen, void* detour, void** original);
 uint8_t* NearData(size_t n);
