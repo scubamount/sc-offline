@@ -94,14 +94,20 @@ static bool OurProcessHasFocus() {
 }
 
 static bool g_clipped = false;
+static RECT g_clipRect = {};   // last rect we clipped to, so we don't re-clip every frame
 
 static void KeepCursorInMenu() {
+    // ClipCursor is a cross-process, synchronous input call; doing it every frame while the menu
+    // has foreground is enough to starve the game's own message thread. Only re-clip when the
+    // menu window actually moves or resizes.
     if (GetForegroundWindow() != g_wnd) {
         if (g_clipped) { ClipCursor(nullptr); g_clipped = false; }
         return;
     }
     RECT r = {};
     GetWindowRect(g_wnd, &r);
+    if (g_clipped && EqualRect(&r, &g_clipRect)) return;
+    g_clipRect = r;
     ClipCursor(&r);
     g_clipped = true;
 }
@@ -522,6 +528,11 @@ static HANDLE        g_frameBuilt = nullptr;   // auto-reset: the game thread fi
 static bool          g_frameKeepOpen = true;   // DrawMenu's answer for the last frame
 static std::atomic<bool> g_typing{ false };   // the menu has focus and a text box is active
 constexpr DWORD kFrameWaitMs = 250;
+// Perf probe (0.7.2 diagnostic); see BuildFrameOnGameThread.
+static ULONGLONG g_perfMark = 0;
+static int       g_perfFrames = 0;
+static int       g_perfWithdrawn = 0;
+static double    g_perfSumMs = 0.0, g_perfMaxMs = 0.0;
 
 void Menu_GameThreadFrame() {
     if (InterlockedCompareExchange(&g_frameState, Frame_Building, Frame_Wanted) != Frame_Wanted) return;
@@ -537,6 +548,7 @@ bool Menu_Typing() { return g_typing.load(); }
 // Menu thread. True: the game thread built a frame. False: it didn't start one in time, and the
 // request was withdrawn.
 static bool BuildFrameOnGameThread() {
+    const ULONGLONG t0 = GetTickCount64();
     InterlockedExchange(&g_frameState, Frame_Wanted);
     PostMessageW(g_game, WM_NULL, 0, 0);   // the message hook runs on the game's next message
     if (WaitForSingleObject(g_frameBuilt, kFrameWaitMs) != WAIT_OBJECT_0) {
@@ -544,6 +556,21 @@ static bool BuildFrameOnGameThread() {
         WaitForSingleObject(g_frameBuilt, INFINITE);   // it has started: let it finish
     }
     InterlockedExchange(&g_frameState, Frame_Idle);
+    // Perf probe (0.7.2 diagnostic): how long each game-thread frame build costs, summarized once
+    // a second so this can't itself become the log spam it's meant to catch. If fps.ms climbs over
+    // a few seconds the cost is in a tab's draw; if it's flat but fps.hz is low the cost is the
+    // build interrupt itself.
+    const double ms = static_cast<double>(GetTickCount64() - t0);
+    g_perfFrames += 1;
+    if (ms > g_perfMaxMs) g_perfMaxMs = ms;
+    g_perfSumMs += ms;
+    g_perfWithdrawn += (ms >= kFrameWaitMs) ? 1 : 0;
+    const ULONGLONG now = GetTickCount64();
+    if (now - g_perfMark >= 1000) {
+        Log("[menu] perf: %.1f fps | build avg %.2f ms, max %.2f ms | withdrawn %d/s",
+            g_perfFrames * 1000.0 / (now - g_perfMark), g_perfSumMs / g_perfFrames, g_perfMaxMs, g_perfWithdrawn);
+        g_perfFrames = 0; g_perfSumMs = 0; g_perfMaxMs = 0; g_perfWithdrawn = 0; g_perfMark = now;
+    }
     return true;
 }
 
@@ -593,6 +620,9 @@ static DWORD WINAPI MenuThread(LPVOID) {
         if (visible && !IsWindowVisible(g_wnd)) { visible = false; ClipCursor(nullptr); g_clipped = false; }
         if (!visible) { g_typing = false; Sleep(50); continue; }
         KeepCursorInMenu();
+        // Visible but not focused: freeze the picture and stop interrupting the game thread to
+        // rebuild it, so the game runs at full speed. The menu resumes the moment it regains focus.
+        if (GetForegroundWindow() != g_wnd) { Sleep(50); continue; }
 
         if (g_resizeW && g_resizeH) {
             ReleaseRenderTarget();
