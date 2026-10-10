@@ -15,6 +15,7 @@
 // DirectInput8Create.
 #include "builtins.h"
 #include "builtin_store.h"
+#include "mover.h"
 #include <sc_spatial.h>
 #include "tabs.h"
 #include "../build.h"
@@ -275,6 +276,37 @@ void TeleportUnload() {
     g_self = nullptr;
 }
 
+// The rotation of zone id's frame in the world: its parents' rotations composed down to it.
+bool WorldRotation(uint64_t zoneId, Quatd* out) {
+    Quatd q = Quatd::Identity();
+    for (int depth = 0; zoneId; ++depth) {
+        sco::engine::Zone z;
+        if (depth >= sco::engine::ZoneTree::kMaxDepth || !g_zones.Find(zoneId, &z)) return false;
+        q = z.local.rotation * q;
+        zoneId = z.parentId;
+    }
+    *out = q.Normalized();
+    return true;
+}
+
 }  // namespace
+
+// mover.h: spawn.entities' set_entity_transform converts through the same tree as the service.
+uint64_t TeleportZoneOfEntity(uint64_t entityId) {
+    if (!Ready()) return 0;
+    const uint64_t id = ZoneIdOfEntity(entityId);
+    return id && EnsureZone(id) ? id : 0;
+}
+
+bool TeleportPoseToZone(uint64_t from, uint64_t to, const double pos[3], const double rot[4], double outPos[3],
+                        double outRot[4]) {
+    if (!Ready() || !EnsureZone(from) || !EnsureZone(to)) return false;
+    Vector3d p;
+    Quatd rf, rt;
+    if (!g_zones.Transform(from, to, V(pos), &p) || !WorldRotation(from, &rf) || !WorldRotation(to, &rt)) return false;
+    Out(p, outPos);
+    sco::engine::ToXYZW((rt.Conjugate() * rf * sco::engine::FromXYZW(rot)).Normalized(), outRot);
+    return true;
+}
 
 const sco::plugins::Builtin kTeleportBuiltin = { "teleport", TeleportQuery, TeleportLoad, TeleportUnload };

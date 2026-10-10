@@ -5,7 +5,10 @@ bool ResolveBuildApi(const Section& text, const Section& rdata);
 void ProcessBuild();
 bool PlaceNearPlayer(double ahead, double side, double lift, double pos[3], double rot[4]);
 bool GroundRay(uintptr_t zone, const double from[3], const double to[3], double hit[3]);
-bool MoveEntityLocal(uint64_t id, const double pos[3]);   // position within the entity's own zone
+// Moves any entity within its zone: pos and, when rot isn't null, rot (x, y, z, w) in the frame of
+// the zone it's in. False when the id doesn't resolve or this build's entity slots don't match.
+// Game thread. Build mode's preview, npc.cpp and the spawn.entities mover use it.
+bool MoveEntityLocal(uint64_t id, const double pos[3], const double rot[4] = nullptr);
 // An entity's rotation in its own zone, (x, y, z, w). False when this build's entity slots don't
 // match. Game thread, inside __try.
 bool EntityRotation(uintptr_t entity, double rot[4]);
