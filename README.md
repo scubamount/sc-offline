@@ -79,7 +79,7 @@ When the game closes, it undoes exactly what it changed and prints what it undid
 Double-clicking `sc-offline.exe` opens its window:
 
 <p align="center">
-  <img src="images/launcher.png" alt="The sc-offline window: a green light saying it's safe to go online, buttons for Play, Status, Update, Install, Uninstall, Open settings and Open logs, and the output of Status" width="85%">
+  <img src="images/launcher.png" alt="The sc-offline window: a green light saying it's safe to go online, buttons for Play, Status, Update, Install, Uninstall, Open settings and Open logs, and the output of Status (the previous window; this version's is drawn with Direct3D 11 and has a Plugins page)" width="85%">
   <br><sub>The launcher after clicking <b>Status</b> (captured under Wine, hence the <code>Wine:</code> line).</sub>
 </p>
 
@@ -89,7 +89,8 @@ Double-clicking `sc-offline.exe` opens its window:
 | **Status** | `sc-offline.exe status`: check the setup, change nothing |
 | **Update** | `sc-offline.exe update`: check GitHub for a newer sc-offline |
 | **Install** / **Uninstall** | `sc-offline.exe install` / `uninstall` |
-| **Open settings** / **Open logs** | open `sc-offline.ini` in Notepad / the `data` folder |
+| **Settings** / **Logs** (top bar) | open `sc-offline.ini` in Notepad / the `data` folder |
+| **Plugins** (sidebar) | switch the plugins in `data\plugins` on or off and change their settings ([docs/launcher.md](docs/launcher.md#the-plugins-page)) |
 
 While you play, your Discord profile shows **Playing sc-offline** with buttons to this Discord and the download page; untick **Show on Discord** to hide it. The light at the top shows whether it's safe to go online. Questions (`Update now?`, `Delete these files?`) get **Yes** and **No** buttons. Every command still works from a terminal.
 

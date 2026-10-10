@@ -117,7 +117,7 @@ sc-offline can load plugins built with the [sco SDK](https://github.com/scubamou
    ...
    ```
 
-   A plugin that can't load is listed with the reason (`refused: built for api 2.0`, `missing capability 'teleport'`, ...); the others still load. To switch one plugin off, put an empty file named `disabled` in its folder.
+   A plugin that can't load is listed with the reason (`refused: built for api 2.0`, `missing capability 'teleport'`, ...); the others still load. To switch one plugin off, put an empty file named `disabled` in its folder (the launcher's Plugins page does the same, see [launcher.md](launcher.md#the-plugins-page)).
 
 With `plugins = off`, `mod.log` shows `[plugin] 11 found, 11 loaded (plugins = off)`: only the eleven built-in plugins load.
 

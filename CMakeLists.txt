@@ -8,7 +8,7 @@
 # Layout:
 #   imgui       static   src/third_party/imgui (vendored, its own warnings off)
 #   dinput8     shared   src/*.cpp, src/builtins/*.cpp -> dinput8.dll
-#   sc-offline  exe      launcher/launcher.cpp -> sc-offline.exe
+#   sc-offline  exe      launcher/launcher.cpp -> sc-offline.exe (links imgui and sco-core's sco_sqlite)
 #   sco-core    static   external/sco-core (submodule): scanners, signatures, host kit, plugin
 #                        loader and sco-lua; dinput8 links sco_app, sco_lua, sco_hook,
 #                        sco_engine (the zone tree behind teleport.spatial) and sco_pak (the
@@ -191,8 +191,10 @@ set_target_properties(imgui dinput8 PROPERTIES INTERPROCEDURAL_OPTIMIZATION_RELE
 add_executable(sc-offline launcher/launcher.cpp)
 target_compile_definitions(sc-offline PRIVATE ${SCO_COMMON_DEFINES})
 target_compile_options(sc-offline PRIVATE ${SCO_COMMON_OPTIONS} /W3)
-# Also named by #pragma comment(lib) in launcher.cpp.
-target_link_libraries(sc-offline PRIVATE bcrypt shell32 shlwapi advapi32 ole32 winhttp user32 gdi32 comctl32)
+# The window is ImGui on Direct3D 11 (the imgui target above; its INTERFACE libs bring d3d11 and dwmapi), and
+# the Plugins page edits a plugin's [settings] in its sco.storage database through sco-core's vendored
+# SQLite (sco_sqlite). The system libraries are also named by #pragma comment(lib) in launcher.cpp.
+target_link_libraries(sc-offline PRIVATE imgui sco_sqlite bcrypt shell32 shlwapi advapi32 ole32 winhttp user32 gdi32 comctl32)
 
 # --- test plugins (CI artifact "test-plugins"; never part of a release) ---------------------------
 # spawn_probe exercises the spawn built-in's command and service, and the teleport built-in's

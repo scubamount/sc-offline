@@ -31,21 +31,59 @@ Everything the launcher prints also goes to `data\launcher.log` (rewritten each 
 
 ## The window
 
-A 1160×640 window (resizable, minimum 900×460) with a SCUBAMOUNT watermark at the top right.
-A double-click (no arguments, the exe's own console) opens a window instead of the console run. Each button
-runs `sc-offline.exe <command>` as a hidden child with `SC_OFFLINE_GUI=1`, so the window and the CLI share one
-code path. The child's output streams into the box, and its `[y/N]` questions are answered with the
-**Yes**/**No** buttons. Command buttons are disabled while one runs and while the game runs (except **Status**).
+A double-click (no arguments, the exe's own console) opens a 720×328 window instead of the console run. It is
+drawn with ImGui on Direct3D 11 (the vendored `src/third_party/imgui`, the copy the mod's menu uses). If
+Direct3D 11 isn't available, it says so and tells you to run `sc-offline.exe play` from a terminal. Under Wine the
+console run stays the default; `--window` opens the window anyway.
 
-The light uses only cheap checks: the game folder from `game =` or `data\game-path.txt`, the
+The sidebar has three pages:
+
+- **Home**: the *Launcher* list (**Play**, **Status**, **Update**, **Install**, **Uninstall**) with one button below it
+  for the picked row, and the *Status* banner. Each command runs `sc-offline.exe <command>` as a hidden child with
+  `SC_OFFLINE_GUI=1`, so the window and the CLI share one code path. The child's `[y/N]` questions turn the button
+  into **Yes** / **No** (or press Y / N). Commands are disabled while one runs and while the game runs (except
+  **Status**); **Uninstall** only when something is left to undo.
+- **Plugins**: see [below](#the-plugins-page).
+- **Output**: what the running command prints, with a **Copy** button. **Status** and **Update** switch to it.
+
+The top bar has the **Discord** switch (`discord_presence` in `sc-offline.ini`, used from the next Play), **Settings**
+(opens `sc-offline.ini` in Notepad), **Logs** (opens `data`), minimize and close. Drag the empty part of the bar to
+move the window.
+
+The banner uses only cheap checks: the game folder from `game =` or `data\game-path.txt`, the
 `sc-offline.installed` marker or sc-offline's `dinput8.dll` in Bin64, and `%ProgramData%\sc-offline\pc-changes.txt`.
-It refreshes every 1.5 seconds, including while **Play** is running, and after every command:
-- **green**: nothing of the mod is in Bin64 and no PC changes are left;
-- **red**: the game is running, or it lists what is left. **Uninstall** is enabled only when something is left and the game is closed;
-- **grey**: the game folder isn't known yet.
+It refreshes every 1.5 seconds, including while **Play** is running, and after every command. Hover it for the
+detail:
 
-After **Update** applies a new version, the window restarts itself. Under Wine, or with any argument, the
-console run is unchanged.
+- **Safe to go online**: nothing of the mod is in Bin64 and no PC changes are left;
+- **Not safe to go online** / **yet**: the game is running, or it lists what is left;
+- **Game folder not known yet**: click **Status** or **Play** to find it.
+
+After **Update** applies a new version, the window restarts itself. With any argument, the console run is
+unchanged.
+
+### The Plugins page
+
+The page manages `data\plugins\<id>\` the way the host (sco-core) reads it, with no separate list of its own:
+
+- **What is listed**: every folder under `data\plugins` that holds a `plugin.ini` (a folder without one is skipped,
+  as the host does), with its `name`, `version` and `author`; `description`, when a plugin adds one, is the
+  tooltip. Folders are rescanned every 3 seconds.
+- **On / off**: the switch creates or deletes an empty file named `disabled` in the plugin's folder. The host
+  reads that marker when the game starts, so a change applies at the next start. The old `data\mods\mod.txt` /
+  `enabled.txt` split is gone: nothing here reads or writes it.
+- **Plugins are off**: the host loads no plugin unless `plugins = on` in `sc-offline.ini` (the default is off).
+  When it is off, the page says so and **Turn on** writes the key.
+- **Settings** (the gear, for a plugin whose `plugin.ini` has a `[settings]` section): edits the values the
+  plugin declared (`bool`, `int`, `float`, `string`, `enum(...)`), checked against the declared range and
+  choices with the host's rules. **Save** writes them where `sco.settings` keeps them: the plugin's own database
+  `data\storage\<id>.db`, table `sco_kv`, key `sco.settings.<name>`, value `<type>:<value>`. **Reset** deletes the
+  kept values, so the defaults apply. The fields are read-only while the game or a command is running: the host reads
+  its settings once, at start, so a write during a session would not be seen and no `settings.changed` would fire.
+  Close the game, edit, start it again. A plugin whose `[settings]` this page can't read is flagged; run
+  `sco-plugin-check` on it.
+- **Reload**: only shows a note. Hot reload runs inside the game, through its `sco.reload` command; the launcher
+  has no channel into the running game to call it.
 
 ## Checks it runs every time
 
