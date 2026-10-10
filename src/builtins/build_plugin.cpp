@@ -112,6 +112,16 @@ sco_result BuildLoad(const sco_api* api, sco_plugin* self) {
         BuildUseEntities(ent, self);
     else
         Log("[build] game.entities isn't available: props are placed through the spawner");
+    // The ground ray with nothing skipped and the camera go through game.world (sc_world.h, the same game
+    // pack); without it, or when its capabilities are off on this game build, build mode reads the game
+    // through sco-core's build rows as before. The aim ray that skips the preview stays on the rows.
+    const sc_world_v1* world = nullptr;
+    if (api->size > offsetof(sco_api, query_service) &&
+        api->query_service(SC_WORLD_NAME, SC_WORLD_VERSION_1_0, reinterpret_cast<const void**>(&world)) == SCO_OK && world &&
+        world->size > offsetof(sc_world_v1, camera))
+        BuildUseWorld(world, self);
+    else
+        Log("[build] game.world isn't available: the ground ray and the camera come from sco-core's build rows");
     // Its page of the menu (and keys), through sco.ui; the menu shell draws it (tabs.h).
     RegisterBuiltinTab(api, self, "build.build", "Build", kTabBuild, DrawBuildTab);
     BindBuiltinHotkey(api, self, "f6", "build.toggle");
@@ -122,6 +132,7 @@ sco_result BuildLoad(const sco_api* api, sco_plugin* self) {
 // A crash leaves g_ticking set, so dllmain doesn't take ProcessBuild back.
 void BuildUnload() {
     g_ticking = false;
+    BuildUseWorld(nullptr, nullptr);
     BuildUseEntities(nullptr, nullptr);   // the host despawns what this plugin still owns through game.entities (the preview; placed props were kept)
 }
 
