@@ -122,7 +122,7 @@ sco_result BuildLoad(const sco_api* api, sco_plugin* self) {
 // A crash leaves g_ticking set, so dllmain doesn't take ProcessBuild back.
 void BuildUnload() {
     g_ticking = false;
-    BuildUseEntities(nullptr, nullptr);   // the host despawns what this plugin spawned through game.entities
+    BuildUseEntities(nullptr, nullptr);   // the host despawns what this plugin still owns through game.entities (the preview; placed props were kept)
 }
 
 }  // namespace

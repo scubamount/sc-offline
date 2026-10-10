@@ -370,7 +370,7 @@ bool PlaceNearPlayer(double ahead, double side, double lift, double pos[3], doub
 constexpr int   kMaxPlaced = 2048;
 static uint64_t g_placed[kMaxPlaced];
 static int      g_placedCount = 0;
-static bool     g_placedEnt[kMaxPlaced];   // g_placed[i] came from game.entities
+static bool     g_placedEnt[kMaxPlaced];   // g_placed[i] is still owned through game.entities (keep() wasn't available or refused)
 static bool     g_active = false;
 static uint64_t g_previewId = 0;
 static bool     g_previewEnt = false;
@@ -430,6 +430,27 @@ static const char* SpawnBuildable(const char* name, const double pos[3], const d
         }
     }
     return SpawnEntityInPlayerZone(name, pos, rot, id);
+}
+
+// Placed props outlive the build plugin: keep() (game.entities 1.1) releases our ownership right after the
+// spawn, so the host doesn't despawn them when the build built-in unloads or reloads. The preview is never
+// kept. True when kept: the prop then isn't ours to despawn, and Undo and Clear base remove it with
+// RemoveEntityById, as they did before build mode used game.entities. False keeps today's behaviour (the
+// host removes it when we unload; despawn removes it before that).
+static bool KeepProp(uint64_t id) {
+    static bool warned = false;
+    if (!g_ent) return false;
+    if (g_ent->size <= offsetof(sc_entities_v1, keep)) {
+        if (!warned) {
+            warned = true;
+            Log("[build] game.entities has no keep() (1.0): placed props are removed when the build plugin unloads");
+        }
+        return false;
+    }
+    const sco_result r = g_ent->keep(g_entSelf, id);
+    if (r == SCO_OK) return true;
+    Log("[build] keep(%llu) refused: %s; this prop is removed when the build plugin unloads", static_cast<unsigned long long>(id), EntitiesError(r));
+    return false;
 }
 
 // Removes what SpawnBuildable spawned.
@@ -609,7 +630,7 @@ void ProcessBuild() {
                 if (const char* err = SpawnBuildable(g_build[idx], pos, rot, id, g_buildNpc[idx], viaEnt))
                     Log("[build] spawning %s failed: %s", g_build[idx], err);
                 else {
-                    g_placedEnt[g_placedCount] = viaEnt;
+                    g_placedEnt[g_placedCount] = viaEnt && !KeepProp(id);
                     g_placed[g_placedCount++] = id;
                     Log("[build] spawned %s %s (%d in the base)", g_build[idx], where, g_placedCount);
                 }
@@ -688,7 +709,7 @@ void ProcessBuild() {
         } else if (const char* err = SpawnBuildable(g_build[index], prefab && g_ghost.id ? g_ghost.pos : pos, rot, id, g_buildNpc[index], viaEnt)) {
             Log("[build] placing %s failed: %s", g_build[index], err);
         } else {
-            g_placedEnt[g_placedCount] = viaEnt;
+            g_placedEnt[g_placedCount] = viaEnt && !KeepProp(id);
             g_placed[g_placedCount++] = id;
             Log("[build] placed %s %s %.1f m from you (%d)", g_build[index], where, g_fromYou, g_placedCount);
         }
