@@ -63,6 +63,14 @@ Spawn any of 2239 NPC archetypes in front of you, and remove them again (`npcs.t
 
 This repository ships none of CIG's Subsumption mission scripts. Contracts that need them (bounty, delivery-with-combat, salvage and others) are not offered.
 
+## Natural mining
+
+Experimental, and off by default: `mining = on` in `sc-offline.ini` (see [launcher](launcher.md#sc-offlineini)). The `mining` built-in detours the game's `CBiomeBuilder::BuildLargeScaleEcoSystem`, the function that builds each ecosystem cell around you. A cell that has built only its physics (rule flags `0x6`) is passed to the game with the spawning bit set (`0xE`), so the game builds its harvestable rocks as it does online. Only that flag changes: the game's own provider, location and depletion checks, transforms and materials still decide what appears, and nothing is spawned, edited or written by the mod. It acts only for the builder's cell path (type 0), cells whose harvestable LOD is not built yet, and while the offline session is up and the game's online flag is 0. It needs sco-core's `game.mining` capability (the `mining.cell` row, found in any game build); without it `mining.status` is unavailable and `mod.log` says so.
+
+`mining.status` reports the state (off, unavailable, waiting for the offline session, active) and how many cells were seen and promoted. `mining_debug = on` also writes `[mining/trace]` lines to `mod.log` while the counts change: cells seen, promoted, why others were skipped, and read faults. A read fault switches natural mining off until you restart.
+
+The idea and the working native contract come from the `junikka/sc-offline-mining` fork (GPL-3.0). It confirmed in game, on an earlier game build, that natural Titanium (Ore) is highlighted in mining mode, shows its composition, responds to the mining laser and can be extracted. This built-in is a port onto sco-core's row for 4.10.196 and is not yet tested in game: see the pull request for the steps. Leaving and returning to an area, depletion and persistence across restarts are unverified.
+
 ## Squadron 42
 
 The first time you open the tab, it shows a spoiler warning. **OK** opens the tab and **Back** returns to the first tab.
@@ -105,11 +113,11 @@ sc-offline can load plugins built with the [sco SDK](https://github.com/scubamou
 
    A plugin that can't load is listed with the reason (`refused: built for api 2.0`, `missing capability 'teleport'`, ...); the others still load. To switch one plugin off, put an empty file named `disabled` in its folder.
 
-With `plugins = off`, `mod.log` shows `[plugin] 10 found, 10 loaded (plugins = off)`: only the ten built-in plugins load.
+With `plugins = off`, `mod.log` shows `[plugin] 11 found, 11 loaded (plugins = off)`: only the eleven built-in plugins load.
 
 ### Built-in plugins
 
-sc-offline's features are ten plugins compiled into `dinput8.dll`: `teleport`, `spawn`, `crew`, `loadout`, `npc`, `ammo`, `quantum`, `build`, `contracts` and `multiplayer`, loaded in that order. They load first, with `plugins` on or off, and are listed as `builtin` in the `[plugin]` report (`[plugin] loaded teleport <version> (api 1.1) built in`). Each runs its feature's per-tick work from a `tick` subscription, so a fault there switches that feature off (`[plugin] <id> ... crashed`) instead of crashing the game. Each built-in also draws its own tabs in the menu through sco-core's `sco.ui` service, and binds its keys there: `build` binds F6, and `teleport` binds F7 and F8. The menu looks and works as before. A fault while a tab is drawn switches off only the built-in that owns it, along with its tabs. Their commands are the ones plugins call through the SDK's `invoke`; a command that ran but couldn't do it (an unknown name, a list not loaded yet) answers `failed` with the reason:
+sc-offline's features are eleven plugins compiled into `dinput8.dll`: `teleport`, `spawn`, `crew`, `loadout`, `npc`, `ammo`, `quantum`, `build`, `contracts`, `mining` and `multiplayer`, loaded in that order. They load first, with `plugins` on or off, and are listed as `builtin` in the `[plugin]` report (`[plugin] loaded teleport <version> (api 1.1) built in`). Each runs its feature's per-tick work from a `tick` subscription, so a fault there switches that feature off (`[plugin] <id> ... crashed`) instead of crashing the game. Each built-in also draws its own tabs in the menu through sco-core's `sco.ui` service, and binds its keys there: `build` binds F6, and `teleport` binds F7 and F8. The menu looks and works as before. A fault while a tab is drawn switches off only the built-in that owns it, along with its tabs. Their commands are the ones plugins call through the SDK's `invoke`; a command that ran but couldn't do it (an unknown name, a list not loaded yet) answers `failed` with the reason:
 
 | Command | Does | Key |
 | --- | --- | --- |
@@ -137,11 +145,12 @@ sc-offline's features are ten plugins compiled into `dinput8.dll`: `teleport`, `
 | `build.clear` | Removes everything you placed | |
 | `build.place <object> <ahead>` | Places one buildable (`buildables.txt`) `<ahead>` m in front of you (0 = at your feet, up to 100) without entering build mode | |
 | `contracts.status` | How many contracts are known, offered and running, and your wallet's balance | |
+| `mining.status` | Whether natural mining is on, and how many ecosystem cells it has seen and promoted | |
 | `multiplayer.status` | The session's state and how many other players are in it | |
 | `multiplayer.leave` | Leaves the session (or stops hosting) | |
 | `multiplayer.goto <player>` | Teleports you next to that player's ghost | |
 
-Each built-in's commands need the capability named after it (`teleport`, `spawn.ship`, `crew`, `npc`, `loadout`, `ammo`, `quantum`, `build`, `contracts`); one is missing when this game build's addresses for that feature aren't found, and the rest of the plugin system still starts. A built-in owns its id, command prefix and services, so a plugin folder named after one (`teleport`, `spawn`, `crew`, ...) is refused (`the id belongs to a built-in plugin`), whatever its kind.
+Each built-in's commands need the capability named after it (`teleport`, `spawn.ship`, `crew`, `npc`, `loadout`, `ammo`, `quantum`, `build`, `contracts`, `game.mining`); one is missing when this game build's addresses for that feature aren't found, and the rest of the plugin system still starts. A built-in owns its id, command prefix and services, so a plugin folder named after one (`teleport`, `spawn`, `crew`, ...) is refused (`the id belongs to a built-in plugin`), whatever its kind.
 
 The `spawn` built-in's tick runs the Vehicles tab's spawns and the seat job that puts you in a seat; the `crew` built-in's runs the Crew & seats actions and crew jobs. For plugin authors sco-core's game pack publishes `spawn.entities` 1.2 (the `spawn` built-in published it before, with the same table): a C function table to spawn an entity class near you, look up your entity and ship ids, ask whether an entity id still resolves in the game (`entity_alive`, 1.1), and (new in 1.2) move and turn an entity in the world frame or a zone's frame (`set_entity_transform`), without going through command replies. A plugin may move only what it spawned itself through `spawn_as` (1.2: `spawn_near_player` with the plugin's handle; what `spawn_near_player` and `spawn.ship` spawn belongs to nobody), forgotten when that plugin unloads, or your own vehicle once ASOP registers it as retrieved or delivered by ATC. A plugin built against 1.0 or 1.1 keeps working; one that uses a later function checks the table's `size` first. Its header is [`sc_spawn.h`](../external/sco-core/include/sc_spawn.h), shipped in sco-core's SDK; find it with `query_service` (sco_api 1.1). A plugin runs its own code in the game, so only install plugins you trust.
 

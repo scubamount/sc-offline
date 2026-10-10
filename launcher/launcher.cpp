@@ -163,6 +163,10 @@ struct Config {
     // Which ship list the terminals show with asop on: ships (ships.txt) or game (the game's own,
     // empty offline). ships when the ini doesn't say, so an older ini gets a usable terminal too.
     wstring asopFleetList = L"ships";
+    // Natural mining (the mining built-in, on sco-core's game.mining row): off until it has been tested
+    // in game. mining_debug adds its counters to mod.log.
+    bool mining = false;
+    bool miningDebug = false;
 };
 
 static bool ParseOnOff(const wstring& v, bool& out) {
@@ -252,6 +256,12 @@ static bool ReadConfig(const wstring& path, Config& c) {
         else if (!_wcsicmp(k.c_str(), L"asop_fleet_list")) {
             if (!_wcsicmp(v.c_str(), L"game") || !_wcsicmp(v.c_str(), L"ships")) c.asopFleetList = v;
             else Out("[!] sc-offline.ini line %d: asop_fleet_list must be game or ships\n", lineNo);
+        }
+        else if (!_wcsicmp(k.c_str(), L"mining")) {
+            if (!ParseOnOff(v, c.mining)) Out("[!] sc-offline.ini line %d: mining must be on or off\n", lineNo);
+        }
+        else if (!_wcsicmp(k.c_str(), L"mining_debug")) {
+            if (!ParseOnOff(v, c.miningDebug)) Out("[!] sc-offline.ini line %d: mining_debug must be on or off\n", lineNo);
         }
         else if (!_wcsicmp(k.c_str(), L"check_updates")) {
             if (!ParseOnOff(v, c.checkUpdates)) Out("[!] sc-offline.ini line %d: check_updates must be on or off\n", lineNo);
@@ -2960,6 +2970,8 @@ int wmain(int argc, wchar_t** argv) {
         SetVar(L"SC_OFFLINE_MULTIPLAYER_ALLOW", cfg.multiplayerAllow);
         SetVar(L"SC_OFFLINE_ASOP", cfg.asop ? L"on" : L"off");
         SetVar(L"SC_OFFLINE_ASOP_FLEET_LIST", cfg.asopFleetList);
+        SetVar(L"SC_OFFLINE_MINING", cfg.mining ? L"on" : L"off");
+        SetVar(L"SC_OFFLINE_MINING_DEBUG", cfg.miningDebug ? L"on" : L"off");
         SetVar(L"SC_USER", g.userDir);
         if (dry)
             Out("[dry-run] would set SC_OFFLINE_BOOT_MAP=%ls SC_OFFLINE_START_SHIP=%ls SC_OFFLINE_START=%ls SC_OFFLINE_PLUGINS=%ls\n"

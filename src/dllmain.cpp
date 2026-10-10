@@ -180,6 +180,7 @@ static void SetFeatureCaps() {
     SetCap("quantum", g_tp.ok);   // the Travel tab's requests all go through teleport
     SetCap("build", g_buildOk && SpawnerReady());
     SetCap("contracts", ContractsReady());
+    SetMiningCaps();   // game.mining, from sco-core's mining.cell row
 #ifdef SCO_BRIDGE_TITANLINK
     SetCap("titanlink", g_tp.ok);   // your pose and zone conversions come from teleport.spatial
 #endif

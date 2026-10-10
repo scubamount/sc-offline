@@ -65,6 +65,7 @@ When one of these files is present, `src/contracts.cpp` or `src/spawner.cpp` cha
 | `SC_OFFLINE_MULTIPLAYER` | From `multiplayer`: `off` switches the Multiplayer tab off; anything else (or unset) leaves it on |
 | `SC_OFFLINE_MULTIPLAYER_ALLOW` | From `multiplayer_allow`, checked by the launcher: extra IPv4 ranges a session may use |
 | `SC_OFFLINE_ASOP_FLEET_LIST` | From `asop_fleet_list`: `ships` lists `ships.txt` at the terminals; unset or anything else leaves the game's own list (with `asop` on) |
+| `SC_OFFLINE_MINING` | From `mining`: `on` (or `1`, `yes`, `true`) installs the natural-mining hook; unset or anything else is off. `SC_OFFLINE_MINING_DEBUG` (from `mining_debug`) the same for the `[mining/trace]` lines |
 | `SC_OFFLINE_ASOP` | From `asop`: `off` (or `0`, `no`, `false`) leaves the ship terminals, hangars and ATC alone; unset or anything else is on |
 | `SC_OFFLINE_SHIPS_FILE` | Where the ship list is read from |
 | `SC_OFFLINE_SPAWN_FILE` | Where the F7 position is stored |
