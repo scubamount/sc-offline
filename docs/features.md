@@ -1,6 +1,6 @@
 # Features
 
-Everything runs through a single in-game menu, which **M** opens. It has nine tabs: **Player**, **Travel**, **Vehicles**, **Crew**, **NPCs**, **Build**, **Multiplayer**, **Squadron 42**, **Menu**. The Squadron 42 tab was written for this repository. The other seven come from upstream ChrisWareOffline 0.9.0-rc1.
+Everything runs through a single in-game menu, which **M** opens. It has nine tabs: **Player**, **Travel**, **Vehicles**, **Crew**, **NPCs**, **Build**, **Multiplayer**, **Squadron 42**, **Menu**. The Squadron 42 and Multiplayer tabs were written for this repository; the other seven come from upstream ChrisWareOffline 0.9.0-rc1. Which `game.*` service each feature runs on is in [architecture.md](architecture.md#what-each-feature-runs-on); what has not been run in game yet is in [status.md](status.md).
 
 Most of the lists below are plain text files in `data/`, and the counts are taken from those files. Remove lines from a file and its list gets shorter. See [data-files.md](data-files.md).
 
@@ -118,22 +118,23 @@ sc-offline can load plugins built with the [sco SDK](https://github.com/scubamou
 3. Start the game. `mod.log` reports what was found, after the startup lines:
 
    ```
-   [plugin] 12 found, 12 loaded (plugins = on)
+   [plugin] 12 found, 11 loaded (plugins = on)
    [plugin] teleport <version> builtin loaded
    [plugin] spawn <version> builtin loaded
    ...
    [plugin] contracts <version> builtin loaded
+   [plugin] creative <version> <kind> disabled
    [plugin] greeter 1.0.0 lua loaded
    ...
    ```
 
-   A plugin that can't load is listed with the reason (`refused: built for api 2.0`, `missing capability 'teleport'`, ...); the others still load. To switch one plugin off, put an empty file named `disabled` in its folder (the launcher's Plugins page does the same, see [launcher.md](launcher.md#the-plugins-page)).
+   Here the ten built-ins, `creative` (found, but not loaded while its `disabled` marker is there) and `greeter` make 12 found, 11 loaded. A plugin that can't load is listed with the reason (`refused: built for api 2.0`, `missing capability 'teleport'`, ...); the others still load. To switch one plugin off, put an empty file named `disabled` in its folder (the launcher's Plugins page does the same, see [launcher.md](launcher.md#the-plugins-page)).
 
-With `plugins = off`, `mod.log` shows `[plugin] 11 found, 11 loaded (plugins = off)`: only the eleven built-in plugins load.
+With `plugins = off`, `mod.log` shows `[plugin] 10 found, 10 loaded (plugins = off)`: only the ten built-in plugins load (two more in a build with the optional bridges).
 
 ### Built-in plugins
 
-sc-offline's features are ten plugins compiled into `dinput8.dll`: `teleport`, `spawn`, `crew`, `loadout`, `npc`, `quantum`, `build`, `contracts`, `mining` and `multiplayer`, loaded in that order. They load first, with `plugins` on or off, and are listed as `builtin` in the `[plugin]` report (`[plugin] loaded teleport <version> (api 1.1) built in`). Each runs its feature's per-tick work from a `tick` subscription, so a fault there switches that feature off (`[plugin] <id> ... crashed`) instead of crashing the game. Each built-in also draws its own tabs in the menu through sco-core's `sco.ui` service, and binds its keys there: `build` binds F6, and `teleport` binds F7 and F8. The menu looks and works as before. A fault while a tab is drawn switches off only the built-in that owns it, along with its tabs. Their commands are the ones plugins call through the SDK's `invoke`; a command that ran but couldn't do it (an unknown name, a list not loaded yet) answers `failed` with the reason:
+sc-offline's features are ten plugins compiled into `dinput8.dll`: `teleport`, `spawn`, `crew`, `loadout`, `npc`, `quantum`, `build`, `contracts`, `mining` and `multiplayer`, loaded in that order. They load first, with `plugins` on or off, and are listed as `builtin` in the `[plugin]` report (`[plugin] loaded teleport <version> (api 1.1) built in`). Most run their feature's per-tick work from a `tick` subscription (`npc` has none), so a fault there switches that feature off (`[plugin] <id> ... crashed`) instead of crashing the game. Each built-in also draws its own tabs in the menu through sco-core's `sco.ui` service, and binds its keys there: `build` binds F6, and `teleport` binds F7 and F8. The menu looks and works as before. A fault while a tab is drawn switches off only the built-in that owns it, along with its tabs. Their commands are the ones plugins call through the SDK's `invoke`; a command that ran but couldn't do it (an unknown name, a list not loaded yet) answers `failed` with the reason:
 
 | Command | Does | Key |
 | --- | --- | --- |
@@ -164,11 +165,11 @@ sc-offline's features are ten plugins compiled into `dinput8.dll`: `teleport`, `
 | `multiplayer.leave` | Leaves the session (or stops hosting) | |
 | `multiplayer.goto <player>` | Teleports you next to that player's ghost | |
 
-Each built-in's commands need the capability named after it (`teleport`, `spawn.ship`, `crew`, `npc`, `loadout`, `quantum`, `build`, `contracts`, `game.mining`); one is missing when this game build's addresses for that feature aren't found, and the rest of the plugin system still starts. A built-in owns its id, command prefix and services, so a plugin folder named after one (`teleport`, `spawn`, `crew`, ...) is refused (`the id belongs to a built-in plugin`), whatever its kind.
+Each built-in's commands are gated on a capability: `teleport`, `spawn.ship`, `loadout`, `quantum`, `build` and `contracts` (sc-offline's own rows, set in `SetFeatureCaps`); `game.vehicles.seats`, `game.vehicles.seat`, `game.vehicles.flight_ready` and `game.actors.despawn` for the `crew.*` commands; `game.actors.spawn_npc` and `game.actors.despawn` for `npc.spawn` and `npc.clear`; `game.mining` for `mining.status`; `sco.net` for `multiplayer.*`. One is missing when this game build's addresses for that feature aren't found, and the rest of the plugin system still starts. A built-in owns its id, command prefix and services, so a plugin folder named after one (`teleport`, `spawn`, `crew`, ...) is refused (`the id belongs to a built-in plugin`), whatever its kind.
 
-The `spawn` built-in's tick runs the Vehicles tab's spawns and the seat job that puts you in a seat; the `crew` built-in's runs the Crew tab's seat actions and the seat jobs of the `crew.*` commands. For plugin authors sco-core's game pack publishes `spawn.entities` 1.2 (the `spawn` built-in published it before, with the same table): a C function table to spawn an entity class near you, look up your entity and ship ids, ask whether an entity id still resolves in the game (`entity_alive`, 1.1), and (new in 1.2) move and turn an entity in the world frame or a zone's frame (`set_entity_transform`), without going through command replies. A plugin may move only what it spawned itself through `spawn_as` (1.2: `spawn_near_player` with the plugin's handle; what `spawn_near_player` and `spawn.ship` spawn belongs to nobody), forgotten when that plugin unloads, or your own vehicle once ASOP registers it as retrieved or delivered by ATC. A plugin built against 1.0 or 1.1 keeps working; one that uses a later function checks the table's `size` first. Its header is [`sc_spawn.h`](../external/sco-core/include/sc_spawn.h), shipped in sco-core's SDK; find it with `query_service` (sco_api 1.1). A plugin runs its own code in the game, so only install plugins you trust.
+The `spawn` built-in's tick runs the Vehicles tab's spawns and the seat job that puts you in a seat; the `crew` built-in's runs the Crew tab's own seat actions (still the spawner's seat code) and the seat jobs of the `crew.*` commands, which seat through `game.vehicles`. For plugin authors sco-core's game pack publishes `spawn.entities` 1.2 (the `spawn` built-in published it before, with the same table): a C function table to spawn an entity class near you, look up your entity and ship ids, ask whether an entity id still resolves in the game (`entity_alive`, 1.1), and (new in 1.2) move and turn an entity in the world frame or a zone's frame (`set_entity_transform`), without going through command replies. A plugin may move only what it spawned itself through `spawn_as` (1.2: `spawn_near_player` with the plugin's handle; what `spawn_near_player` and `spawn.ship` spawn belongs to nobody), forgotten when that plugin unloads, or your own vehicle once ASOP registers it as retrieved or delivered by ATC. A plugin built against 1.0 or 1.1 keeps working; one that uses a later function checks the table's `size` first. Its header is [`sc_spawn.h`](../external/sco-core/include/sc_spawn.h), shipped in sco-core's SDK; find it with `query_service` (sco_api 1.1). A plugin runs its own code in the game, so only install plugins you trust.
 
-sco-core's game pack publishes `teleport.spatial` 1.0 (since game pack 0.1.0; the `teleport` built-in published it before, with the same table) ([`sc_spatial.h`](../external/sco-core/include/sc_spatial.h), shipped in sco-core's SDK): your position and orientation in the zone you're in, the zone an entity is in, a zone's name, and positions converted between a zone and the world or between two zones. Zones are the game's nested frames (star system > planet > city or station > ship > room); every id is the game's own 64-bit id and every position is in metres. Each tick the built-in reads your zone chain from the game into sco-core's zone tree, and a zone you ask about that isn't in it is read on the spot; nothing about the game is kept from one tick to the next, so an id that has streamed out simply answers 0. Like `spawn.entities`, it works from the game thread only.
+sco-core's game pack publishes `teleport.spatial` 1.0 (since game pack 0.1.0; the `teleport` built-in published it before, with the same table) ([`sc_spatial.h`](../external/sco-core/include/sc_spatial.h), shipped in sco-core's SDK): your position and orientation in the zone you're in, the zone an entity is in, a zone's name, and positions converted between a zone and the world or between two zones. Zones are the game's nested frames (star system > planet > city or station > ship > room); every id is the game's own 64-bit id and every position is in metres. The game pack feeds the zone tree behind it from the game (the `teleport` built-in used to); a zone you ask about that isn't in the tree is read on the spot, and an id that has streamed out answers 0. Like `spawn.entities`, it works from the game thread only.
 
 ### Menu tabs and hotkeys for plugins
 
@@ -218,6 +219,8 @@ These need RSI's servers, and the mod doesn't replace them:
 - Your account's ships, items and hangar.
 - Choosing a spawn location. You start at the game's own spawn, or over Daymar with `start = Daymar` (see [launcher.md](launcher.md#sc-offlineini)).
 
-## Items still to confirm in game
+## Not verified in game
 
-ChrisWareOffline 0.9.0-rc1 flagged these as built after its last in-game test: the energy-weapon top-up, NPC deletion through the entity handle, Stand up, the real-building prefab preview, and Pyro and Nyx names after a fresh scan.
+The SDK conversion (every feature on a `game.*` service or a sco-core row, the `creative` plugin, the launcher's Plugins page) has CI and gate checks but **no in-game run yet**. [status.md](status.md) lists what each converted feature still has to show, and links sco-core's table for the services.
+
+ChrisWareOffline 0.9.0-rc1 also flagged these as built after its last in-game test: the energy-weapon top-up, NPC deletion through the entity handle, Stand up, the real-building prefab preview, and Pyro and Nyx names after a fresh scan.

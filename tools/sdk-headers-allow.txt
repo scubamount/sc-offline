@@ -7,8 +7,7 @@
 #
 # Not a way to add a dependency. A new built-in include of a non-SDK header fails CI; the way out is a
 # game.* service or a built-in-local header, and only what the SDK cannot express yet is listed here.
-# build_plugin.cpp, build_ui.cpp and teleport_plugin.cpp appear only until the build/teleport PR (which
-# owns them) lands.
+# build_plugin.cpp, build_ui.cpp and teleport_plugin.cpp still call build mode's and teleport's engines in src/; the game.world consumer PR (#97) moved the ground ray and camera onto game.world but not the engines themselves.
 sco/plugins.h | builtins.h | the Builtin registration type (id + query/load/unload table): built-ins load through the host kit, not as a DLL, so the SDK has no form for it
 src/version.h | build_plugin.cpp, builtins.h, teleport_plugin.cpp | SCO_VERSION, which each built-in reports in its sco_plugin_info; no SDK call returns the product version. Every built-in but the two sibling-owned files gets it through builtins.h
 src/common.h | builtin_store.h, mining_plugin.cpp, titanlink/titanlink_overlay.cpp, titanlink/titanlink_plugin.cpp, voxel_bridge/voxel_plugin.cpp | the product's Log(), Rd<> and Section helpers; an SDK plugin logs through api->log, which these helpers (storage wrapper, bridges, mining) have no plugin handle for
@@ -16,7 +15,7 @@ src/menu.h | build_plugin.cpp, build_ui.cpp, crew_ui.cpp, loadout_plugin.cpp, lo
 src/menu_ui.h | build_ui.cpp, crew_ui.cpp, loadout_ui.cpp, multiplayer_ui.cpp, npc_ui.cpp, quantum_ui.cpp, spawn_ui.cpp, titanlink/titanlink_ui.cpp, voxel_bridge/voxel_ui.cpp | the menu shell's look and widgets (SectionHeading, Hint, PrimaryButton, kMuted); sco_ui.h gives a tab a draw callback, not the product's widgets
 src/teleport.h | build_plugin.cpp, contracts_plugin.cpp, crew_ui.cpp, loadout_plugin.cpp, mining_plugin.cpp, multiplayer_plugin.cpp, quantum_plugin.cpp, teleport_plugin.cpp, voxel_bridge/voxel_plugin.cpp | g_tp, the resolved entity-system pointers ticks and tabs read directly; game.entities and game.actors cover only some of those reads
 src/spawner.h | crew_ui.cpp, loadout_ui.cpp, mining_plugin.cpp, spawn_plugin.cpp, voxel_bridge/voxel_plugin.cpp | the spawner engine (ship list, ProcessShipMenu, ProcessCrew, ActorsCapability); game.vehicles/game.actors/game.entities cover the commands, not the engine or its tabs
-src/build.h | build_plugin.cpp, loadout_ui.cpp, teleport_plugin.cpp, voxel_bridge/voxel_plugin.cpp | build mode's engine (ProcessBuild, PlaceNearPlayer, GroundRay) in src/build.cpp, which the build/teleport PR owns
+src/build.h | build_plugin.cpp, loadout_ui.cpp, teleport_plugin.cpp, voxel_bridge/voxel_plugin.cpp | build mode's engine (ProcessBuild, PlaceNearPlayer, GroundRay) in src/build.cpp; its ground ray and camera use game.world since #97, the engine itself is still in src/
 src/contracts.h | contracts_plugin.cpp | the contracts engine (src/contracts.cpp: mission system, contract broker); no game.* service for missions
 src/loadout.h | loadout_plugin.cpp | the gear loader (src/loadout.cpp); no game.* service for inventories
 src/outfits.h | loadout_plugin.cpp | the outfit loader tick (src/outfits.cpp); no game.* service for inventories

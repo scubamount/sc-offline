@@ -30,7 +30,7 @@ Spawn ships, NPCs and buildings, travel the star systems and wear Squadron 42 ou
 > This mod may get your account banned. Use it at your own risk, and **only offline**, never on Cloud Imperium Games' servers.
 
 > [!NOTE]
-> **Played in game on Windows with 0.6.1** (October 2026): the launcher, the menu and its features worked. Other PCs and game patches can still behave differently; known problems are tracked in [Issues](https://github.com/scubamount/sc-offline/issues). If something breaks, see [Troubleshooting](#troubleshooting) and [report it](https://github.com/scubamount/sc-offline/issues). Linux through Wine is still untested.
+> **Played in game on Windows with 0.6.1** (October 2026): the launcher, the menu and its features worked. Since then sc-offline was converted to run on sco-core's game services and its cheats became an optional plugin, and **none of that conversion has been run in game yet** ([what is not verified](docs/status.md)). Other PCs and game patches can still behave differently; known problems are tracked in [Issues](https://github.com/scubamount/sc-offline/issues). If something breaks, see [Troubleshooting](#troubleshooting) and [report it](https://github.com/scubamount/sc-offline/issues). Linux through Wine is still untested.
 
 ## Quick start
 
@@ -105,7 +105,7 @@ While you play, your Discord profile shows **Playing sc-offline** with buttons t
 | <kbd>F7</kbd> | Save your position |
 | <kbd>F8</kbd> | Teleport back to the saved position |
 
-The launcher finds your install by itself: it asks the RSI Launcher where the game is, checks the usual folders, then searches your drives, and if all that fails it lets you pick the folder. It remembers the answer for next time. To force a folder, set `game =` in `sc-offline.ini`. The same file also chooses the boot map, the channel (`LIVE`, `PTU`, and so on) and an optional start in a ship over Daymar (`start = Daymar` with `start_ship`); see [docs/launcher.md](docs/launcher.md). ASOP terminals, the vehicle manager and character creation don't work offline; see [Not available offline](docs/features.md#not-available-offline).
+The launcher finds your install by itself: it asks the RSI Launcher where the game is, checks the usual folders, then searches your drives, and if all that fails it lets you pick the folder. It remembers the answer for next time. To force a folder, set `game =` in `sc-offline.ini`. The same file also chooses the boot map, the channel (`LIVE`, `PTU`, and so on) and an optional start in a ship over Daymar (`start = Daymar` with `start_ship`); see [docs/launcher.md](docs/launcher.md). The mobiGlas vehicle manager and character creation don't work offline; the ship terminals do, with `asop = on` (the default). See [Ship terminals, hangars and ATC](docs/features.md#ship-terminals-hangars-and-atc) and [Not available offline](docs/features.md#not-available-offline).
 
 What's in each menu tab: [docs/features.md](docs/features.md).
 
@@ -183,14 +183,18 @@ That's expected until the mod is updated for the new game version.
 
 ## How it's built
 
-sc-offline is the game-specific bootstrap: it loads as `dinput8.dll`, applies the offline patches, hooks the game's main thread and draws the menu. Underneath it runs on [sco-core](https://github.com/scubamount/sco-core)'s host kit, which brings the signature scanner, the plugin loader and the plugin API. sc-offline's own features are built-in plugins, on the same API that plugins made with the [sco SDK](https://github.com/scubamount/sco-core/blob/main/sdk/README.md) use. There are nine: teleport (F7/F8), the ship spawner, crew & seats, loadout (gear and outfits), NPCs, quantum travel, build mode (F6), contracts and multiplayer, each with its own commands and per-tick work; the spawner also offers other plugins a service to spawn entities near you. The menu still calls the features directly, and the Squadron 42 settings (`cvars.cpp`) and `missions.cpp` still run from the bootstrap. All of sc-offline's detours go through sco-core's one patcher. Building from source: [docs/build.md](docs/build.md). Noclip, god mode and infinite ammo are an optional plugin, `data/plugins/creative` (shipped off; turn it on in the launcher's Plugins page), built from the SDK's headers only.
+sc-offline is the host and the reference consumer of [sco-core](https://github.com/scubamount/sco-core) (pinned at `31cf53a`). It loads as `dinput8.dll`, applies the offline patches, hooks the game's main thread and starts sco-core's host kit: the signature rows, the plugin loader and API, and the game pack, which publishes the `game.*` services. Its features are ten built-in plugins on the same API that plugins made with the [sco SDK](https://github.com/scubamount/sco-core/blob/main/sdk/README.md) use: teleport (F7/F8), the ship spawner, crew & seats, loadout (gear and outfits), NPCs, quantum travel, build mode (F6), contracts, natural mining and multiplayer. The menu is a shell over sco-core's `sco.ui`: each built-in registers its own tab and keys.
+
+What runs on what: teleport on `teleport.spatial`; ship spawns on `spawn.entities` 1.2; crew seats on `game.vehicles` and `game.actors`; NPCs on `game.actors`; build props on `game.entities` (`keep()` leaves placed props in the world) and build's ground ray and camera on `game.world`; mining on the `game.mining` row; the other features on sco-core's signature rows, with no raw scans in `src/`. Noclip, god mode and infinite ammo are not built in: they are `creative`, an optional plugin on `game.creative` that ships **off** (turn it on in the launcher's Plugins page, with `plugins = on` in `sc-offline.ini`). Optional plugins live in `data/plugins/<id>/`; hot reload (`sco.reload`) works only inside the running game.
+
+CI keeps this honest: `no-scans` (no raw scan under `src/`) and `sdk-headers` (`src/builtins/` and `plugins/` include only SDK headers), next to `check`, `build` and `bridges`. The built-ins still call sc-offline's own engines for features with no `game.*` service yet, which is what `tools/sdk-headers-allow.txt` lists. Details: [docs/architecture.md](docs/architecture.md) and [docs/build.md](docs/build.md). What has not been run in game since the conversion: [docs/status.md](docs/status.md).
 
 ## Scope
 
-Offline play is the default and stays that way: while modded, the game doesn't reach Cloud Imperium Games' servers. Two optional additions are planned and **not shipped yet**:
+Offline play is the default and stays that way: while modded, the game doesn't reach Cloud Imperium Games' servers. Two additions go beyond one offline game, and neither uses or changes the game's own netcode or servers:
 
-- **Bridges to other games** on the same PC, over local shared memory, for example Titanfall 2 (through Northstar) or Minecraft.
-- **Private co-presence** with friends who also run sc-offline, over a LAN or a VPN you choose (Tailscale, ZeroTier). Each player still runs their own offline game; peers exchange their own authenticated messages (poses, spawn announcements), and other players show up as "ghost" entities your game spawns. It doesn't use or change the game's own netcode or servers.
+- **Private co-presence** (the Multiplayer tab): friends who also run sc-offline play alongside each other over a LAN or a VPN you choose (Tailscale, ZeroTier). Each player still runs their own offline game; peers exchange their own authenticated messages (poses, spawn announcements), and other players show up as "ghost" entities your game spawns. Nothing connects until you press Host or Join ([limits](docs/features.md#multiplayer-lan-or-vpn)).
+- **Bridges to other games** on the same PC, over local shared memory, for example Titanfall 2 (through Northstar) or a Minecraft-style voxel game. Optional builds only, **not in the release** ([docs/bridges.md](docs/bridges.md)).
 
 sc-offline never runs with Easy Anti-Cheat active: while you play, the launcher renames `EasyAntiCheat_EOS.exe` and blocks the EAC download host ([what the launcher changes](#2-what-the-launcher-changes)). Online play, cheating, getting around anti-cheat and the rest of the bans in [CONTRIBUTING](CONTRIBUTING.md#what-fits-this-project) stay out for good.
 
@@ -202,6 +206,10 @@ sc-offline never runs with Easy Anti-Cheat active: while you play, the launcher 
 | [Launcher](docs/launcher.md) | `sc-offline.exe`, `sc-offline.ini`, and what the launcher changes on disk |
 | [Data files](docs/data-files.md) | The text files in `data/` and the environment variables |
 | [Linux](docs/linux.md) | Running under Wine (experimental) |
+| [Architecture](docs/architecture.md) | sc-offline as host and reference consumer of sco-core: which `game.*` service each feature runs on, built-ins versus plugins, the CI gates |
+| [Not verified in game](docs/status.md) | What the SDK conversion still has to show in a game session |
+| [Plugin UI](docs/plugin-ui.md) | Menu tabs, overlays and hotkeys for plugins |
+| [Bridges](docs/bridges.md) | The optional Titanfall 2 and voxel bridges (not in the release) |
 | [Build](docs/build.md) | Building from source, checks, CI and releases |
 | [Changelog](CHANGELOG.md) | What changed in each release |
 

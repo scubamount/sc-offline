@@ -29,7 +29,7 @@ Questions and ideas: open an issue or ask in the [Discord](https://discord.gg/NJ
 4. Test in game if you can, and say in the PR what you tested and what you didn't.
 5. Update the docs your change affects (`README.md`, `docs/`, `sc-offline.ini` comments) in the same PR.
 6. Add a line under the top section of [CHANGELOG.md](CHANGELOG.md) for anything a player would notice.
-7. Open the PR against `main` and fill in the template. CI (`check` and `build`) must pass.
+7. Open the PR against `main` and fill in the template. CI (`check`, `build`, `bridges`, `no-scans` and `sdk-headers`) must pass.
 
 PRs are squash-merged. Keep one change per PR.
 

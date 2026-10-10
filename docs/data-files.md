@@ -15,6 +15,7 @@ Everything the menu reads is plain text in `data/`. Most files explain their own
 | `contract_scripts.txt` | The 796 contracts that run without any CIG mission script; see [features.md](features.md#contracts). |
 | `builtin/quantum/datacore/quantum_drive.toml` | The new quantum drive's game data, applied as the game loads (see [features.md](features.md#logging)) |
 | `OfflineDB/default_1.xml` | The starting loadout. The launcher copies it to `user\client\0` |
+| `plugins\creative\` | The optional creative plugin: `plugin.ini`, `creative.dll` and an empty `disabled` marker (off until you switch it on in the launcher's Plugins page; see [features.md](features.md#the-creative-plugin)). Other plugins go in their own folder here with `plugins = on` |
 
 ## Files the mod creates
 
