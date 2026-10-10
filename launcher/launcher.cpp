@@ -160,8 +160,9 @@ struct Config {
     wstring multiplayerAllow;
     // Ship terminals (ASOP), personal hangars, the hangar lift and ATC hails in the mod. On by default.
     bool asop = true;
-    // Which ship list the terminals show with asop on: game (the game's own) or ships (ships.txt).
-    wstring asopFleetList = L"game";
+    // Which ship list the terminals show with asop on: ships (ships.txt) or game (the game's own,
+    // empty offline). ships when the ini doesn't say, so an older ini gets a usable terminal too.
+    wstring asopFleetList = L"ships";
 };
 
 static bool ParseOnOff(const wstring& v, bool& out) {
