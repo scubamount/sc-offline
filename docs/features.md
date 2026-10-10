@@ -132,6 +132,10 @@ A plugin can add its own menu tab (drawn with sc-offline's ImGui), a badge besid
 
 When you quit the game (the menu's Quit, or the `quit` console command), plugins get `game.exit` and are then unloaded, newest first and built-ins last, before the game exits. `mod.log` shows `[app] game closing (CSystem::Quit): game.exit, unloading plugins` followed by one `[plugin] unloaded <id>` line per plugin. If the game crashes or is killed (Task Manager, `taskkill`), plugins get no `game.exit` and aren't unloaded; don't rely on it to save anything that matters.
 
+## Bridges (optional builds only)
+
+Two more built-ins link the game to another game on the same PC through sco-core's `sco.ipc` (local shared memory for your Windows user, nothing over the network): **TitanLink** (`titanlink`, Titanfall 2 through Northstar: F9 starts pilot mode, the **Titanfall** tab) and the **voxel bridge** (`voxel_bridge`, a Minecraft-style voxel game whose solid blocks become crates: Ctrl+F9, the **Voxel** tab). They are **not in the release**: they're compiled in only with the CMake options `SCO_BRIDGE_TITANLINK` and `SCO_BRIDGE_VOXEL` (off by default), so the release's `dinput8.dll` has neither, and even in such a build a bridge does nothing until you open it. Each needs its other half in the other game, which this repository doesn't ship. See [bridges.md](bridges.md) for what they do, their settings, the wire the other side speaks, and what isn't ported yet.
+
 ## Not available offline
 
 These need RSI's servers, and the mod doesn't replace them:

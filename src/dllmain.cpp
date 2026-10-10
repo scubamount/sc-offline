@@ -174,6 +174,12 @@ static void SetFeatureCaps() {
     SetCap("quantum", g_tp.ok);   // the Travel tab's requests all go through teleport
     SetCap("build", g_buildOk && SpawnerReady());
     SetCap("contracts", ContractsReady());
+#ifdef SCO_BRIDGE_TITANLINK
+    SetCap("titanlink", g_tp.ok);   // your pose and zone conversions come from teleport.spatial
+#endif
+#ifdef SCO_BRIDGE_VOXEL
+    SetCap("voxel_bridge", g_tp.ok && SpawnerReady());   // teleport.spatial, plus the spawner for crates
+#endif
 }
 
 static const sco::plugins::ScriptRuntime kLua{ sco_lua_load, sco_lua_unload };
