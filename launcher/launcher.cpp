@@ -2353,7 +2353,12 @@ static int Helper(const wstring& op, const wstring& bin, DWORD parentPid, const 
     if (HANDLE ready = OpenEventW(EVENT_MODIFY_STATE, FALSE, eventName.c_str())) { SetEvent(ready); CloseHandle(ready); }
     if (!play) return 0;
 
-    WaitForSingleObject(parent, INFINITE);
+    // Clean up when the launcher says the game closed (before it asks anything), or when the
+    // launcher exits, whichever comes first.
+    HANDLE closed = OpenEventW(SYNCHRONIZE, FALSE, (eventName + L"-closed").c_str());
+    HANDLE waitFor[2] = { parent, closed };
+    WaitForMultipleObjects(closed ? 2 : 1, waitFor, FALSE, INFINITE);
+    if (closed) CloseHandle(closed);
     CloseHandle(parent);
     while (GameRunning()) Sleep(2000);
     const int taken = TakeMod(g, false);
@@ -4353,6 +4358,7 @@ int wmain(int argc, wchar_t** argv) {
     }
     const wstring eventName = L"Local\\sc-offline-ready-" + std::to_wstring(GetCurrentProcessId());
     HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, eventName.c_str());
+    HANDLE closed = play ? CreateEventW(nullptr, TRUE, FALSE, (eventName + L"-closed").c_str()) : nullptr;
     HANDLE helper = ready ? StartHelper(command.c_str(), g, eventName, pc) : nullptr;
     if (!helper) return Fail("couldn't start the mod helper (error %lu); administrator rights refused?", GetLastError());
 
@@ -4402,12 +4408,22 @@ int wmain(int argc, wchar_t** argv) {
         CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
         while (GameRunning()) Sleep(2000);   // the game can hand over to a second StarCitizen.exe
         StopPresence(presence);
+        // Take the mod out and undo the PC changes now, before any question below: a question
+        // left unanswered must not keep the game folder modded or the firewall rules in place.
+        if (closed) SetEvent(closed);
+        if (WaitForSingleObject(helper, 120000) == WAIT_OBJECT_0) {
+            DWORD code = 1; GetExitCodeProcess(helper, &code);
+            if (code == 0) Out("Mod:      removed from Bin64; PC changes undone. Safe to go online.\n");
+            else Out("[!] the helper couldn't undo everything (exit %lu); click Uninstall. See data\\launcher.log\n", code);
+        }
         if (cfg.crashReports && OwnsConsoleInput()) OfferCrashReport(here, ParentDir(bin), sessionStart, checks.gameBuild);
         if (cfg.cleanLogs && OwnsConsoleInput()) OfferToCleanLogs(ParentDir(bin), sessionStart);
         else if (cfg.cleanLogs) Out("Logs:     not asking (no console to answer in); run from a window to be asked\n");
     }
+    if (WaitForSingleObject(helper, 0) != WAIT_OBJECT_0)
+        Out("Mod:      the helper removes it from Bin64 and undoes the PC changes as this window closes.\n");
     CloseHandle(helper);
-    Out("Mod:      the helper removes it from Bin64 and undoes the PC changes as this window closes.\n");
+    if (closed) CloseHandle(closed);
     if (rc) PauseIfOwnConsole();
     return rc;
 }

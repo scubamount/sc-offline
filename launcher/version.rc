@@ -1,0 +1,3 @@
+// sc-offline.exe version resource; the block itself is src/version.rc.
+#define SCO_RC_EXE
+#include "../src/version.rc"
