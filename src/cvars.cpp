@@ -1,57 +1,30 @@
 #include "cvars.h"
 #include "menu.h"
+#include "world_caps.h"
 
-static int32_t* FindCVarStorage(const Section& text, const Section& rdata, const char* cvar, uint8_t registerSlot = 0x40) {
-    const uint8_t* name = FindCString(rdata, cvar);
-    uint8_t* const end = text.base + text.size - 0x30;
-    for (uint8_t* p = text.base + 0x20; name && p < end; ++p) {
-        p = static_cast<uint8_t*>(memchr(p, 0x48, static_cast<size_t>(end - p)));
-        if (!p) break;
-        if (p[1] != 0x8D || p[2] != 0x15 || p + 7 + Rel32(p + 3) != name) continue;
-        bool registers = false;
-        for (int f = 7; f <= 0x20 && !registers; ++f)
-            registers = (BytesMatch(p + f, "FF 50") && p[f + 2] == registerSlot) || (BytesMatch(p + f, "4C 8B 50") && p[f + 3] == registerSlot);
-        if (!registers) continue;
-        for (int b = 7; b <= 0x20; ++b) {
-            const uint8_t* q = p - b;
-            if (BytesMatch(q, "4C 8D 05")) return reinterpret_cast<int32_t*>(const_cast<uint8_t*>(q + 7 + Rel32(q + 3)));
-        }
-    }
-    return nullptr;
-}
-
-static const struct { const char* cvar; int32_t value; const char* also; } kKeptOn[] = {
-    { "v_qdrive2.quantumTravelAllowed", 1, "p_enable_physical_quantum_travel 1" },
-    { "v_qdrive2.quantumBoostAllowed", 1, nullptr },
-    { "v_qdrive2.setting_ignoreBlockedBoost", 1, nullptr },
-    { "v_qdrive2.setting_ignoreBlockedTravel", 1, nullptr },
-    { "v_qdrive.logging", 1, nullptr },
+// Each cvar's storage is a sco-core row (cvars.*, sco/game/world.h), in capability cvars.qdrive_kept_on.
+static const struct { const char* cvar; int32_t value; const char* also; const char* row; } kKeptOn[] = {
+    { "v_qdrive2.quantumTravelAllowed", 1, "p_enable_physical_quantum_travel 1", "cvars.quantum_travel_allowed" },
+    { "v_qdrive2.quantumBoostAllowed", 1, nullptr, "cvars.quantum_boost_allowed" },
+    { "v_qdrive2.setting_ignoreBlockedBoost", 1, nullptr, "cvars.ignore_blocked_boost" },
+    { "v_qdrive2.setting_ignoreBlockedTravel", 1, nullptr, "cvars.ignore_blocked_travel" },
+    { "v_qdrive.logging", 1, nullptr, "cvars.qdrive_logging" },
 };
 constexpr int kKeptOnCount = sizeof(kKeptOn) / sizeof(kKeptOn[0]);
 static int32_t* g_keptOn[kKeptOnCount];
 
-static const struct { const char* cvar; float value; } kKeptOnFloat[] = {
-    { "v_qdrive2.setting_targetLockAngularSpeedThresholdPlayer", 45.0f },
-    { "v_qdrive2.setting_targetLockLinearSpeedThresholdPlayer", 1000.0f },
+static const struct { const char* cvar; float value; const char* row; } kKeptOnFloat[] = {
+    { "v_qdrive2.setting_targetLockAngularSpeedThresholdPlayer", 45.0f, "cvars.target_lock_angular" },
+    { "v_qdrive2.setting_targetLockLinearSpeedThresholdPlayer", 1000.0f, "cvars.target_lock_linear" },
 };
 constexpr int kKeptOnFloatCount = sizeof(kKeptOnFloat) / sizeof(kKeptOnFloat[0]);
 static float* g_keptOnFloat[kKeptOnFloatCount];
 
 static uintptr_t* g_console = nullptr;
 
-static void FindConsole(const Section& text, const Section& rdata) {
-    const uint8_t* str = FindCString(rdata, "debugGUI_enable 1");
-    uint8_t* const end = text.base + text.size - 0x20;
-    for (uint8_t* p = text.base + 7; str && p < end; ++p) {
-        p = static_cast<uint8_t*>(memchr(p, 0x48, static_cast<size_t>(end - p)));
-        if (!p) break;
-        if (p[1] != 0x8D || p[2] != 0x15 || p + 7 + Rel32(p + 3) != str) continue;
-        if (BytesMatch(p - 7, "48 8B 0D") && BytesMatch(p + 7, "45 33 C9") && BytesMatch(p + 0x19, "FF 90 30 01 00 00")) {
-            g_console = reinterpret_cast<uintptr_t*>(p + Rel32(p - 4));
-            return;
-        }
-    }
-    Log("[cvars] console not found; console commands are disabled");
+static void FindConsole() {
+    if (WorldCapability("cvars.console")) { g_console = reinterpret_cast<uintptr_t*>(sco::Sig("cvars.console")); return; }
+    Log("[cvars] console not found; console commands are disabled (see the [core] lines in mod.log)");
 }
 
 static SRWLOCK       g_lock = SRWLOCK_INIT;
@@ -166,14 +139,14 @@ static void RefreshS42Settings() {
     }
 }
 
-void ResolveCVarsApi(const Section& text, const Section& rdata) {
-    for (int i = 0; i < kKeptOnCount; ++i)
-        if (!(g_keptOn[i] = FindCVarStorage(text, rdata, kKeptOn[i].cvar)))
-            Log("[+] %s not found; it stays as the game mode sets it", kKeptOn[i].cvar);
-    for (int i = 0; i < kKeptOnFloatCount; ++i)
-        if (!(g_keptOnFloat[i] = reinterpret_cast<float*>(FindCVarStorage(text, rdata, kKeptOnFloat[i].cvar, 0x48))))
-            Log("[+] %s not found; it keeps its default", kKeptOnFloat[i].cvar);
-    FindConsole(text, rdata);
+void ResolveCVarsApi(const Section&, const Section&) {
+    if (WorldCapability("cvars.qdrive_kept_on")) {
+        for (int i = 0; i < kKeptOnCount; ++i) g_keptOn[i] = reinterpret_cast<int32_t*>(sco::Sig(kKeptOn[i].row));
+        for (int i = 0; i < kKeptOnFloatCount; ++i) g_keptOnFloat[i] = reinterpret_cast<float*>(sco::Sig(kKeptOnFloat[i].row));
+    } else {
+        Log("[+] quantum cvars not found; they stay as the game mode sets them (see the [core] lines in mod.log)");
+    }
+    FindConsole();
 }
 
 static void KeepSettingsOn() {
