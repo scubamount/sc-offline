@@ -5,7 +5,9 @@
 #include "sco/caps.h"
 #include "sco/datacore.h"
 #include "sco/datacore_service.h"
+#include "sco/game/features.h"
 #include "sco/game/pak.h"
+#include "world_caps.h"
 #include "sco/plugins.h"
 #include "sco/vfs.h"
 #include <atomic>
@@ -432,36 +434,37 @@ void ProcessQuantum() {
         StateName(now.state), now.powered, now.input, now.boostBlocked, ReasonName(now.reason), now.travelBlocked);
 }
 
-static void HookBoostInput(const Section& text) {
-    int n = 0;
-    if (uint8_t* fn = FindUniquePattern(text, "40 53 41 56 48 83 EC 68 8D 82 2F FE FF FF 45 33 F6 83 F8 77 0F 87", n))
-        g_inputHooked = HookFunction(fn, 8, reinterpret_cast<void*>(&OnActionHook), reinterpret_cast<void**>(&g_onActionOrig));
-    uint8_t* fn = FindUniquePattern(text, "40 55 53 56 57 41 54 41 55 41 56 41 57 48 8B EC 48 83 EC 48 48 8B 02 4C 8D B9 40 FE FF FF", n);
-    g_startUseHooked = fn && HookFunction(fn, 5, reinterpret_cast<void*>(&StartUseHook), reinterpret_cast<void**>(&g_startUseOrig));
-    g_driveInput = reinterpret_cast<DriveInputFn>(FindUniquePattern(text, "48 83 EC 28 8B 02 05 2F FE FF FF 83 F8 77 0F 87", n));
-    fn = FindUniquePattern(text, "48 8B C4 C5 FA 11 50 18 55 53 56 57 41 57 48 8D A8 B8 FC FF FF 48 81 EC 20 04 00 00", n);
-    g_effectGuarded = fn && HookFunction(fn, 8, reinterpret_cast<void*>(&EffectUpdateHook), reinterpret_cast<void**>(&g_effectUpdateOrig));
-    fn = FindUniquePattern(text, "48 8B C4 53 57 48 81 EC B8 00 00 00 48 89 70 E8 41 0F B6 F9 C5 F8 29 70 D8 C5 F8 29 78 C8", n);
-    g_chargeHooked = fn && HookFunction(fn, 5, reinterpret_cast<void*>(&ChargeHook), reinterpret_cast<void**>(&g_chargeOrig));
-    g_splineGetY = reinterpret_cast<SplineGetYFn>(FindUniquePattern(text,
-        "48 89 5C 24 10 55 48 8D 6C 24 A9 48 81 EC 90 00 00 00 48 8B D9 C7 45 F7 00 29 00 00 33 C9", n));
-    if (uint8_t* p = FindUniquePattern(text, "83 79 10 00 4C 8D 41 10 75 33 48 8B 41 08 48 B9 FF FF FF FF FF FF 00 00 "
-                                             "48 8B D0 48 23 D1 74 1D 48 B9 00 00 00 00 00 00 FF 3F 48 85 C1 74 0E 48 8B 0D", n))
-        g_audioSystem = reinterpret_cast<uintptr_t*>(p + 0x36 + Rel32(p + 0x32));
-    g_handleValid = reinterpret_cast<HandleValidFn>(FindUniquePattern(text,
-        "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 20 48 8B 19 48 8B F9 48 85 DB 74 ?? "
-        "48 B8 FF FF FF FF FF FF 00 00 48 8B F3 48 23 F0 48 8B CE E8 ?? ?? ?? ?? 48 8B E8 0F B7 40 04 "
-        "66 83 F8 04 74 ?? 48 C1 EB 30 B9 FF 0F 00 00 66 23 D9 66 39 5D 02 75 ?? 66 83 F8 02", n));
+// The functions come from sco-core's quantum.* rows (sco/game/world.h); hooking stays here.
+static void HookBoostInput() {
+    if (!WorldCapability("quantum.boost")) {
+        Log("[!] quantum boost: functions not found (see the [core] lines in mod.log)");
+        return;
+    }
+    g_inputHooked = HookFunction(sco::Sig("quantum.on_action"), 8, reinterpret_cast<void*>(&OnActionHook), reinterpret_cast<void**>(&g_onActionOrig));
+    g_startUseHooked = HookFunction(sco::Sig("quantum.start_use"), 5, reinterpret_cast<void*>(&StartUseHook), reinterpret_cast<void**>(&g_startUseOrig));
+    g_driveInput = reinterpret_cast<DriveInputFn>(sco::Sig("quantum.drive_input"));
+    g_effectGuarded = HookFunction(sco::Sig("quantum.effect_update"), 8, reinterpret_cast<void*>(&EffectUpdateHook), reinterpret_cast<void**>(&g_effectUpdateOrig));
+    g_chargeHooked = HookFunction(sco::Sig("quantum.charge"), 5, reinterpret_cast<void*>(&ChargeHook), reinterpret_cast<void**>(&g_chargeOrig));
+    g_splineGetY = reinterpret_cast<SplineGetYFn>(sco::Sig("quantum.spline_get_y"));
+    g_audioSystem = reinterpret_cast<uintptr_t*>(sco::Sig("quantum.audio_system"));
+    g_handleValid = reinterpret_cast<HandleValidFn>(sco::Sig("quantum.handle_valid"));
 }
 
-void ResolveQuantumApi(const Section& text, const Section& rdata) {
-    HookBoostInput(text);
-    const uint8_t* header = FindCString(rdata, "C:\\workspace\\CryEngine\\Code\\CryEngine\\CryCommon\\Events/VFX/EntityEffectSystem.h");
-    uint8_t* senders[8];
-    const int found = FindPattern(text, "48 89 5C 24 08 57 48 83 EC 50 8B 05 ?? ?? ?? ?? 48 8B FA 4C 89 44 24 20 48 8B D9 85 C0 75 19 "
-                                        "41 B8 17 00 00 00 48 8D 15", senders, 8);
-    for (int i = 0; header && i < found && i < 8; ++i)
-        if (senders[i] + 0x2C + Rel32(senders[i] + 0x28) == header) g_sendEffectTag = reinterpret_cast<SendEffectTagFn>(senders[i]);
+// The effect tag sender is sco-core's quantum.send_effect_tag row (capability quantum.effect_tag,
+// sco/game/features.h).
+static void FindEffectTagSender() {
+    size_t n = 0;
+    const sco::game::features::Capability* caps = sco::game::features::Capabilities(n);
+    for (size_t i = 0; i < n; ++i)
+        if (strcmp(caps[i].name, "quantum.effect_tag") == 0) {
+            sco::caps::SetFromSignatures(caps[i].name, caps[i].rows, caps[i].count);
+            if (sco::caps::Has(caps[i].name)) g_sendEffectTag = reinterpret_cast<SendEffectTagFn>(sco::Sig("quantum.send_effect_tag"));
+        }
+}
+
+void ResolveQuantumApi(const Section&, const Section&) {
+    HookBoostInput();
+    FindEffectTagSender();
 }
 
 bool QuantumDriveReady() {

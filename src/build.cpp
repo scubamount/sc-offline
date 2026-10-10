@@ -3,6 +3,7 @@
 #include "teleport.h"
 #include "npc.h"
 #include "menu.h"
+#include "world_caps.h"
 #include <cmath>
 #include <share.h>
 
@@ -12,72 +13,53 @@ static FreeCamOnFn    g_freeCamOn = nullptr;
 static FreeCamOffFn   g_freeCamOff = nullptr;
 static const uint8_t* g_freeCamFlag = nullptr;
 
-static const uint8_t* RegisteredHandler(const Section& text, const uint8_t* name) {
-    uint8_t* const end = text.base + text.size - 7;
-    for (uint8_t* p = text.base + 0xF; name && p < end; ++p) {
-        p = static_cast<uint8_t*>(memchr(p, 0x48, static_cast<size_t>(end - p)));
-        if (!p) break;
-        if (p[1] != 0x8D || p[2] != 0x15 || p + 7 + Rel32(p + 3) != name || !BytesMatch(p - 0xF, "4C 8D 05")) continue;
-        const uint8_t* h = p - 0xF + 7 + Rel32(p - 0xF + 3);
-        return h >= text.base && h + 0x40 < text.base + text.size ? h : nullptr;
-    }
-    return nullptr;
-}
-
 static int __fastcall FreeCamArgCount(void*) { return 2; }
 static const char* __fastcall FreeCamArg(void*, int index) { return index == 1 ? "2" : "FreeCamEnable"; }
 static void* const kFreeCamArgsVtbl[] = { nullptr, reinterpret_cast<void*>(&FreeCamArgCount), reinterpret_cast<void*>(&FreeCamArg), nullptr };
 static void* const kFreeCamArgs[] = { const_cast<void**>(kFreeCamArgsVtbl) };
-
-static bool LoadsString(const uint8_t* at, const uint8_t* str) {
-    return str && BytesMatch(at, "48 8D 0D") && at + 7 + Rel32(at + 3) == str;
-}
 
 using ReleaseGridFn = void(__fastcall*)(uintptr_t grid);
 static uintptr_t*    g_physWorld = nullptr;
 static ReleaseGridFn g_releaseGrid = nullptr;
 static const char*   g_rayTag = nullptr;
 
-static bool GroundRaySite(const Section& text, const uint8_t* L) {
-    if (L - 0xBF < text.base || L + 0xF9 > text.base + text.size || !BytesMatch(L - 0xBF, "48 8B 3D") || !BytesMatch(L - 0x42, "48 8B 98 C0 01 00 00")
-        || !BytesMatch(L + 0x07, "C7 85 9C 00 00 00 01 01 00 00") || !BytesMatch(L + 0x26, "48 C7 85 A0 00 00 00 0F 02 00 00")
-        || !BytesMatch(L + 0x80, "FF 50 30 41 B8 1E 00 00 00") || !BytesMatch(L + 0x9A, "FF D3") || !BytesMatch(L + 0xF2, "33 D2 E8"))
-        return false;
-    const uint8_t* release = L + 0xF9 + Rel32(L + 0xF5);
-    uintptr_t* world = reinterpret_cast<uintptr_t*>(const_cast<uint8_t*>(L - 0xB8 + Rel32(L - 0xBC)));
-    if (release < text.base || release + 0x14 > text.base + text.size
-        || !BytesMatch(release, "48 8B D1 48 8B 0D ?? ?? ?? ?? 48 8B 01 48 FF A0 28 02 00 00")
-        || reinterpret_cast<uintptr_t*>(const_cast<uint8_t*>(release + 10 + Rel32(release + 6))) != world)
-        return false;
-    g_physWorld   = world;
-    g_releaseGrid = reinterpret_cast<ReleaseGridFn>(const_cast<uint8_t*>(release));
-    return true;
-}
+// What the entity vtable's slots hold (sco-core's build.entity_* rows); a live entity's slots are
+// compared with them before build mode calls through them.
+static uintptr_t g_entitySetPosition = 0, g_entitySetRotation = 0, g_entityGetRotation = 0;
+static uintptr_t g_entityRayProxy = 0, g_entitySkipAdd = 0;
 
-static void ResolveGroundRay(const Section& text, const Section& rdata) {
-    const uint8_t* tag = FindCString(rdata, "PlanetRayIntersection");
-    g_rayTag = reinterpret_cast<const char*>(tag);
-    uint8_t* const end = text.base + text.size - 7;
-    for (uint8_t* p = text.base; tag && p < end; ++p) {
-        p = static_cast<uint8_t*>(memchr(p, 0x48, static_cast<size_t>(end - p)));
-        if (!p) break;
-        if (p[1] == 0x8D && p[2] == 0x05 && p + 7 + Rel32(p + 3) == tag && GroundRaySite(text, p)) return;
-    }
-    Log("[build] ground ray not found; objects go where the camera points instead of on the ground");
-}
+static uintptr_t SigAddr(const char* id) { return reinterpret_cast<uintptr_t>(sco::Sig(id)); }
 
-bool ResolveBuildApi(const Section& text, const Section& rdata) {
-    ResolveGroundRay(text, rdata);
-    const uint8_t* on  = RegisteredHandler(text, FindCString(rdata, "FreeCamEnable"));
-    const uint8_t* off = RegisteredHandler(text, FindCString(rdata, "FreeCamDisable"));
-    if (on && LoadsString(on + 0x23, FindCString(rdata, "Enabling free cam")))
-        g_freeCamOn = reinterpret_cast<FreeCamOnFn>(const_cast<uint8_t*>(on));
-    if (off && LoadsString(off + 0x11, FindCString(rdata, "Disabling free cam"))
-        && BytesMatch(off, "48 83 EC 28 80 3D ?? ?? ?? ?? 00")) {
-        g_freeCamOff  = reinterpret_cast<FreeCamOffFn>(const_cast<uint8_t*>(off));
-        g_freeCamFlag = off + 4 + 7 + Rel32(off + 6);
+// The camera's position and rotation offsets are checked by sco-core's build.camera_fields row,
+// in the code the game's own teleport-to-camera reads them with.
+static bool g_cameraOk = false;
+
+// The addresses come from sco-core's build.* rows (sco/game/world.h).
+bool ResolveBuildApi(const Section&, const Section&) {
+    if (WorldCapability("build.ground_ray")) {
+        g_rayTag          = reinterpret_cast<const char*>(sco::Sig("build.ray_tag"));
+        g_physWorld       = reinterpret_cast<uintptr_t*>(sco::Sig("build.phys_world"));
+        g_releaseGrid     = reinterpret_cast<ReleaseGridFn>(sco::Sig("build.release_grid"));
+        g_entityRayProxy  = SigAddr("build.entity_ray_proxy");
+        g_entitySkipAdd   = SigAddr("build.entity_skip_add");
+    } else {
+        Log("[build] ground ray not found; objects go where the camera points instead of on the ground (see the [core] lines in mod.log)");
     }
-    if (!g_freeCamOn || !g_freeCamOff) Log("[build] free camera not found; build mode disabled");
+    if (WorldCapability("build.entity_move")) {
+        g_entitySetPosition = SigAddr("build.entity_set_position");
+        g_entitySetRotation = SigAddr("build.entity_set_rotation");
+        g_entityGetRotation = SigAddr("build.entity_get_rotation");
+    } else {
+        Log("[build] entity move/rotate functions not found; the preview won't follow the camera (see the [core] lines in mod.log)");
+    }
+    g_cameraOk = WorldCapability("build.camera");
+    if (!g_cameraOk) Log("[build] camera fields not confirmed; build mode can't aim (see the [core] lines in mod.log)");
+    if (WorldCapability("build.free_cam")) {
+        g_freeCamOn   = reinterpret_cast<FreeCamOnFn>(sco::Sig("build.free_cam_on"));
+        g_freeCamOff  = reinterpret_cast<FreeCamOffFn>(sco::Sig("build.free_cam_off"));
+        g_freeCamFlag = sco::Sig("build.free_cam_flag");
+    }
+    if (!g_freeCamOn || !g_freeCamOff) Log("[build] free camera not found; build mode disabled (see the [core] lines in mod.log)");
     return g_freeCamOn && g_freeCamOff;
 }
 
@@ -173,10 +155,10 @@ static int g_slotsOk = -1;
 static bool EntitySlotsOk(uintptr_t entity) {
     if (g_slotsOk < 0) {
         const uintptr_t vt = Rd<uintptr_t>(entity);
-        g_slotsOk =
-            BytesMatch(reinterpret_cast<const uint8_t*>(Rd<uintptr_t>(vt + 0x2B0)), "48 89 5C 24 08 48 89 74 24 10 48 89 7C 24 18 55 41 56 41 57")
-            && BytesMatch(reinterpret_cast<const uint8_t*>(Rd<uintptr_t>(vt + 0x2C0)), "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 70")
-            && BytesMatch(reinterpret_cast<const uint8_t*>(Rd<uintptr_t>(vt + 0x2C8)), "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 60 48 8B F9 41 0F B6 F0");
+        g_slotsOk = g_entitySetPosition
+            && Rd<uintptr_t>(vt + sco::game::world::kEntitySetPositionSlot) == g_entitySetPosition
+            && Rd<uintptr_t>(vt + sco::game::world::kEntitySetRotationSlot) == g_entitySetRotation
+            && Rd<uintptr_t>(vt + sco::game::world::kEntityGetRotationSlot) == g_entityGetRotation;
         if (!g_slotsOk) Log("[build] entity move/rotate functions changed; the preview won't follow the camera");
     }
     return g_slotsOk > 0;
@@ -206,8 +188,8 @@ static bool RaySlotsOk(uintptr_t entity) {
     if (g_rayOk < 0) {
         const uintptr_t vt = Rd<uintptr_t>(entity);
         g_rayOk = g_physWorld
-            && BytesMatch(reinterpret_cast<const uint8_t*>(Rd<uintptr_t>(vt + 0x208)), "40 53 48 83 EC 20 48 8B 89 80 02 00 00 48 8B DA 48 8B 01 FF 50 30")
-            && BytesMatch(reinterpret_cast<const uint8_t*>(Rd<uintptr_t>(vt + 0x430)), "48 89 5C 24 08 57 48 83 EC 20 41 0F B6 D8 48 8B FA E8 ?? ?? ?? ?? 48 85 C0 74 12 41 B1 01");
+            && Rd<uintptr_t>(vt + sco::game::world::kEntityRayProxySlot) == g_entityRayProxy
+            && Rd<uintptr_t>(vt + sco::game::world::kEntitySkipAddSlot) == g_entitySkipAdd;
         if (!g_rayOk && g_physWorld) Log("[build] ground ray slots changed; objects go where the camera points instead of on the ground");
     }
     return g_rayOk > 0;
@@ -278,9 +260,9 @@ static bool Target(double reach, double yaw, double lift, uint64_t previewId, do
     if (!GetLocalPlayer(actor, entity)) return false;
     const uintptr_t cam = Rd<uintptr_t>(actor + 0x208);
     const uintptr_t zone = VCall<uintptr_t>(entity, 0x6B8);
-    if (!cam || !zone) return false;
-    const double* p = reinterpret_cast<const double*>(cam + 0x6D18);
-    const float*  q = reinterpret_cast<const float*>(cam + 0x6D30);
+    if (!cam || !zone || !g_cameraOk) return false;
+    const double* p = reinterpret_cast<const double*>(cam + sco::game::world::kCameraPosition);
+    const float*  q = reinterpret_cast<const float*>(cam + sco::game::world::kCameraRotation);
     const double fwd[3] = { 2.0 * (q[0] * q[1] - q[3] * q[2]),
                             1.0 - 2.0 * (q[0] * q[0] + q[2] * q[2]),
                             2.0 * (q[1] * q[2] + q[3] * q[0]) };

@@ -3,6 +3,10 @@
 #include "teleport.h"
 #include "menu.h"
 #include "npc.h"
+#include "sco/caps.h"
+#include "sco/game/actors.h"
+#include "sco/game/features.h"
+#include "sco/signatures.h"
 #include "sco/status.h"
 #include <algorithm>
 #include <cctype>
@@ -61,159 +65,92 @@ struct SpawnApi {
 };
 static SpawnApi g_sp;
 
-static bool Contains(const uint8_t* from, const uint8_t* to, const char* pattern) {
-    for (const uint8_t* q = from; q < to; ++q)
-        if (BytesMatch(q, pattern)) return true;
-    return false;
-}
+namespace actors = sco::game::actors;
 
-// Every event declared in Events/ISC/Dashboards.h gets a small sender function that loads that file
-// name's address and passes the event's source line in r8d. Flight Ready is the one on line 0x49.
-// The senders are found through their references to the file name string rather than by a fixed byte
-// pattern, because game updates keep adding events with identical code.
-static ToggleFlightReadyFn FindFlightReady(const Section& text, const uint8_t* header) {
-    if (!header) return nullptr;
-    const uint8_t* const end = text.base + text.size - 8;
-    for (const uint8_t* p = text.base + 0x200; p < end; ++p) {
-        p = static_cast<const uint8_t*>(memchr(p, 0x8D, static_cast<size_t>(end - p)));
-        if (!p) break;
-        if ((p[-1] != 0x48 && p[-1] != 0x4C) || (p[1] & 0xC7) != 0x05 || p + 6 + Rel32(p + 2) != header) continue;
-        const uint8_t* lea = p - 1;
-        const uint8_t* start = nullptr;
-        for (const uint8_t* q = lea; q > lea - 0x60 && q > text.base + 2; --q)
-            if (q[-1] == 0xCC && q[-2] == 0xCC) { start = q; break; }
-        if (!start || !BytesMatch(lea, "48 8D 15")) continue;
-        uint32_t line = 0;
-        for (const uint8_t* q = start; q + 6 <= lea; ++q)
-            if (q[0] == 0x41 && q[1] == 0xB8) line = *reinterpret_cast<const uint32_t*>(q + 2);
-        if (line == 0x49 && BytesMatch(start, "48 89 5C 24") && Contains(start, lea, "48 8B FA") && Contains(start, lea, "4C 89 44 24"))
-            return reinterpret_cast<ToggleFlightReadyFn>(const_cast<uint8_t*>(start));
-    }
-    return nullptr;
-}
-
-
-bool ResolveSpawnApi(const Section& text, const Section& rdata) {
-    const uint8_t* msg = FindCString(rdata, "Landing Area could not be found.");
-    const uint8_t* lea = msg ? FindRipLea(text, 0x4C, 0x8D, 0x0D, msg) : nullptr;
-    if (!lea) { Log("[ship] spawn helpers not found; ship spawner disabled"); return false; }
-    const uint8_t* f = lea - 0x59;
-    if (!BytesMatch(f, "48 89 5C 24 10 4C 89 4C 24 20 56 57 41 54 41 56 41 57")
-        || !BytesMatch(f + 0x4F, "B1 ?? E8") || !BytesMatch(f + 0x40C, "BA 00 10 00 00")
-        || !BytesMatch(f + 0x46D, "E8") || !BytesMatch(f + 0x47D, "E8") || !BytesMatch(f + 0x55C, "E8")) {
-        Log("[ship] spawn helper layout changed; ship spawner disabled");
+// One capability of sco/game/actors.h or sco/game/features.h, set from its signature rows. When a
+// row isn't OK, logs one line naming it and pointing at the [core] report, and returns false.
+bool ActorsCapability(const char* name, const char* tag, const char* what) {
+    const char* const* rows = nullptr;
+    size_t count = 0, n = 0;
+    const sco::game::actors::Capability* a = sco::game::actors::Capabilities(n);
+    for (size_t i = 0; i < n && !rows; ++i)
+        if (strcmp(a[i].name, name) == 0) { rows = a[i].rows; count = a[i].count; }
+    const sco::game::features::Capability* f = sco::game::features::Capabilities(n);
+    for (size_t i = 0; i < n && !rows; ++i)
+        if (strcmp(f[i].name, name) == 0) { rows = f[i].rows; count = f[i].count; }
+    if (!rows) { Log("[%s] %s disabled (no capability %s in sco-core)", tag, what, name); return false; }
+    const sco::Result r = sco::caps::SetFromSignatures(name, rows, count);
+    if (r != sco::Result::Ok) Log("[!] capability %s: %s", name, sco::ResultName(r));
+    for (size_t i = 0; i < count; ++i) {
+        const sco::SigResult* s = sco::SigLookup(rows[i]);
+        if (s && s->state == sco::SigState::Ok) continue;
+        Log("[%s] %s disabled (%s %s; see the [core] lines in mod.log)", tag, what, rows[i],
+            s ? sco::SigStateName(s->state) : "unknown");
         return false;
     }
-    int n = 0;
-    uint8_t* ctor = FindUniquePattern(text,
-        "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 33 F6 48 B8 00 00 00 00 00 00 F0 3F 48 89 71 08 48 8B F9 "
-        "48 89 71 10 48 89 71 18 48 89 71 30 48 89 71 38 48 89 71 40 48 89 31", n);
-    uint8_t* seat = FindUniquePattern(text,
-        "40 55 41 54 41 56 48 8D AC 24 30 FC FF FF 48 81 EC D0 04 00 00 4D 8B E0 4C 8B F2 48 85 C9 0F 84", n);
+    return true;
+}
+
+template <typename T> static T Row(const char* id) { return reinterpret_cast<T>(sco::Sig(id)); }
+
+// The addresses come from sco-core's actor rows (sco/game/actors.h); each part of the spawner
+// switches on with its capability.
+bool ResolveSpawnApi(const Section&, const Section&) {
+    if (!ActorsCapability("spawn.helpers", "ship", "ship spawner")) return false;
     const uintptr_t genv = reinterpret_cast<uintptr_t>(g_isOnlineFlag) - 0x60E;
-    if (!ctor || !seat || !g_isOnlineFlag || reinterpret_cast<uintptr_t*>(genv + 0xA8) != g_tp.entitySystem) {
+    if (!g_isOnlineFlag || reinterpret_cast<uintptr_t*>(genv + 0xA8) != g_tp.entitySystem) {
         Log("[ship] spawn params / seat helper not found; ship spawner disabled");
         return false;
     }
-    g_sp.teamTag      = f[0x50];
-    g_sp.teamCategory = reinterpret_cast<TeamCategoryFn>(f + 0x51 + 5 + Rel32(f + 0x52));
-    g_sp.setFlags     = reinterpret_cast<SpawnSetFlagsFn>(f + 0x46D + 5 + Rel32(f + 0x46E));
-    g_sp.setClass     = reinterpret_cast<SpawnSetClassFn>(f + 0x47D + 5 + Rel32(f + 0x47E));
-    g_sp.setLocation  = reinterpret_cast<SpawnSetLocFn>(f + 0x55C + 5 + Rel32(f + 0x55D));
-    g_sp.ctor         = reinterpret_cast<SpawnParamsCtorFn>(ctor);
-    g_sp.findSeat     = reinterpret_cast<FindSeatFn>(seat);
+    g_sp.teamTag      = *sco::Sig("spawn.team_tag");
+    g_sp.teamCategory = Row<TeamCategoryFn>("spawn.team_category");
+    g_sp.setFlags     = Row<SpawnSetFlagsFn>("spawn.set_flags");
+    g_sp.setClass     = Row<SpawnSetClassFn>("spawn.set_class");
+    g_sp.setLocation  = Row<SpawnSetLocFn>("spawn.set_location");
+    g_sp.ctor         = Row<SpawnParamsCtorFn>("spawn.params_ctor");
+    g_sp.findSeat     = Row<FindSeatFn>("spawn.find_seat");
     g_sp.game         = reinterpret_cast<uintptr_t*>(genv + 0xA0);
     g_sp.components   = reinterpret_cast<uintptr_t*>(genv + 0xB0);
     g_sp.ok = true;
 
-    const uint8_t* s = seat;
-    const uint8_t* cb = BytesMatch(s + 0x21C, "48 8D 05") ? s + 0x223 + Rel32(s + 0x21F) : nullptr;
-    if (cb && BytesMatch(s + 0xB2, "E8") && BytesMatch(s + 0x19C, "E8") && BytesMatch(s + 0x1D6, "FF 90 78 07 00 00")
-        && BytesMatch(s + 0x242, "E8") && BytesMatch(s + 0x3CE, "E8") && BytesMatch(s + 0x3F1, "E8")
-        && BytesMatch(s + 0x3FE, "E8") && BytesMatch(s + 0x40B, "E8")
-        && BytesMatch(cb + 0x37, "48 83 BF 58 01 00 00 00") && BytesMatch(cb + 0xD6, "E8")) {
-        auto target = [](const uint8_t* call) { return const_cast<uint8_t*>(call + 5 + Rel32(call + 1)); };
-        g_sp.isLinked     = reinterpret_cast<IsLinkedFn>(target(s + 0xB2));
-        g_sp.forceDelink  = reinterpret_cast<ForceDelinkFn>(target(s + 0x19C));
-        g_sp.forEachSeat  = reinterpret_cast<ForEachSeatFn>(target(s + 0x242));
-        g_sp.actorOfUser  = reinterpret_cast<ActorOfUserFn>(target(s + 0x3CE));
-        g_sp.handleToId   = reinterpret_cast<HandleToIdFn>(target(s + 0x3F1));
-        g_sp.actorLink    = reinterpret_cast<ActorLinkFn>(target(s + 0x3FE));
-        g_sp.forceLink    = reinterpret_cast<ForceLinkFn>(target(s + 0x40B));
-        g_sp.seatPriority = reinterpret_cast<SeatPriorityFn>(target(cb + 0xD6));
-    } else {
-        Log("[ship] seat picker layout changed; using the game's default seat choice");
+    if (ActorsCapability("spawn.seat_picker", "ship", "seat control (using the game's default seat choice)")) {
+        g_sp.isLinked     = Row<IsLinkedFn>("spawn.is_linked");
+        g_sp.forceDelink  = Row<ForceDelinkFn>("spawn.force_delink");
+        g_sp.forEachSeat  = Row<ForEachSeatFn>("spawn.for_each_seat");
+        g_sp.actorOfUser  = Row<ActorOfUserFn>("spawn.actor_of_user");
+        g_sp.handleToId   = Row<HandleToIdFn>("spawn.handle_to_id");
+        g_sp.actorLink    = Row<ActorLinkFn>("spawn.actor_link");
+        g_sp.forceLink    = Row<ForceLinkFn>("spawn.force_link");
+        g_sp.seatPriority = Row<SeatPriorityFn>("spawn.seat_priority");
     }
 
-    const uint8_t* fmsg = FindCString(rdata, "FindEntityByName_SlowDebugCodeOnly: %s");
-    for (uint8_t* p = g_text.base; fmsg && p + 7 < g_text.base + g_text.size; ++p) {
-        p = static_cast<uint8_t*>(memchr(p, 0x48, static_cast<size_t>(g_text.base + g_text.size - 7 - p)));
-        if (!p) break;
-        if (p[1] == 0x8D && p[2] == 0x0D && p + 7 + Rel32(p + 3) == fmsg
-            && BytesMatch(p - 0x36, "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 40 48 C7 02 00 00 00 00")) {
-            g_sp.findEntityByName = reinterpret_cast<FindByNameFn>(p - 0x36);
-            break;
-        }
-    }
-    if (!g_sp.findEntityByName) Log("[ship] entity lookup by name not found; Daymar disabled");
+    if (ActorsCapability("spawn.find_by_name", "ship", "entity lookup by name (Daymar)"))
+        g_sp.findEntityByName = Row<FindByNameFn>("spawn.find_entity_by_name");
 
-    g_sp.toggleFlightReady = FindFlightReady(text,
-        FindCString(rdata, "C:\\workspace\\CryEngine\\Code\\CryEngine\\CryCommon\\Events/ISC/Dashboards.h"));
-    if (!g_sp.toggleFlightReady) Log("[ship] Flight Ready event not found; will press R instead");
+    if (ActorsCapability("spawn.flight_ready", "ship", "Flight Ready event (will press R instead)"))
+        g_sp.toggleFlightReady = Row<ToggleFlightReadyFn>("spawn.toggle_flight_ready");
 
-    const uint8_t* flyLabel = FindCString(rdata,
-        "unsigned short __cdecl CSCActorActionHandler::Request<struct SCActorActionHandlerActions::SFlyMode,"
-        "const enum ESCActorFlyMode&>(const enum ESCActorFlyMode &)");
-    uint8_t* wrappers[16] = {};
-    const int nWrappers = FindPattern(text, "89 54 24 10 48 83 EC 28 48 8D 54 24 38 E8", wrappers, 16);
-    for (int i = 0; flyLabel && i < nWrappers && i < 16; ++i) {
-        const uint8_t* req = wrappers[i] + 0x12 + Rel32(wrappers[i] + 0xE);
-        if (req >= text.base && req + 0xB5 <= text.base + text.size && BytesMatch(req + 0xAE, "48 8D 05")
-            && req + 0xB5 + Rel32(req + 0xB1) == flyLabel)
-            g_sp.requestFlyMode = reinterpret_cast<RequestFlyModeFn>(wrappers[i]);
+    if (ActorsCapability("spawn.fly_mode", "noclip", "noclip"))
+        g_sp.requestFlyMode = Row<RequestFlyModeFn>("spawn.request_fly_mode");
+    if (ActorsCapability("spawn.fly_speed", "noclip", "fly speed setting (speed stays at the game's default)")) {
+        g_sp.gameCVars      = Row<uintptr_t*>("spawn.game_cvars");
+        g_sp.flySpeedOffset = static_cast<uint32_t>(Rel32(sco::Sig("spawn.fly_speed_scaler") + actors::kFlySpeedDisp));
     }
-    if (uint8_t* p = FindUniquePattern(text, "48 89 83 38 01 00 00 B9 98 00 00 00 48 89 05", n))
-        g_sp.gameCVars = reinterpret_cast<uintptr_t*>(p + 0x13 + Rel32(p + 0xF));
-    const uint8_t* speedName = FindCString(rdata, "g_FlyModeSpeedScaler");
-    for (uint8_t* p = g_text.base + 0x14; speedName && p + 7 < g_text.base + g_text.size; ++p) {
-        p = static_cast<uint8_t*>(memchr(p, 0x48, static_cast<size_t>(g_text.base + g_text.size - 7 - p)));
-        if (!p) break;
-        if (p[1] == 0x8D && p[2] == 0x15 && p + 7 + Rel32(p + 3) == speedName && BytesMatch(p - 0x14, "4C 8D 87")) {
-            const int32_t off = Rel32(p - 0x11);
-            if (off > 0 && off < 0x4000) g_sp.flySpeedOffset = static_cast<uint32_t>(off);
-            break;
-        }
-    }
-    if (!g_sp.requestFlyMode) Log("[noclip] fly mode request not found; noclip disabled");
-    if (!g_sp.gameCVars || !g_sp.flySpeedOffset) Log("[noclip] fly speed setting not found; speed stays at the game's default");
 
-    const uint8_t* godMsg = FindCString(rdata, "Actor [$$] has changed GodMode State from [$$] to [$$]");
-    if (uint8_t* p = FindUniquePattern(text, "49 8B 8E 08 02 00 00 41 0F B6 D4 48 81 C1 F0 27 00 00 E8", n)) {
-        const uint8_t* set = p + 0x17 + Rel32(p + 0x13);
-        if (godMsg && BytesMatch(p - 0x64, "4C 8D 0D") && p - 0x64 + 7 + Rel32(p - 0x61) == godMsg
-            && set >= text.base && set + 0x10 <= text.base + text.size
-            && BytesMatch(set, "48 89 5C 24 08 57 48 83 EC 20 88 91")) {
-            g_sp.setGodMode = reinterpret_cast<SetGodModeFn>(const_cast<uint8_t*>(set));
-            g_sp.godModeByte = static_cast<uint32_t>(Rel32(set + 0xC));
-        }
+    if (ActorsCapability("spawn.god_mode", "god", "god mode")) {
+        g_sp.setGodMode  = Row<SetGodModeFn>("spawn.set_god_mode");
+        g_sp.godModeByte = static_cast<uint32_t>(Rel32(sco::Sig("spawn.set_god_mode") + actors::kGodModeByteDisp));
     }
-    if (!g_sp.setGodMode) Log("[god] god mode setter not found; god mode disabled");
 
-    const uint8_t* fmt = FindCString(rdata, "ObjectContainers\\%s");
-    const uint8_t* ocName = FindCString(rdata, "ocFilename");
-    if (const uint8_t* s = fmt ? FindRipLea(text, 0x48, 0x8D, 0x15, fmt) : nullptr) {
-        if (ocName && BytesMatch(s + 0x37, "48 8B 0D") && BytesMatch(s + 0x41, "FF 90") && BytesMatch(s + 0x58, "4C 8B 81")
-            && BytesMatch(s + 0x6E, "48 8B 78") && BytesMatch(s + 0x72, "48 8D 05") && s + 0x79 + Rel32(s + 0x75) == ocName
-            && BytesMatch(s + 0x94, "48 8D 05") && BytesMatch(s + 0xA0, "E8")) {
-            g_sp.system      = reinterpret_cast<uintptr_t*>(const_cast<uint8_t*>(s + 0x3E + Rel32(s + 0x3A)));
-            g_sp.pathMgrSlot = Rel32(s + 0x43);
-            g_sp.pathIdSlot  = Rel32(s + 0x5B);
-            g_sp.attrSetSlot = s[0x71];
-            g_sp.attrWriter  = const_cast<uint8_t*>(s + 0x9B + Rel32(s + 0x97));
-            g_sp.attrTypeId  = reinterpret_cast<uint32_t(__fastcall*)()>(const_cast<uint8_t*>(s + 0xA5 + Rel32(s + 0xA1)));
-        }
+    if (ActorsCapability("spawn.prefabs", "build", "prefab spawning (outposts/prefabs)")) {
+        const uint8_t* s = sco::Sig("spawn.prefab_site");
+        g_sp.system      = Row<uintptr_t*>("spawn.prefab_system");
+        g_sp.pathMgrSlot = Rel32(s + actors::kPrefabPathMgrSlot);
+        g_sp.pathIdSlot  = Rel32(s + actors::kPrefabPathIdSlot);
+        g_sp.attrSetSlot = s[actors::kPrefabAttrSetSlot];
+        g_sp.attrWriter  = sco::Sig("spawn.prefab_attr_writer");
+        g_sp.attrTypeId  = Row<uint32_t(__fastcall*)()>("spawn.prefab_attr_type_id");
     }
-    if (!g_sp.attrTypeId) Log("[build] prefab spawning not found; outposts/prefabs disabled");
     return true;
 }
 
@@ -331,16 +268,16 @@ void Menu_GetStatus(char* out, size_t n) {
     if (!sco::GetStatus(out, n)) strncpy_s(out, n, kMenuStatusDefault, _TRUNCATE);
 }
 
-static uintptr_t ClassRegistry() { return VCall<uintptr_t>(*g_tp.entitySystem, 0xC0); }
+static uintptr_t ClassRegistry() { return VCall<uintptr_t>(*g_tp.entitySystem, actors::kEsClassRegistry); }
 
 bool EntityClassExists(const char* name) {
     const uintptr_t registry = ClassRegistry();
-    return registry && VCall<uintptr_t>(registry, 0x20, name) != 0;
+    return registry && VCall<uintptr_t>(registry, actors::kRegistryFindClass, name) != 0;
 }
 
 static int VehicleSize(uintptr_t entityClass) {
-    const uintptr_t rec = VCall<uintptr_t>(*g_sp.game, 0x298, entityClass);
-    return rec ? static_cast<int>(Rd<uint32_t>(rec + 0x10)) : 0;
+    const uintptr_t rec = VCall<uintptr_t>(*g_sp.game, actors::kGameVehicleRecord, entityClass);
+    return rec ? static_cast<int>(Rd<uint32_t>(rec + actors::kVehicleRecordSize)) : 0;
 }
 
 // The Vanduul wing that the "Bengal + Vanduul wing" row spawns alongside its Bengal.
@@ -353,7 +290,7 @@ static bool ClassInRegistry(const char* cls) {
     bool found = false;
     __try {
         const uintptr_t registry = ClassRegistry();
-        found = registry && VCall<uintptr_t>(registry, 0x20, cls) != 0;
+        found = registry && VCall<uintptr_t>(registry, actors::kRegistryFindClass, cls) != 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         found = false;
     }
@@ -443,7 +380,7 @@ static int BuildMenuShips() {
         line[strcspn(line, "\r\n#")] = 0;
         char* name = line + strspn(line, " \t");
         if (!*name) continue;
-        const uintptr_t cls = VCall<uintptr_t>(registry, 0x20, static_cast<const char*>(name));
+        const uintptr_t cls = VCall<uintptr_t>(registry, actors::kRegistryFindClass, static_cast<const char*>(name));
         if (!cls) { ++unknown; continue; }
         strncpy_s(g_menuShips[n].name, name, _TRUNCATE);
         g_menuShips[n++].size = VehicleSize(cls);
@@ -481,11 +418,11 @@ static int BuildMenuShips() {
 
 uintptr_t EntityComponent(uintptr_t entity, const char* type) {
     uint8_t tmp[16] = {};
-    const uint16_t* id = VCall<const uint16_t*>(*g_sp.components, 0x10, tmp, type);
+    const uint16_t* id = VCall<const uint16_t*>(*g_sp.components, actors::kComponentsTypeId, tmp, type);
     if (!id) return 0;
     uint16_t typeId = *id;
     uint8_t out[16] = {};
-    const uint64_t* h = VCall<const uint64_t*>(entity, 0x390, out, &typeId);
+    const uint64_t* h = VCall<const uint64_t*>(entity, actors::kEntityComponent, out, &typeId);
     return h ? (*h & kPtrMask) : 0;
 }
 
@@ -493,23 +430,23 @@ static const char* SpawnShipInZone(const char* shipClass, uint64_t zoneId, const
                                    const double* rot = nullptr, const char* ocPath = nullptr) {
     __try {
         const uintptr_t es = *g_tp.entitySystem;
-        const uintptr_t cls = VCall<uintptr_t>(ClassRegistry(), 0x20, shipClass);
+        const uintptr_t cls = VCall<uintptr_t>(ClassRegistry(), actors::kRegistryFindClass, shipClass);
         if (!cls) return "unknown entity class";
 
-        alignas(16) uint8_t params[0x800] = {};
+        alignas(16) uint8_t params[actors::kSpawnParamsSize] = {};
         g_sp.ctor(params);
         g_sp.setClass(params, cls);
         const struct { double rot[4]; double pos[3]; double scale; } where = {
             { rot ? rot[0] : 0, rot ? rot[1] : 0, rot ? rot[2] : 0, rot ? rot[3] : 1 }, { pos[0], pos[1], pos[2] }, 1.0 };
         g_sp.setLocation(params, &where, zoneId);
-        g_sp.setFlags(params, 0x1000);
+        g_sp.setFlags(params, actors::kSpawnFlags);
 
         uintptr_t batch = 0;
-        VCall<void>(es, 0xC8, &batch, "starcitzenofflinemods ship spawner",
+        VCall<void>(es, actors::kEsCreateBatch, &batch, "starcitzenofflinemods ship spawner",
                     static_cast<uint32_t>(g_sp.teamCategory(g_sp.teamTag)), static_cast<uint32_t>(0));
         if (!batch) return "couldn't create a spawn batch";
         uintptr_t attributes[2] = {};
-        VCall<void>(es, 0x118, attributes);
+        VCall<void>(es, actors::kEsSpawnAttributes, attributes);
         if (ocPath) {
             if (!attributes[0]) return "couldn't create spawn attributes";
             const uintptr_t paths = VCall<uintptr_t>(*g_sp.system, g_sp.pathMgrSlot);
@@ -519,9 +456,9 @@ static const char* SpawnShipInZone(const char* shipClass, uint64_t zoneId, const
             VCall<void>(attributes[0], g_sp.attrSetSlot, "ocFilename", g_sp.attrTypeId(), uintptr_t(0), &setter);
         }
         uint64_t newId[2] = {};
-        VCall<void>(batch, 0x10, newId, params, attributes);
+        VCall<void>(batch, actors::kBatchSpawn, newId, params, attributes);
         uintptr_t owned = batch;
-        VCall<void>(es, 0xD8, &owned);
+        VCall<void>(es, actors::kEsReleaseBatch, &owned);
         shipId = newId[0];
         return shipId ? nullptr : "the spawn batch gave no entity id";
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -622,7 +559,7 @@ static const char* SpawnShipAboveDaymar(const char* shipClass, uint64_t& shipId)
         g_sp.findEntityByName(*g_tp.entitySystem, &handle, kDaymarEntity);
         const uintptr_t daymar = handle & kPtrMask;
         if (!daymar) return "Daymar isn't loaded";
-        const uintptr_t zone = VCall<uintptr_t>(daymar, 0x6E0);
+        const uintptr_t zone = VCall<uintptr_t>(daymar, actors::kEntityOocZone);
         if (!zone) return "Daymar has no zone";
         zoneId = ZoneId(zone);
         if (!zoneId || ZoneFromId(zoneId) != zone) return "Daymar zone lookup mismatch";
@@ -678,10 +615,10 @@ static char __fastcall CollectSeat(uintptr_t seat) {
     SeatInfo& s = g_seatList[g_seatListCount++];
     s = {};
     s.seat = seat;
-    s.occupied = Rd<uint64_t>(seat + 0x158) != 0;
+    s.occupied = Rd<uint64_t>(seat + actors::kSeatOccupant) != 0;
     s.priority = g_sp.seatPriority(seat);
     const uintptr_t owner = Rd<uint64_t>(seat + 8) & kPtrMask;
-    const char* name = owner ? VCall<const char*>(owner, 0x78) : nullptr;
+    const char* name = owner ? VCall<const char*>(owner, actors::kEntityName) : nullptr;
     strncpy_s(s.name, name ? name : "?", _TRUNCATE);
     return 1;
 }
@@ -706,7 +643,7 @@ static uint64_t OccupantAsRawId(uint64_t raw, uint64_t shipId, uint64_t seatId) 
 static uint64_t OccupantAsHandle(uintptr_t seat, uint64_t shipId, uint64_t seatId) {
     __try {
         uint64_t id = 0;
-        g_sp.handleToId(reinterpret_cast<const void*>(seat + 0x158), &id);
+        g_sp.handleToId(reinterpret_cast<const void*>(seat + actors::kSeatOccupant), &id);
         return IsActorEntity(id, shipId, seatId) ? id : 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
 }
@@ -745,7 +682,7 @@ static uint64_t PlacedCrewIn(uint64_t seatId) {
 
 static uint64_t DecodeOccupant(const SeatInfo& s, uint64_t shipId) {
     uint64_t raw = 0;
-    __try { raw = Rd<uint64_t>(s.seat + 0x158); } __except (EXCEPTION_EXECUTE_HANDLER) { return kUnknownOccupant; }
+    __try { raw = Rd<uint64_t>(s.seat + actors::kSeatOccupant); } __except (EXCEPTION_EXECUTE_HANDLER) { return kUnknownOccupant; }
     if (!raw) return 0;
 
     static const char* const kLayoutName[] = { "", "an entity handle", "a component pointer", "a raw entity id" };
@@ -767,7 +704,7 @@ static int EnumerateSeats(uintptr_t ship, uint64_t shipId) {
     const uintptr_t ports = EntityComponent(ship, "IItemPortContainer");
     if (!ports) return 0;
     const struct { void* invoke; uintptr_t manager; void* storage; } visitor = { reinterpret_cast<void*>(&CollectSeat), 1, nullptr };
-    g_sp.forEachSeat(VCall<uintptr_t>(ports, 0x778), &visitor, 193);
+    g_sp.forEachSeat(VCall<uintptr_t>(ports, actors::kPortsSeatContainer), &visitor, actors::kSeatItemType);
     const uint64_t me = LocalPlayerEntityId();
     for (int i = 0; i < g_seatListCount; ++i) {
         SeatInfo& s = g_seatList[i];
@@ -1238,10 +1175,10 @@ static DWORD    g_shipItemsAt = 0;
 static uint64_t ItemParentId(uintptr_t entity) {
     __try {
         uint64_t port = 0;
-        VCall<void>(entity, 0x150, &port, 0ull);
+        VCall<void>(entity, actors::kEntityParentPort, &port, 0ull);
         if (!(port & kPtrMask)) return 0;
         uint64_t id = 0;
-        const uint64_t* owner = VCall<const uint64_t*>(port & kPtrMask, 0x8, &id);
+        const uint64_t* owner = VCall<const uint64_t*>(port & kPtrMask, actors::kPortOwnerId, &id);
         return owner ? *owner : 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
@@ -1251,7 +1188,7 @@ static uint64_t ItemParentId(uintptr_t entity) {
 static void EntityNameOf(uintptr_t entity, char* out, size_t n) {
     strncpy_s(out, n, "?", _TRUNCATE);
     __try {
-        if (const char* name = VCall<const char*>(entity, 0x78)) strncpy_s(out, n, name, _TRUNCATE);
+        if (const char* name = VCall<const char*>(entity, actors::kEntityName)) strncpy_s(out, n, name, _TRUNCATE);
     } __except (EXCEPTION_EXECUTE_HANDLER) {}
 }
 
@@ -1579,9 +1516,9 @@ static void ProcessGodMode(DWORD now) {
         uintptr_t actor, entity;
         if (!GetLocalPlayer(actor, entity)) return;
         const uintptr_t comp = EntityComponent(entity, "Actor");
-        const uintptr_t data = comp ? Rd<uintptr_t>(comp + 0x208) : 0;
+        const uintptr_t data = comp ? Rd<uintptr_t>(comp + actors::kGodModeData) : 0;
         if (!data) return;
-        const uintptr_t state = data + 0x27F0;
+        const uintptr_t state = data + actors::kGodModeState;
         const uint8_t want = on ? 2 : 0;
         if (Rd<uint8_t>(state + g_sp.godModeByte) != want) {
             g_sp.setGodMode(state, want);

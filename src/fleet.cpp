@@ -1375,8 +1375,7 @@ void InstallFeature(Feature f, bool ok) {
 bool PatchOnRequestOpen(char* why, size_t n) {
     uint8_t* open = g_open;
     if (open[asop::kOpenPatchSite] != 0xE9 || open + asop::kOpenClientHalf + Rel32(open + asop::kOpenPatchSite + 1) != open + asop::kOpenExit
-        || open[asop::kOpenClientHalf] != 0x80 || open[asop::kOpenClientHalf + 1] != 0x3D
-        || !BytesMatch(open + asop::kOpenAtcReload, "48 8B BD D8 00 00 00")) {
+        || open[asop::kOpenClientHalf] != 0x80 || open[asop::kOpenClientHalf + 1] != 0x3D) {   // +kOpenAtcReload: pinned by asop.on_request_open
         snprintf(why, n, "OnRequestOpen +0x%X isn't the expected jmp", asop::kOpenPatchSite);
         return false;
     }

@@ -4,6 +4,8 @@
 #include "teleport.h"
 #include "hooks.h"
 #include "menu.h"
+#include "sco/game/missions.h"
+#include "world_caps.h"
 #include <share.h>
 #include <cstring>
 
@@ -11,20 +13,6 @@ using CreateMissionFn = void(__fastcall*)(const void* request);
 static CreateMissionFn g_createMission = nullptr;
 
 static uintptr_t* g_missionSettings = nullptr;
-
-static void FindMissionLogging(const Section& text, const Section& rdata) {
-    const uint8_t* fmt = FindCString(rdata, "[EVMissionManager] Spawn Mission Request - Parsed MissionID: %s (%s)");
-    // Every LEA of the format, not just the first: the string has more than one user.
-    uint8_t* const end = text.base + text.size - 7;
-    for (uint8_t* lea = text.base + 0x4B; fmt && lea < end; ++lea) {
-        lea = static_cast<uint8_t*>(memchr(lea, 0x48, static_cast<size_t>(end - lea)));
-        if (!lea) break;
-        if (lea[1] != 0x8D || lea[2] != 0x0D || lea + 7 + Rel32(lea + 3) != fmt) continue;
-        if (!BytesMatch(lea - 0x4B, "48 8B 0D ?? ?? ?? ?? 83 79 0C 00")) continue;
-        g_missionSettings = reinterpret_cast<uintptr_t*>(lea - 0x44 + Rel32(lea - 0x48));
-        return;
-    }
-}
 
 using ConsoleCmdFn = void(__fastcall*)(void* args);
 static ConsoleCmdFn g_loadAllMissions = nullptr;
@@ -34,14 +22,6 @@ static const char* __fastcall NoArg(void*, int) { return "mission_load_all"; }
 static void* const kNoArgsVtbl[] = { nullptr, reinterpret_cast<void*>(&NoArgCount), reinterpret_cast<void*>(&NoArg), nullptr };
 static void* const kNoArgs[] = { const_cast<void**>(kNoArgsVtbl) };
 
-static void FindLoadAllMissions(const Section& text, const Section& rdata) {
-    const uint8_t* name = FindCString(rdata, "mission_load_all");
-    const uint8_t* lea = name ? FindRipLea(text, 0x48, 0x8D, 0x15, name) : nullptr;
-    if (!lea || lea - 0xC < text.base || !BytesMatch(lea - 0xC, "4C 8D 05")) return;
-    const uint8_t* h = lea - 0xC + 7 + Rel32(lea - 0x9);
-    if (h >= text.base && h + 0x20 <= text.base + text.size && BytesMatch(h, "40 53 48 83 EC 20 48 8B 01 48 8B D9 FF 50 08 83 F8 02 7C"))
-        g_loadAllMissions = reinterpret_cast<ConsoleCmdFn>(const_cast<uint8_t*>(h));
-}
 
 using LoadXmlFileFn   = void*(__fastcall*)(uintptr_t system, void* out, const char* path, bool reuseStrings);
 using LoadXmlBufferFn = void*(__fastcall*)(uintptr_t system, void* out, const char* buffer, size_t size, bool reuseStrings);
@@ -58,21 +38,6 @@ static uintptr_t*    g_system = nullptr;
 static FileChangeFn  g_fileChange = nullptr;
 static LoadXmlFileFn g_loadXmlFileOrig = nullptr;
 
-static void FindScriptLoading(const Section& text, const Section& rdata) {
-    const uint8_t* h = reinterpret_cast<const uint8_t*>(g_loadAllMissions);
-    if (h && BytesMatch(h + 0x2E, "48 8B 0D ?? ?? ?? ?? 48 8B 01 FF 90 A0 00 00 00"))
-        g_subsumption = reinterpret_cast<uintptr_t*>(const_cast<uint8_t*>(h + 0x35 + Rel32(h + 0x31)));
-    const uint8_t* name = FindCString(rdata, "void __cdecl Subsumption::XmlFileLibrary::OnFileChange(const struct SFileChangeInfo &)");
-    const uint8_t* lea = name ? FindRipLea(text, 0x48, 0x8D, 0x05, name) : nullptr;
-    for (const uint8_t* f = lea; f && f > lea - 0x400; --f) {
-        if (!BytesMatch(f, "48 89 5C 24 18 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24")) continue;
-        if (BytesMatch(f + 0x203, "48 8B 0D ?? ?? ?? ??")) {
-            g_fileChange = reinterpret_cast<FileChangeFn>(const_cast<uint8_t*>(f));
-            g_system = reinterpret_cast<uintptr_t*>(const_cast<uint8_t*>(f + 0x20A + Rel32(f + 0x206)));
-        }
-        break;
-    }
-}
 
 static bool ScriptsFolder(char* dir, size_t n) { return DataFilePath(dir, static_cast<DWORD>(n), "scripts"); }
 
@@ -169,10 +134,10 @@ static void AddOurScripts() {
         return;
     }
     const uintptr_t manager = VCall<uintptr_t>(subsumption, 0xA0);
-    const uint8_t* loadAll = manager ? reinterpret_cast<const uint8_t*>(Rd<uintptr_t>(Rd<uintptr_t>(manager) + 0x48)) : nullptr;
-    if (!loadAll || !BytesMatch(loadAll + 0x32, "48 8B 4B")) { Log("[missions] the mission manager's script library wasn't found"); return; }
-    const uintptr_t library = Rd<uintptr_t>(manager + loadAll[0x35]);
-    if (!library) { Log("[missions] the script library isn't there yet"); return; }
+    // sco-core's game pack finds it (sco/game/missions.h): the reads and the canary live there.
+    const char* why = nullptr;
+    const uintptr_t library = sco::game::missions::ScriptLibrary(manager, &why);
+    if (!library) { Log("[missions] %s", why); return; }
 
     uint8_t* slot = reinterpret_cast<uint8_t*>(Rd<uintptr_t>(system) + kLoadXmlFileSlot);
     if (!g_loadXmlFileOrig) {
@@ -239,27 +204,23 @@ static void LoadMissionScripts() {
     }
 }
 
-void ResolveMissionsApi(const Section& text, const Section& rdata) {
-    FindMissionLogging(text, rdata);
-    FindLoadAllMissions(text, rdata);
-    FindScriptLoading(text, rdata);
+// The addresses come from sco-core's missions.* rows (sco/game/world.h).
+void ResolveMissionsApi(const Section&, const Section&) {
+    if (WorldCapability("missions.load_all"))
+        g_loadAllMissions = reinterpret_cast<ConsoleCmdFn>(sco::Sig("missions.load_all"));
+    if (WorldCapability("missions.scripts")) {
+        g_subsumption = reinterpret_cast<uintptr_t*>(sco::Sig("missions.subsumption"));
+        g_fileChange  = reinterpret_cast<FileChangeFn>(sco::Sig("missions.file_change"));
+        g_system      = reinterpret_cast<uintptr_t*>(sco::Sig("missions.xml_system"));
+    }
     Log("[missions] script loading: load all %s, subsumption %s, file change %s, system %s", g_loadAllMissions ? "ok" : "MISSING",
         g_subsumption ? "ok" : "MISSING", g_fileChange ? "ok" : "MISSING", g_system ? "ok" : "MISSING");
-    const uint8_t* name = FindCString(rdata, "dgs.subsumption.mission.create");
-    uint8_t* const end = text.base + text.size - 7;
-    for (uint8_t* p = text.base + 0x13; name && p < end; ++p) {
-        p = static_cast<uint8_t*>(memchr(p, 0x48, static_cast<size_t>(end - p)));
-        if (!p) break;
-        if (p[1] != 0x8D || p[2] != 0x15 || p + 7 + Rel32(p + 3) != name) continue;
-        if (!BytesMatch(p - 0x13, "48 8B 59 18") || !BytesMatch(p - 0xF, "48 8D 05")) continue;
-        const uint8_t* h = p - 0xF + 7 + Rel32(p - 0xC);
-        if (h >= text.base && h + 0x20 <= text.base + text.size
-            && BytesMatch(h, "48 89 5C 24 08 57 48 83 EC 30 48 8B D9 B9 C0 00 00 00 E8")) {
-            g_createMission = reinterpret_cast<CreateMissionFn>(const_cast<uint8_t*>(h));
-            return;
-        }
+    if (WorldCapability("missions.start")) {
+        g_missionSettings = reinterpret_cast<uintptr_t*>(sco::Sig("missions.settings"));
+        g_createMission   = reinterpret_cast<CreateMissionFn>(sco::Sig("missions.create"));
+        return;
     }
-    Log("[missions] mission create handler not found; missions disabled");
+    Log("[missions] mission create handler not found; missions disabled (see the [core] lines in mod.log)");
 }
 
 bool StartMissionNearPlayer(const char* missionId, const char* name, float minM, float maxM) {
