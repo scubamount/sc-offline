@@ -3,6 +3,9 @@
 #include "teleport.h"
 #include "menu.h"
 #include "build.h"
+#include "sco/game/actors.h"
+#include "sco/game/features.h"
+#include "sco/signatures.h"
 #include <share.h>
 
 constexpr int        kMaxNpcs = 4096;
@@ -17,21 +20,17 @@ constexpr int        kMaxSpawned = 1024;
 static uint64_t      g_spawned[kMaxSpawned];
 static int           g_spawnedCount = 0;
 
-static int32_t g_removeSlot = 0;
+namespace actors = sco::game::actors;
 
-void ResolveNpcApi(const Section& text) {
-    uint8_t* sites[16] = {};
-    const int n = FindPattern(text, "48 8B 0D ?? ?? ?? ?? 48 8B 13 48 8B 01 FF 90 ?? ?? ?? ?? 48 83 C3 08 48 3B DF 75 E4", sites, 16);
-    int32_t slot = 0;
-    bool agree = n > 0 && n <= 16;
-    for (int i = 0; agree && i < n; ++i) {
-        const int32_t s = Rel32(sites[i] + 15);
-        if (reinterpret_cast<uintptr_t*>(sites[i] + 7 + Rel32(sites[i] + 3)) != g_tp.entitySystem) continue;
-        if (slot && s != slot) agree = false;
-        slot = s;
-    }
-    if (agree && slot > 0 && slot < 0x1000) g_removeSlot = slot;
-    else Log("[npc] RemoveEntity not found; Clear NPCs disabled");
+static int32_t g_removeSlot = 0;
+static bool    g_directRows = false;   // the npc.direct_remove capability
+
+// sco-core's npc.clear rows (sco/game/features.h) give the RemoveEntity slot; npc.direct_remove
+// (sco/game/actors.h) the fallback below.
+void ResolveNpcApi(const Section&) {
+    if (!ActorsCapability("npc.clear", "npc", "Clear NPCs")) return;
+    g_removeSlot = Rel32(sco::Sig("npc.remove_entity_call") + sco::game::features::kRemoveSlotDisp);
+    g_directRows = ActorsCapability("npc.direct_remove", "npc", "direct removal fallback");
 }
 
 void Menu_RequestClearNpcs() { InterlockedExchange(&g_clearRequested, 1); }
@@ -55,19 +54,16 @@ static int            g_directState = 0;     // 0 not tried, 1 found, -1 not fou
 static void ResolveDirectRemove() {
     if (g_directState) return;
     g_directState = -1;
+    if (!g_directRows) return;
     __try {
+        // The entity system's RemoveEntity must be the function npc.remove_entity found.
         const uint8_t* fn = *reinterpret_cast<const uint8_t* const*>(*reinterpret_cast<const uintptr_t*>(*g_tp.entitySystem) + g_removeSlot);
-        if (!BytesMatch(fn, "48 89 5C 24 08 48 89 54 24 10 55 56 57 41 54 41 55 41 56 41 57")) {
+        if (fn != sco::Sig("npc.remove_entity")) {
             Log("[npc] RemoveEntity's code changed; direct removal fallback disabled");
             return;
         }
-        for (const uint8_t* p = fn; p < fn + 0x700; ++p)
-            if (BytesMatch(p, "48 8B D3 49 8B CD E8 ?? ?? ?? ?? 84 C0 74 0A 49 23 DC 81 4B 08 00 10 00 00")) {
-                g_directRemove = reinterpret_cast<DirectRemoveFn>(const_cast<uint8_t*>(p + 11 + Rel32(p + 7)));
-                g_directState = 1;
-                return;
-            }
-        Log("[npc] internal remove call not found; direct removal fallback disabled");
+        g_directRemove = reinterpret_cast<DirectRemoveFn>(sco::Sig("npc.direct_remove"));
+        g_directState = 1;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Log("[npc] fault while locating the direct removal fallback");
     }
@@ -80,7 +76,7 @@ static uint64_t HandleOf(uint64_t id) {
     uint64_t handle = 0;
     __try {
         uint64_t out = 0;
-        if (const uint64_t* h = VCall<const uint64_t*>(*g_tp.entitySystem, 0x128, &out, id)) handle = *h;
+        if (const uint64_t* h = VCall<const uint64_t*>(*g_tp.entitySystem, actors::kEsHandleById, &out, id)) handle = *h;
         if (!(handle & kPtrMask)) reinterpret_cast<void(__fastcall*)(uint64_t*, uint64_t)>(g_tp.handleFromId)(&handle, id);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
@@ -174,14 +170,14 @@ static int BuildNpcList() {
     if (!DataFilePath(path, sizeof(path), "npcs.txt")) return 0;
     FILE* f = _fsopen(path, "r", _SH_DENYNO);
     if (!f) { Log("[npc] can't open %s", path); return 0; }
-    const uintptr_t registry = VCall<uintptr_t>(*g_tp.entitySystem, 0xC0);
+    const uintptr_t registry = VCall<uintptr_t>(*g_tp.entitySystem, actors::kEsClassRegistry);
     int n = 0, unknown = 0;
     char line[160];
     while (n < kMaxNpcs && fgets(line, sizeof(line), f)) {
         line[strcspn(line, "\r\n#")] = 0;
         char* name = line + strspn(line, " \t");
         if (!*name) continue;
-        if (!VCall<uintptr_t>(registry, 0x20, static_cast<const char*>(name))) { ++unknown; continue; }
+        if (!VCall<uintptr_t>(registry, actors::kRegistryFindClass, static_cast<const char*>(name))) { ++unknown; continue; }
         strncpy_s(g_npcs[n++], name, _TRUNCATE);
     }
     fclose(f);

@@ -1,6 +1,9 @@
 #include "loadout.h"
 #include "teleport.h"
 #include "menu.h"
+#include "spawner.h"
+#include "sco/game/actors.h"
+#include "sco/signatures.h"
 #include <share.h>
 #include <string>
 
@@ -12,29 +15,19 @@ static struct {
     int32_t    loadSlot = 0;
 } g_lo;
 
-bool ResolveLoadoutApi(const Section& text, const Section& rdata) {
-    const uint8_t* folder = FindCString(rdata, "Scripts/Loadouts/Player");
-    // The scan reads as far as Rel32(h + 0x9B), i.e. p + 0x5A past the LEA it
-    // started from, so the loop bound has to leave that much room inside .text.
-    uint8_t* const end = text.base + text.size - 0x5F;
-    for (uint8_t* p = text.base + 0x44; folder && p < end; ++p) {
-        p = static_cast<uint8_t*>(memchr(p, 0x48, static_cast<size_t>(end - p)));
-        if (!p) break;
-        if (p[1] != 0x8D || p[2] != 0x15 || p + 7 + Rel32(p + 3) != folder) continue;
-        const uint8_t* h = p - 0x44;
-        if (!BytesMatch(h, "40 53 48 83 EC 20 48 8B 01 48 8B D9 FF 50 08 83 F8 01")
-            || !BytesMatch(h + 0x18, "48 8B 0D") || !BytesMatch(h + 0x27, "FF 90") || !BytesMatch(h + 0x30, "48 8B 91")
-            || !BytesMatch(h + 0x88, "41 B1 01") || !BytesMatch(h + 0x90, "41 B8 08 00 00 00") || !BytesMatch(h + 0x99, "FF 90"))
-            continue;
-        g_lo.game          = reinterpret_cast<uintptr_t*>(const_cast<uint8_t*>(h + 0x1F + Rel32(h + 0x1B)));
-        g_lo.frameworkSlot = Rel32(h + 0x29);
-        g_lo.actorSlot     = Rel32(h + 0x33);
-        g_lo.loadSlot      = Rel32(h + 0x9B);
-        g_lo.ok = true;
-        break;
-    }
-    if (!g_lo.ok) Log("[gear] loadout loader not found; gear menu and outfits disabled");
-    return g_lo.ok;
+namespace actors = sco::game::actors;
+
+// The player loadout loader is sco-core's loadout.* rows (sco/game/actors.h); its slots are read
+// from the instructions that row checks.
+bool ResolveLoadoutApi(const Section&, const Section&) {
+    if (!ActorsCapability("loadout.loader", "gear", "gear menu and outfits")) return false;
+    const uint8_t* h = sco::Sig("loadout.load_player_loadout");
+    g_lo.game          = reinterpret_cast<uintptr_t*>(sco::Sig("loadout.game"));
+    g_lo.frameworkSlot = Rel32(h + actors::kLoadoutFrameworkSlot);
+    g_lo.actorSlot     = Rel32(h + actors::kLoadoutActorSlot);
+    g_lo.loadSlot      = Rel32(h + actors::kLoadoutLoadSlot);
+    g_lo.ok = true;
+    return true;
 }
 
 static const char* const kSlotNames[Gear_SlotCount] = {
@@ -70,7 +63,7 @@ static int BuildGearLists() {
     if (!DataFilePath(path, sizeof(path), "items.txt")) return 0;
     FILE* f = _fsopen(path, "r", _SH_DENYNO);
     if (!f) { Log("[gear] can't open %s", path); return 0; }
-    const uintptr_t registry = VCall<uintptr_t>(*g_tp.entitySystem, 0xC0);
+    const uintptr_t registry = VCall<uintptr_t>(*g_tp.entitySystem, actors::kEsClassRegistry);
     int slot = -1, total = 0, unknown = 0;
     char line[128];
     while (fgets(line, sizeof(line), f)) {
@@ -85,7 +78,7 @@ static int BuildGearLists() {
             continue;
         }
         if (slot < 0 || total >= kMaxGear) continue;
-        if (!VCall<uintptr_t>(registry, 0x20, static_cast<const char*>(name))) { ++unknown; continue; }
+        if (!VCall<uintptr_t>(registry, actors::kRegistryFindClass, static_cast<const char*>(name))) { ++unknown; continue; }
         strncpy_s(g_gear[total++], name, _TRUNCATE);
         ++g_gearCount[slot];
     }
