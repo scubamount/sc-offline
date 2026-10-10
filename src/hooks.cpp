@@ -4,6 +4,7 @@
 #include "teleport.h"
 #include "sco/hook.h"
 #include "sco/signatures.h"
+#include "sco/game/asop.h"
 #include "sco/game/offline.h"
 #include <initializer_list>
 #include <nmmintrin.h>
@@ -260,7 +261,7 @@ constexpr uint8_t  kUrnKindUuid = 3;
 constexpr uint8_t  kUrnIdGuid = 2;
 constexpr uint64_t kShipUrnMarker = 0x53434F4600000000ull;
 constexpr size_t   kSlotUrn = 0x1698;
-constexpr size_t   kAsopAtcId = 0x9F8;
+constexpr size_t   kAsopAtcId = sco::game::asop::kKioskAtc;   // 0x9F8, pinned by asop.fleet_retrieve +0xC7
 
 struct FleetShip { char name[64]; uint64_t guid[2]; };
 // Same bound as the spawn menu (spawner.cpp kMaxMenuShips): ships.txt holds 1102 entries, and the
