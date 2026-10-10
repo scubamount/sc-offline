@@ -109,6 +109,7 @@ add_library(dinput8 SHARED
   src/quantum.cpp
   src/ammo.cpp
   src/services.cpp
+  src/fleet.cpp
   src/outfits.cpp
   src/menu.cpp
   src/hotkeys.cpp
