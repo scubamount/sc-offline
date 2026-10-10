@@ -7,6 +7,10 @@
 #include "build.h"
 #include "npc.h"
 #include "builtins/builtin_store.h"
+#include "sco/caps.h"
+#include "sco/game/contracts.h"
+#include "sco/game/features.h"
+#include "sco/signatures.h"
 #include <intrin.h>
 #include <share.h>
 #include <cmath>
@@ -56,15 +60,31 @@ static DWORD           g_mainThread = 0;
 
 constexpr size_t kContractMap = 0x9F0;
 
-static const uint8_t* FindLeaTo(const Section& text, const uint8_t* target, const uint8_t* from = nullptr) {
-    const uint8_t* const end = text.base + text.size - 7;
-    for (const uint8_t* p = from ? from : text.base + 1; target && p < end; ++p) {
-        p = static_cast<const uint8_t*>(memchr(p, 0x8D, static_cast<size_t>(end - p)));
-        if (!p) break;
-        if ((p[-1] & 0xFB) == 0x48 && (p[1] & 0xC7) == 0x05 && p + 6 + Rel32(p + 2) == target) return p - 1;
+// Every game address here is one of sco-core's contracts.* rows (sco/game/contracts.h; the
+// reputation checks are features.h's contracts.reputation), resolved by sco::ResolveAll before
+// ResolveContractsApi runs. Each part of the feature asks for its capability and stays off when it
+// isn't ready.
+namespace cg = sco::game::contracts;
+
+template <typename Cap> static bool CapReady(const Cap* caps, size_t n, const char* name) {
+    for (size_t i = 0; i < n; ++i) {
+        if (strcmp(caps[i].name, name) != 0) continue;
+        (void)sco::caps::SetFromSignatures(caps[i].name, caps[i].rows, caps[i].count);
+        if (sco::caps::Has(caps[i].name)) return true;
+        Log("[contracts] %s unavailable (see the [core] lines in mod.log)", name);
+        return false;
     }
-    return nullptr;
+    Log("[contracts] sco-core has no capability %s (sco-core too old?)", name);
+    return false;
 }
+
+static bool ContractsCap(const char* name) {
+    size_t n = 0;
+    const cg::Capability* caps = cg::Capabilities(n);
+    return CapReady(caps, n, name);
+}
+
+template <typename T> static T SigAs(const char* id) { return reinterpret_cast<T>(sco::Sig(id)); }
 
 static PRUNTIME_FUNCTION FunctionOf(const void* p, DWORD64& base) {
     PRUNTIME_FUNCTION rf = RtlLookupFunctionEntry(reinterpret_cast<DWORD64>(p), &base, nullptr);
@@ -76,86 +96,20 @@ static PRUNTIME_FUNCTION FunctionOf(const void* p, DWORD64& base) {
     return rf;
 }
 
-static uint8_t* FunctionStart(const void* p) {
-    DWORD64 base = 0;
-    PRUNTIME_FUNCTION rf = p ? FunctionOf(p, base) : nullptr;
-    return rf ? reinterpret_cast<uint8_t*>(base + rf->BeginAddress) : nullptr;
+static void FindOfflineMissionService() {
+    if (ContractsCap("contracts.offline_service"))
+        g_offlineServiceVtbl = reinterpret_cast<uintptr_t>(sco::Sig("contracts.offline_service_vtbl"));
 }
 
-static void FindMissionSystem(const Section& text, uint8_t* fn) {
-    uint8_t* end = fn + 0x1000;
-    if (end > text.base + text.size - 13) end = text.base + text.size - 13;
-    for (uint8_t* p = fn; p < end; ++p) {
-        if (p[0] != 0xE8 || !BytesMatch(p + 5, "48 8B C8 E8")) continue;
-        const uint8_t* get = p + 5 + Rel32(p + 1);
-        const uint8_t* field = p + 13 + Rel32(p + 9);
-        if (!BytesMatch(get, "48 8B 05 ?? ?? ?? ?? C3")) continue;
-        g_missionSystem = reinterpret_cast<uintptr_t*>(const_cast<uint8_t*>(get + 7 + Rel32(get + 3)));
-        if (BytesMatch(field, "48 8B 41 ?? C3")) {
-            g_generatorOff = field[3];
-            return;
-        }
-    }
-}
-
-static const uint8_t* FindInRange(const uint8_t* from, size_t len, const char* pattern) {
-    for (const uint8_t* p = from; p < from + len; ++p)
-        if (BytesMatch(p, pattern)) return p;
-    return nullptr;
-}
-
-template <typename Fn> static Fn CallTarget(const uint8_t* call) {
-    return reinterpret_cast<Fn>(const_cast<uint8_t*>(call + 5 + Rel32(call + 1)));
-}
-
-static void FindOfflineMissionService(const Section& text, const Section& rdata) {
-    const uint8_t* fn = FunctionStart(FindLeaTo(text, FindCString(rdata,
-        "CMissionServiceOffline::RequestEndHaulingObjectiveAndPhase is not implemented yet")));
-    if (!fn) return;
-    auto* q = reinterpret_cast<uintptr_t*>(rdata.base);
-    for (size_t i = 0x18; i < rdata.size / 8; ++i)
-        if (q[i] == reinterpret_cast<uintptr_t>(fn)) { g_offlineServiceVtbl = reinterpret_cast<uintptr_t>(q + i - 0x18); return; }
-}
-
-static void FindMissionLogCalls(const Section& text, const Section& rdata) {
-    uint8_t* fn = FunctionStart(FindLeaTo(text, FindCString(rdata,
-        "void __cdecl CSCPlayerMissionLog::AddMission(const struct CryGUID &,const struct SMissionEntryDetails &,int,bool,const bool)")));
-    if (!fn || !BytesMatch(fn, "44 89 4C 24 20 4C 89 44 24 18")) return;
-    g_addMission = reinterpret_cast<AddMissionFn>(fn);
-    if (const uint8_t* p = FindInRange(fn, 0x800, "48 8B 01 FF 50 60 48 39 18 75 1A 48 8D 95 ?? ?? ?? ?? 49 8B CE E8 ?? ?? ?? ?? 48 8B CE 48 8B 10 E8")) {
-        g_logHandle = CallTarget<LogHandleFn>(p + 0x15);
-        g_makePhaseHandler = CallTarget<MakePhaseHandlerFn>(p + 0x20);
-    }
-    int found = 0;
-    if (const uint8_t* p = FindUniquePattern(text,
-            "49 8B 8D 48 02 00 00 4C 8D 43 20 48 8D 44 24 30 44 88 64 24 28 4D 8D 48 10 48 89 44 24 20 48 8B D5 E8", found)) {
-        const uint8_t* activate = CallTarget<const uint8_t*>(p + 33);
-        if (BytesMatch(activate, "41 56 48 83 EC 30 41 83 79 04 01"))
-            g_phaseActivate = reinterpret_cast<PhaseActivateFn>(const_cast<uint8_t*>(activate));
-    }
-    if (const uint8_t* p = FindUniquePattern(text, "38 42 68 0F 85 ?? ?? ?? ?? 48 8D 4D ?? E8 ?? ?? ?? ?? 48 85 FF 0F 84", found)) {
-        const uint8_t* assign = CallTarget<const uint8_t*>(p + 13);
-        if (BytesMatch(assign, "48 89 5C 24 08 57 48 83 EC 20 48 8B FA 48 8B D9 E8"))
-            g_haulingAssign = reinterpret_cast<HaulingAssignFn>(const_cast<uint8_t*>(assign));
-    }
-    if (const uint8_t* p = FindInRange(fn, 0x400, "48 8B D6 48 8D 4C 24 ?? 48 89 44 24 ?? C5 F8 11 44 24 ?? E8")) {
-        const uint8_t* copy = CallTarget<const uint8_t*>(p + 19);
-        if (BytesMatch(copy, "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56"))
-            g_copyDetails = reinterpret_cast<CopyDetailsFn>(const_cast<uint8_t*>(copy));
-    }
-    uint8_t* const end = text.base + text.size - 0x30;
-    for (uint8_t* p = text.base; p < end; ++p) {
-        p = static_cast<uint8_t*>(memchr(p, 0xE8, static_cast<size_t>(end - p)));
-        if (!p) break;
-        if (p + 5 + Rel32(p + 1) != fn) continue;
-        for (uint8_t* q = p + 5; q < p + 0x20; ++q) {
-            if (q[0] != 0xE8) continue;
-            bool leaRdx80 = false;
-            for (uint8_t* r = p + 5; r + 7 <= q && !leaRdx80; ++r) leaRdx80 = BytesMatch(r + 1, "8D ?? 80 00 00 00") && (r[0] & 0xF8) == 0x48;
-            if (leaRdx80) { g_addPlayer = CallTarget<AddPlayerFn>(q); return; }
-            break;
-        }
-    }
+static void FindMissionLogCalls() {
+    if (!ContractsCap("contracts.mission_log")) return;
+    g_addMission       = SigAs<AddMissionFn>("contracts.add_mission");
+    g_logHandle        = SigAs<LogHandleFn>("contracts.log_handle");
+    g_makePhaseHandler = SigAs<MakePhaseHandlerFn>("contracts.make_phase_handler");
+    g_phaseActivate    = SigAs<PhaseActivateFn>("contracts.phase_activate");
+    g_haulingAssign    = SigAs<HaulingAssignFn>("contracts.hauling_assign");
+    g_copyDetails      = SigAs<CopyDetailsFn>("contracts.copy_details");
+    g_addPlayer        = SigAs<AddPlayerFn>("contracts.add_player");
 }
 
 using AddObjectiveFn    = void(__fastcall*)(uintptr_t log, const uint8_t* objective, bool);
@@ -245,25 +199,21 @@ static void __fastcall AddActivePlayerHook(uintptr_t missionEntity, uint64_t pla
 
 static AddActivePlayerFn g_addActivePlayer = nullptr;
 
-static void HookMissionDiagnostics(const Section& text, const Section& rdata) {
-    uint8_t* fn = FunctionStart(FindLeaTo(text, FindCString(rdata,
-        "void __cdecl CSCPlayerMissionLog::AddActiveObjective(const struct ActiveMissionObjective &,const bool)")));
-    const bool objective = fn && BytesMatch(fn, "44 88 44 24 18 48 89 54 24 10 48 89 4C 24 08 55")
+static void HookMissionDiagnostics() {
+    const bool ready = ContractsCap("contracts.mission_diagnostics");
+    uint8_t* fn = ready ? sco::Sig("contracts.add_active_objective") : nullptr;
+    const bool objective = fn
         && HookFunction(fn, 15, reinterpret_cast<void*>(&AddObjectiveHook), reinterpret_cast<void**>(&g_addObjectiveOrig));
-    fn = FunctionStart(FindLeaTo(text, FindCString(rdata, "void __cdecl CMissionEntity::AddActivePlayer(class EntityId,bool)")));
-    const bool player = fn && BytesMatch(fn, "44 88 44 24 18 48 89 54 24 10 55 53 56 57")
+    fn = ready ? sco::Sig("contracts.add_active_player") : nullptr;
+    const bool player = fn
         && HookFunction(fn, 11, reinterpret_cast<void*>(&AddActivePlayerHook), reinterpret_cast<void**>(&g_addActivePlayerOrig));
     if (player) g_addActivePlayer = reinterpret_cast<AddActivePlayerFn>(fn);
-    fn = FunctionStart(FindLeaTo(text, FindCString(rdata, "Notify UI Objective")));
-    if (fn && BytesMatch(fn, "44 89 4C 24 20 89 54 24 10 55 53 56 41 54")
-        && HookFunction(fn, 5, reinterpret_cast<void*>(&NotifyObjectiveHook), reinterpret_cast<void**>(&g_notifyObjectiveOrig)))
+    fn = ready ? sco::Sig("contracts.notify_ui_objective") : nullptr;
+    if (fn && HookFunction(fn, 5, reinterpret_cast<void*>(&NotifyObjectiveHook), reinterpret_cast<void**>(&g_notifyObjectiveOrig)))
         g_notifyObjective = reinterpret_cast<NotifyObjectiveFn>(fn);
-    fn = FunctionStart(FindLeaTo(text, FindCString(rdata,
-        "bool __cdecl CSCPlayerMissionLog::IsObjectiveHidden(const struct CryGUID &,const class CryStringT<char> &,bool,bool) const")));
-    if (fn && BytesMatch(fn, "48 8B C4 44 88 48 20 48 89 48 08 55 53 56 41 57"))
-        g_objectiveHidden = reinterpret_cast<ObjectiveHiddenFn>(fn);
-    fn = FunctionStart(FindLeaTo(text, FindCString(rdata, "void __cdecl CMissionWarehouseOrderHandler::ProcessQueue(void)")));
-    const bool queue = fn && BytesMatch(fn, "48 8B C4 55 41 54 48 8D A8")
+    if (ready) g_objectiveHidden = SigAs<ObjectiveHiddenFn>("contracts.is_objective_hidden");
+    fn = ready ? sco::Sig("contracts.warehouse_process_queue") : nullptr;
+    const bool queue = fn
         && HookFunction(fn, 6, reinterpret_cast<void*>(&ProcessQueueHook), reinterpret_cast<void**>(&g_processQueueOrig));
     Log("[contracts] mission diagnostics: objective hook %s, active player hook %s, UI objective notice %s (hidden check %s), "
         "warehouse order queue %s", objective ? "ok" : "MISSING", player ? "ok" : "MISSING", g_notifyObjective ? "ok" : "MISSING",
@@ -329,13 +279,8 @@ static void* __fastcall CreateLogEntryHook(uintptr_t entity, const uint8_t* deta
     return result;
 }
 
-static void HookMissionEntity(const Section& text, const Section& rdata) {
-    const uint8_t* name = FindCString(rdata, "CMissionEntity::CreateMissionLogEntry");
-    uint8_t* fn = nullptr;
-    for (const uint8_t* p = FindLeaTo(text, name); p && !fn; p = FindLeaTo(text, name, p + 1)) {
-        uint8_t* f = FunctionStart(p);
-        if (f && BytesMatch(f, "48 8B C4 44 88 40 18 48 89 50 10 48 89 48 08 55 53 41 54")) fn = f;
-    }
+static void HookMissionEntity() {
+    uint8_t* fn = sco::caps::Has("contracts.mission_diagnostics") ? sco::Sig("contracts.create_mission_log_entry") : nullptr;
     const bool ok = fn && HookFunction(fn, 15, reinterpret_cast<void*>(&CreateLogEntryHook), reinterpret_cast<void**>(&g_createLogEntryOrig));
     Log("[contracts] mission entity hook %s, add player %s", ok ? "ok" : "MISSING", g_addActivePlayer ? "ok" : "MISSING");
 }
@@ -354,8 +299,9 @@ static StartMissionFn g_startMission = nullptr;
 static uint8_t*       g_createObjective = nullptr;
 using LocIdFn = void(__fastcall*)(uint32_t* id, const char* key);
 static LocIdFn        g_locId = nullptr;
-constexpr size_t kModuleState = 0x130, kModuleMission = 0x150;
-constexpr size_t kModuleHasInstance = 0x1D0, kModuleInstanceFailed = 0x528, kCreateInstanceSlot = 0x6C8;
+constexpr size_t kModuleState = cg::kModuleState, kModuleMission = cg::kModuleMission;
+constexpr size_t kModuleHasInstance = cg::kModuleHasInstance, kModuleInstanceFailed = cg::kModuleInstanceFailed,
+                 kCreateInstanceSlot = cg::kModuleCreateInstance;
 constexpr DWORD  kStartAfterMs = 2500, kAnswerWaitMs = 2000, kWatchMs = 30000;
 struct Module { uintptr_t module; DWORD since, preparedAt; bool authority, done, seen, prepared; };
 constexpr int  kMaxModules = 256;
@@ -375,7 +321,7 @@ static bool IsOurMission(const uint8_t* id) {
 
 static bool ModuleMission(uintptr_t module, uint8_t id[16]) {
     __try {
-        if (Rd<uintptr_t>(Rd<uintptr_t>(module) + 0x6C0) != reinterpret_cast<uintptr_t>(g_moduleInit)) return false;
+        if (Rd<uintptr_t>(Rd<uintptr_t>(module) + cg::kModuleInitSlot) != reinterpret_cast<uintptr_t>(g_moduleInit)) return false;
         memcpy(id, reinterpret_cast<const uint8_t*>(module + kModuleMission), 16);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
@@ -429,32 +375,26 @@ static void __fastcall ToPlayerLogsHook(uintptr_t missionEntity, const uint8_t* 
     g_toPlayerLogsOrig(missionEntity, objective);
 }
 
-static uint8_t* FunctionNaming(const Section& text, const Section& rdata, const char* name, const char* prologue) {
-    const uint8_t* s = FindCString(rdata, name);
-    for (const uint8_t* p = FindLeaTo(text, s); p; p = FindLeaTo(text, s, p + 1)) {
-        uint8_t* f = FunctionStart(p);
-        if (f && BytesMatch(f, prologue)) return f;
-    }
-    return nullptr;
-}
+using StopMissionFn = void(__fastcall*)(uintptr_t module, int reason);
+static StopMissionFn g_stopMission = nullptr;
 
-static void HookMissionModules(const Section& text, const Section& rdata) {
-    uint8_t* init = FunctionNaming(text, rdata, "void __cdecl CSubsumptionMissionComponent::Initialize(void)", "48 89 4C 24 08 55 53 56 57");
-    uint8_t* start = FunctionNaming(text, rdata, "CSubsumptionMissionComponent::StartMission", "48 8B C4 48 89 48 08 55 48 8D A8");
+static void HookMissionModules() {
+    const bool ready = ContractsCap("contracts.mission_modules");
+    uint8_t* init = ready ? sco::Sig("contracts.module_initialize") : nullptr;
+    uint8_t* start = ready ? sco::Sig("contracts.module_start_mission") : nullptr;
     const bool ok = init && start
         && HookFunction(init, 5, reinterpret_cast<void*>(&ModuleInitHook), reinterpret_cast<void**>(&g_moduleInitOrig));
     if (ok) { g_moduleInit = reinterpret_cast<ModuleInitFn>(init); g_startMission = reinterpret_cast<StartMissionFn>(start); }
+    if (ready) g_stopMission = SigAs<StopMissionFn>("contracts.stop_mission");
 
-    uint8_t* fn = FunctionNaming(text, rdata, "HandleAuthorityChangeEvent", "48 8B C4 48 89 50 10 48 89 48 08 55");
+    uint8_t* fn = ready ? sco::Sig("contracts.module_authority") : nullptr;
     const bool authority = fn && HookFunction(fn, 11, reinterpret_cast<void*>(&AuthorityHook), reinterpret_cast<void**>(&g_authorityOrig));
-    fn = FunctionNaming(text, rdata, "Aborting subsumption mission module $$($$)", "40 55 53 56 41 56 48 8D AC 24 58 FF FF FF 48 81 EC A8 01 00 00");
+    fn = ready ? sco::Sig("contracts.module_entry_answer") : nullptr;
     const bool answer = fn && HookFunction(fn, 6, reinterpret_cast<void*>(&EntryAnswerHook), reinterpret_cast<void**>(&g_entryAnswerOrig));
-    fn = FunctionNaming(text, rdata, "AddActiveObjectiveToPlayerLogs", "40 55 53 56 57 48 8D 6C 24 C1");
+    fn = ready ? sco::Sig("contracts.objective_to_player_logs") : nullptr;
     const bool logs = fn && HookFunction(fn, 10, reinterpret_cast<void*>(&ToPlayerLogsHook), reinterpret_cast<void**>(&g_toPlayerLogsOrig));
-    g_createObjective = FunctionNaming(text, rdata, "$$[$$] - Created: $$[$$], parent id=$$, flags=$$", "44 88 4C 24 20 55 56 41 55");
-    int n = 0;
-    g_locId = reinterpret_cast<LocIdFn>(FindUniquePattern(text,
-        "48 89 5C 24 10 56 48 83 EC 20 C7 01 00 00 00 00 48 8B DA 48 8B F1 48 85 D2 0F 84 ?? ?? ?? ?? 80 3A 00 0F 84", n));
+    g_createObjective = ready ? sco::Sig("contracts.create_objective") : nullptr;
+    g_locId = ready ? SigAs<LocIdFn>("contracts.loc_id") : nullptr;
     if (!g_locId) g_createObjective = nullptr;
     Log("[contracts] mission modules: start %s, authority %s, service answer %s, objectives to logs %s, create objective %s",
         ok ? "ok" : "MISSING", authority ? "ok" : "MISSING", answer ? "ok" : "MISSING", logs ? "ok" : "MISSING",
@@ -464,19 +404,17 @@ static void HookMissionModules(const Section& text, const Section& rdata) {
 constexpr float kMissionStreamRadius = 1.0e11f;
 static uintptr_t* g_missionSettings = nullptr;
 
-static void FindMissionStreamRadius(const Section& text) {
-    int matches = 0;
-    const uint8_t* p = FindUniquePattern(text,
-        "48 8B 05 ?? ?? ?? ?? 48 8B 0D ?? ?? ?? ?? C5 FA 10 88 74 01 00 00 48 8B 01 C5 F2 5A C9 48 FF A0 20 03 00 00", matches);
-    if (p) g_missionSettings = reinterpret_cast<uintptr_t*>(const_cast<uint8_t*>(p + 7 + Rel32(p + 3)));
-    Log("[contracts] mission stream radius %s", p ? "ok" : "MISSING");
+static void FindMissionStreamRadius() {
+    const bool ok = ContractsCap("contracts.stream_radius");
+    if (ok) g_missionSettings = SigAs<uintptr_t*>("contracts.mission_settings");
+    Log("[contracts] mission stream radius %s", ok ? "ok" : "MISSING");
 }
 
 static void WidenMissionStreamRadius() {
     const uintptr_t settings = g_missionSettings ? *g_missionSettings : 0;
     if (!settings) return;
     __try {
-        float& radius = *reinterpret_cast<float*>(settings + 0x174);
+        float& radius = *reinterpret_cast<float*>(settings + cg::kStreamRadius);
         if (radius >= kMissionStreamRadius) return;
         Log("[contracts] mission entities stay loaded from anywhere (stream radius %.0f m -> %.0f m)", radius, kMissionStreamRadius);
         radius = kMissionStreamRadius;
@@ -768,11 +706,11 @@ static uintptr_t MissionEntityOf(uintptr_t module, uint64_t& id) {
 static uintptr_t MissionEntityById(uint64_t meId, uintptr_t& entity) {
     entity = EntityById(meId);
     const uintptr_t me = entity ? EntityComponent(entity, "MissionEntity") : 0;
-    return me && Rd<uintptr_t>(Rd<uintptr_t>(me) + 0x708) == reinterpret_cast<uintptr_t>(g_createObjective) ? me : 0;
+    return me && Rd<uintptr_t>(Rd<uintptr_t>(me) + cg::kEntityCreateObjectiveSlot) == reinterpret_cast<uintptr_t>(g_createObjective) ? me : 0;
 }
 
 static void EndOurObjective(uintptr_t me, const uintptr_t* id) {
-    VCall<void>(me, 0x710, 3, false, id, false, 0u);
+    VCall<void>(me, cg::kEntityEndObjective, 3, false, id, false, 0u);
 }
 
 static bool TargetOf(const Running& r, double world[3], uintptr_t& zone) {
@@ -836,7 +774,7 @@ static void MarkStep(const Running& r, uintptr_t me, const uintptr_t* objective,
     g_stringInit(&m.text);
     uintptr_t marker = 0;
     g_objectiveStep = "SetObjectiveMarker";
-    VCall<void*>(me, 0x718, &marker, &m);
+    VCall<void*>(me, cg::kEntitySetMarker, &marker, &m);
     Log("[contracts] marker for '%s' on %s: %s", CryText(*objective), ids[0] ? "the target entity" : "the spot you took the contract at",
         marker && *CryText(marker) ? "set" : "NOT set");
 }
@@ -859,7 +797,7 @@ static void StartStep(Running& r, DWORD now) {
     g_stringInit(&p.subtitle);
     uintptr_t id = 0;
     g_objectiveStep = "CreateObjective";
-    VCall<void*>(me, 0x708, &id, &p, true);
+    VCall<void*>(me, cg::kEntityCreateObjectiveSlot, &id, &p, true);
     const bool added = id && *CryText(id);
     Log("[contracts] '%s' step %d/%s: objective '%s' (%s / %s): %s", r.contract, r.step + 1, r.flow->name, added ? CryText(id) : s.id,
         s.title, s.text, added ? "added" : "NOT added");
@@ -982,7 +920,7 @@ static void StartContract(uintptr_t module, Plan& plan) {
     g_objectiveStep = "finding the mission entity";
     const uintptr_t me = MissionEntityOf(module, meId);
     if (!me || !meId) { Log("[contracts] our mission has no mission entity to put objectives on"); return; }
-    if (!g_createObjective || Rd<uintptr_t>(Rd<uintptr_t>(me) + 0x708) != reinterpret_cast<uintptr_t>(g_createObjective)) {
+    if (!g_createObjective || Rd<uintptr_t>(Rd<uintptr_t>(me) + cg::kEntityCreateObjectiveSlot) != reinterpret_cast<uintptr_t>(g_createObjective)) {
         Log("[contracts] the mission entity isn't the CMissionEntity we know; no objectives added");
         return;
     }
@@ -1622,51 +1560,34 @@ static int AdvanceMissionSafe(const uint8_t mission[16], const uint8_t phase[16]
     }
 }
 
-static void HookPhases(const Section& text) {
-    int n = 0;
-    const uint8_t* p = FindUniquePattern(text,
-        "48 8D 53 20 E8 ?? ?? ?? ?? 48 85 C0 74 ?? 48 8B 94 24 ?? ?? ?? ?? 49 8D 8F 88 00 00 00 48 89 6C 24 38 4D 8D 8F B8 00 00 00 "
-        "48 89 54 24 30 4C 8B C0 4C 89 64 24 28 49 8B D6 48 89 4C 24 20 48 8B CE E8", n);
-    uint8_t* create = p ? const_cast<uint8_t*>(CallTarget<const uint8_t*>(p + 65)) : nullptr;
-    if (create && BytesMatch(create, "48 89 5C 24 08 4C 89 4C 24 20 4C 89 44 24 18 48 89 54 24 10 55 56 57 41 54 41 55 41 56 41 57")
-        && HookFunction(create, 15, reinterpret_cast<void*>(&CreatePhaseHook), reinterpret_cast<void**>(&g_createPhaseOrig))) {
+static void HookPhases() {
+    const bool ready = ContractsCap("contracts.phases");
+    uint8_t* create = ready ? sco::Sig("contracts.create_phase") : nullptr;
+    if (create && HookFunction(create, 15, reinterpret_cast<void*>(&CreatePhaseHook), reinterpret_cast<void**>(&g_createPhaseOrig))) {
         g_createPhase = reinterpret_cast<CreatePhaseFn>(create);
-        g_findPhase = CallTarget<FindPhaseFn>(p + 4);
+        g_findPhase = SigAs<FindPhaseFn>("contracts.find_phase");
     }
-    p = FindUniquePattern(text,
-        "48 8D 4C 24 40 BA 38 00 00 00 4C 89 AC 24 68 01 00 00 C5 FA 7F 44 24 40 E8 ?? ?? ?? ?? 49 8D 57 30 48 8D 4D A8 48 89 00 "
-        "48 89 40 08 48 89 40 10 66 C7 40 18 01 01 48 89 44 24 40 E8 ?? ?? ?? ?? 45 33 C0 48 8D 54 24 40 48 8D 4D A8 E8", n);
-    const uint8_t* q = FindUniquePattern(text, "83 F8 06 74 07 41 89 87 68 01 00 00 48 8D 4C 24 40 E8", n);
-    if (p && q) {
-        g_tempAlloc = CallTarget<TempAllocFn>(p + 24);
-        g_flowContext = CallTarget<FlowContextFn>(p + 59);
-        g_updateFlow = CallTarget<UpdateFlowFn>(p + 76);
-        g_freeFlowMap = CallTarget<FreeMapFn>(q + 17);
+    if (ready) {
+        g_tempAlloc = SigAs<TempAllocFn>("contracts.temp_alloc");
+        g_flowContext = SigAs<FlowContextFn>("contracts.flow_context");
+        g_updateFlow = SigAs<UpdateFlowFn>("contracts.update_flow");
+        g_freeFlowMap = SigAs<FreeMapFn>("contracts.free_flow_map");
+        g_objectiveInit = SigAs<ObjectiveInitFn>("contracts.objective_init");
+        g_emptyLoc = SigAs<EmptyLocFn>("contracts.empty_loc");
+        g_timerInit = SigAs<TimerInitFn>("contracts.timer_init");
+        g_objectiveCopy = SigAs<ObjectiveCopyFn>("contracts.objective_copy");
+        g_activeObjectiveVtbl = reinterpret_cast<uintptr_t>(sco::Sig("contracts.active_objective_vtbl"));
     }
-    p = FindUniquePattern(text,
-        "48 8D 4D B0 E8 ?? ?? ?? ?? C5 F9 EF C0 C5 F1 EF C9 C5 FA 7F 45 30 C5 FA 7F 4D 40 4C 89 6D B0 4C 89 65 28 4C 89 65 50 E8 ?? ?? ?? ?? "
-        "C5 F9 EF C0 33 D2 8B 08 89 4D 58 48 8D 8D 80 00 00 00 C5 FA 11 75 78 C5 FA 11 75 7C C5 FA 7F 45 60 4C 89 65 70 E8", n);
-    q = FindUniquePattern(text, "E8 ?? ?? ?? ?? 48 8D 05 ?? ?? ?? ?? 48 8D 53 78 48 89 07 48 8D 4F 78 E8", n);
-    if (p && q) {
-        g_objectiveInit = CallTarget<ObjectiveInitFn>(p + 4);
-        g_emptyLoc = CallTarget<EmptyLocFn>(p + 39);
-        g_timerInit = CallTarget<TimerInitFn>(p + 81);
-        g_objectiveCopy = CallTarget<ObjectiveCopyFn>(q);
-        g_activeObjectiveVtbl = reinterpret_cast<uintptr_t>(q + 12 + Rel32(q + 8));
-    }
-    uint8_t* fn = FindUniquePattern(text,
-        "48 89 5C 24 08 57 48 83 EC 20 48 8B FA 48 8B D9 48 8D 51 08 48 8B CF E8 ?? ?? ?? ?? 48 8D 53 10 48 8D 4F 08 E8 ?? ?? ?? ?? "
-        "C5 F8 10 43 18 C5 F8 11 47 10 8B 43 2C 48 8B CB 89 47 38 8B 43 28 89", n);
+    uint8_t* fn = ready ? sco::Sig("contracts.pending_to_objective") : nullptr;
     const bool pendings = fn && HookFunction(fn, 10, reinterpret_cast<void*>(&PendingToObjectiveHook), reinterpret_cast<void**>(&g_pendingToObjectiveOrig));
-    fn = FindUniquePattern(text, "48 89 5C 24 10 48 89 74 24 18 55 57 41 54 41 56 41 57 48 8D 6C 24 C9 48 81 EC C0 00 00 00 4D 8B E0 48 8B F2 48 8B D9 E8", n);
+    fn = ready ? sco::Sig("contracts.activate_token") : nullptr;
     if (!fn || !HookFunction(fn, 10, reinterpret_cast<void*>(&ActivateTokenHook), reinterpret_cast<void**>(&g_activateTokenOrig)))
         g_activateTokenOrig = nullptr;
     Log("[contracts] phases: start %s, flow %s, hauling objectives %s, their texts %s", g_createPhase ? "ok" : "MISSING",
         g_updateFlow ? "ok" : "MISSING", g_activeObjectiveVtbl ? "ok" : "MISSING", pendings ? "ok" : "MISSING");
 }
 
-using StopMissionFn = void(__fastcall*)(uintptr_t module, int reason);
-static StopMissionFn g_stopMission = nullptr;
+static const uint8_t* g_entityRemovePlayer = nullptr;   // CMissionEntity's vtable slot 0x720
 
 static int StopMissionModules(const uint8_t mission[16], int reason) {
     uintptr_t modules[16];
@@ -1787,11 +1708,11 @@ static void AbandonContracts() {
             bool entity = false;
             uint64_t meId = 0;
             const uintptr_t me = m ? MissionEntityOf(modules[0], meId) : 0;
-            if (me && Rd<uintptr_t>(Rd<uintptr_t>(me) + 0x708) == reinterpret_cast<uintptr_t>(g_createObjective)
-                && BytesMatch(reinterpret_cast<const uint8_t*>(Rd<uintptr_t>(Rd<uintptr_t>(me) + 0x720)),
-                              "48 89 5C 24 10 48 89 6C 24 18 56 57 41 56 48 83 EC 60 48 8B D9 45 84 C0")) {
+            if (me && g_entityRemovePlayer
+                && Rd<uintptr_t>(Rd<uintptr_t>(me) + cg::kEntityCreateObjectiveSlot) == reinterpret_cast<uintptr_t>(g_createObjective)
+                && Rd<uintptr_t>(Rd<uintptr_t>(me) + cg::kEntityRemovePlayerSlot) == reinterpret_cast<uintptr_t>(g_entityRemovePlayer)) {
                 const uint64_t you = MissionPlayer(missions[i]);
-                VCall<char>(me, 0x720, &you, false);
+                VCall<char>(me, cg::kEntityRemovePlayerSlot, &you, false);
                 entity = true;
             }
             const bool still = g_findEntry(log, missions[i]) != 0;
@@ -1808,15 +1729,14 @@ static void AbandonContracts() {
     }
 }
 
-static void HookAbandon(const Section& text, const Section& rdata) {
-    g_stopMission = reinterpret_cast<StopMissionFn>(FunctionNaming(text, rdata,
-        "StopMission called with reason [$$] subsumptionState [$$] callstack \n $$ $$($$)", "89 54 24 10 48 89 4C 24 08 55 53 56 57 41 56 48 8D AC 24"));
-    uint8_t* slot = g_offlineServiceVtbl ? reinterpret_cast<uint8_t*>(g_offlineServiceVtbl + 0x18) : nullptr;
-    const uint8_t* fn = slot ? reinterpret_cast<const uint8_t*>(Rd<uintptr_t>(reinterpret_cast<uintptr_t>(slot))) : nullptr;
-    if (!fn || !BytesMatch(fn, "48 89 5C 24 08 48 89 74 24 10 48 89 7C 24 18 4C 89 74 24 20 55 48 8D 6C 24")) {
+static void HookAbandon() {
+    if (!ContractsCap("contracts.abandon")) {
         Log("[!] contracts: the offline mission service's abandon wasn't found; mobiGlas > Abandon won't end contracts");
         return;
     }
+    g_entityRemovePlayer = sco::Sig("contracts.mission_entity_remove_player");
+    uint8_t* slot = sco::Sig("contracts.offline_service_vtbl") + cg::kServiceLeaveMissionSlot;
+    const uint8_t* fn = sco::Sig("contracts.offline_leave_mission");
     const uintptr_t hook = reinterpret_cast<uintptr_t>(&LeaveMissionHook);
     DWORD err = 0;
     g_leaveMissionOrig = reinterpret_cast<LeaveMissionFn>(const_cast<uint8_t*>(fn));
@@ -1846,11 +1766,11 @@ static void __fastcall EndHaulingHook(uintptr_t service, const uint8_t* params) 
 }
 
 static void HookHaulingEnds() {
-    uint8_t* slot = g_offlineServiceVtbl ? reinterpret_cast<uint8_t*>(g_offlineServiceVtbl + 0xC0) : nullptr;
-    if (!slot) return;
+    if (!g_offlineServiceVtbl) return;
+    uint8_t* slot = reinterpret_cast<uint8_t*>(g_offlineServiceVtbl + cg::kServiceEndHaulingSlot);
     const uintptr_t hook = reinterpret_cast<uintptr_t>(&EndHaulingHook);
     DWORD err = 0;
-    g_endHaulingOrig = reinterpret_cast<EndHaulingFn>(Rd<uintptr_t>(reinterpret_cast<uintptr_t>(slot)));
+    g_endHaulingOrig = SigAs<EndHaulingFn>("contracts.offline_end_hauling");
     if (!WriteCode(slot, reinterpret_cast<const uint8_t*>(&hook), sizeof(hook), err)) {
         g_endHaulingOrig = nullptr;
         Log("[!] contracts: couldn't hook RequestEndHaulingObjectiveAndPhase (%lu); hauling contracts won't end", err);
@@ -1858,12 +1778,12 @@ static void HookHaulingEnds() {
 }
 
 static void HookPhaseEnds() {
-    uint8_t* slot = g_offlineServiceVtbl ? reinterpret_cast<uint8_t*>(g_offlineServiceVtbl + 0x48) : nullptr;
-    const uint8_t* fn = slot ? reinterpret_cast<const uint8_t*>(Rd<uintptr_t>(reinterpret_cast<uintptr_t>(slot))) : nullptr;
-    if (!fn || !BytesMatch(fn, "48 89 5C 24 08 48 89 74 24 10 48 89 7C 24 18 4C 89 74 24 20 55 48 8D 6C 24 C1 48 81 EC D0 00 00 00")) {
+    if (!ContractsCap("contracts.phase_ends")) {
         Log("[!] contracts: the offline mission service's RequestEndMissionPhase wasn't found; contracts run by their scripts won't end");
         return;
     }
+    uint8_t* slot = sco::Sig("contracts.offline_service_vtbl") + cg::kServiceEndPhaseSlot;
+    const uint8_t* fn = sco::Sig("contracts.offline_end_phase");
     const uintptr_t hook = reinterpret_cast<uintptr_t>(&EndPhaseHook);
     DWORD err = 0;
     g_endPhaseOrig = reinterpret_cast<EndPhaseFn>(const_cast<uint8_t*>(fn));
@@ -2017,58 +1937,47 @@ static void UpdateRunningSafe(DWORD now) {
     __try { UpdateRunning(now); } __except (LogFault(GetExceptionInformation(), "while updating our contracts")) {}
 }
 
-static int PatchReputationServiceChecks(const Section& text, const Section& rdata) {
-    static const char* const kLoad = "48 8B 0D ?? ?? ?? ?? 48 8B 01 FF 50 18 48 8B 08";
-    const char* const load = kLoad;
-    const uint8_t* msg = FindCString(rdata, "Couldn't access reputation service internal");
-    const uint8_t* lea = msg ? FindRipLea(text, 0x4C, 0x8D, 0x05, msg) : nullptr;
-    const uint8_t* services = nullptr;
-    for (int back = 0; lea && back < 0x120 && !services; ++back)
-        if (BytesMatch(lea - back, load)) services = lea - back + 7 + Rel32(lea - back + 3);
-    if (!services) return -1;
-    static const struct { const char* tail; uint8_t patch[13]; size_t n; } kForms[] = {
-        { "48 8B 51 58 48 8B C8 FF D2",    { 0x48, 0x8B, 0xC8, 0xE3, 0x07, 0x48, 0x8B, 0x01, 0xFF, 0x50, 0x58, 0x90 }, 12 },
-        { "4C 8B 41 58 48 8B C8 41 FF D0", { 0x48, 0x8B, 0xC8, 0xE3, 0x08, 0x48, 0x8B, 0x01, 0xFF, 0x50, 0x58, 0x90, 0x90 }, 13 },
+// The reputation-service checks are features.h's contracts.reputation rows: each site loads the
+// services global, then calls through it in one of two forms (told apart by the byte at
+// +kReputationTail); the patch at +kReputationPatch skips the call when the service is missing.
+static int PatchReputationServiceChecks() {
+    namespace fx = sco::game::features;
+    size_t n = 0;
+    const fx::Capability* caps = fx::Capabilities(n);
+    if (!CapReady(caps, n, "contracts.reputation")) return -1;
+    static const struct { uint8_t tail; uint8_t patch[13]; size_t n; } kForms[] = {
+        { 0x48, { 0x48, 0x8B, 0xC8, 0xE3, 0x07, 0x48, 0x8B, 0x01, 0xFF, 0x50, 0x58, 0x90 }, 12 },         // 48 8B 51 58 48 8B C8 FF D2
+        { 0x4C, { 0x48, 0x8B, 0xC8, 0xE3, 0x08, 0x48, 0x8B, 0x01, 0xFF, 0x50, 0x58, 0x90, 0x90 }, 13 },   // 4C 8B 41 58 48 8B C8 41 FF D0
     };
     int patched = 0;
-    for (const auto& form : kForms) {
-        char pattern[96];
-        sprintf_s(pattern, "%s %s", load, form.tail);
-        uint8_t* sites[32];
-        const int found = FindPattern(text, pattern, sites, 32);
-        for (int i = 0; i < found && i < 32; ++i) {
-            DWORD err = 0;
-            if (sites[i] + 7 + Rel32(sites[i] + 3) == services && WriteCode(sites[i] + 13, form.patch, form.n, err)) ++patched;
+    for (size_t c = 0; c < n; ++c) {
+        if (strcmp(caps[c].name, "contracts.reputation") != 0) continue;
+        for (size_t r = 0; r < caps[c].count; ++r) {
+            if (strncmp(caps[c].rows[r], "contracts.reputation_check.", 27) != 0) continue;
+            uint8_t* site = sco::Sig(caps[c].rows[r]);
+            for (const auto& form : kForms) {
+                DWORD err = 0;
+                if (site[fx::kReputationTail] == form.tail && WriteCode(site + fx::kReputationPatch, form.patch, form.n, err)) ++patched;
+            }
         }
     }
     return patched;
 }
 
-static bool SkipGameRewards(const Section& text, const Section& rdata) {
-    const uint8_t* msg = FindCString(rdata, "CSCPlayerMissionLog::SendRewards No authority");
-    uint8_t* lea = msg ? FindRipLea(text, 0x4C, 0x8D, 0x05, msg) : nullptr;
-    if (!lea || !BytesMatch(lea - 14, "FF 90 ?? ?? ?? ?? 84 C0 0F 85")) return false;
+static bool SkipGameRewards(bool ready) {
+    uint8_t* site = ready ? sco::Sig("contracts.send_rewards_authority") : nullptr;
+    if (!site) return false;
     static const uint8_t nops[6] = { 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 };
     DWORD err = 0;
-    return WriteCode(lea - 6, nops, sizeof(nops), err);
+    return WriteCode(site + cg::kSendRewardsJnz, nops, sizeof(nops), err);
 }
 
-static void FindPayout(const Section& text, const Section& rdata) {
-    int n = 0;
-    const uint8_t* walk = FindUniquePattern(text,
-        "48 8D 83 40 04 00 00 EB 0C 48 8D 8B 20 04 00 00 E8 ?? ?? ?? ?? 48 8B 08 48 8B 50 08 48 3B CA 74 25 4C 8B 07 "
-        "66 0F 1F 44 00 00 4C 39 41 08 75 0A 48 8B 47 08 48 39 41 10 74 1E 48 81 C1 50 02 00 00", n);
-    uint8_t* fn = walk ? FunctionStart(walk) : nullptr;
-    if (fn && BytesMatch(fn, "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8B D9 48 8B FA"))
-        g_findEntry = reinterpret_cast<FindEntryFn>(fn);
-    const uint8_t* any = FindUniquePattern(text, "B9 28 04 00 00 41 B8 40 04 00 00 44 0F 44 C1 49 8B 04 38 49 8B 54 38 08", n);
-    fn = any ? FunctionStart(any) : nullptr;
-    if (fn && BytesMatch(fn, "48 89 5C 24 08 57 48 83 EC 20 48 8B DA 48 8B F9"))
-        g_findEntryAny = reinterpret_cast<FindEntryFn>(fn);
-    g_totalReward = reinterpret_cast<TotalRewardFn>(FunctionNaming(text, rdata, "int __cdecl CMissionLogEntry::GetTotalReward(void) const",
-        "48 89 5C 24 10 48 89 6C 24 18 56 57 41 54 41 56 41 57 48 83 EC 60"));
-    g_updateBalance = reinterpret_cast<UpdateBalanceFn>(FunctionNaming(text, rdata, "CWallet::UpdateCurrencyBalanceValue",
-        "48 89 5C 24 10 55 56 57 41 54 41 55 41 56 41 57 48 8D 6C 24 C0"));
+static void FindPayout(bool ready) {
+    if (!ready) return;
+    g_findEntry     = SigAs<FindEntryFn>("contracts.find_entry");
+    g_findEntryAny  = SigAs<FindEntryFn>("contracts.find_entry_any");
+    g_totalReward   = SigAs<TotalRewardFn>("contracts.total_reward");
+    g_updateBalance = SigAs<UpdateBalanceFn>("contracts.update_balance");
 }
 
 using AsyncUpdateBalanceFn = void*(__fastcall*)(uintptr_t wallet, void* out, uint8_t currency, int64_t amount, void* reason, void* a6);
@@ -2085,40 +1994,38 @@ static void* __fastcall AsyncUpdateBalanceHook(uintptr_t wallet, void* out, uint
     return g_asyncUpdateBalanceOrig(wallet, out, currency, amount, reason, a6);
 }
 
-static void HookShopPayments(const Section& text, const Section& rdata) {
-    uint8_t* fn = FunctionNaming(text, rdata, "CWallet::AsyncUpdateCurrencyBalance",
-        "48 89 5C 24 10 48 89 6C 24 18 48 89 74 24 20 57 41 56 41 57 48 81 EC C0 00 00 00");
+static void HookShopPayments() {
+    const bool ready = ContractsCap("contracts.shop_payments");
+    if (ready && !g_updateBalance) g_updateBalance = SigAs<UpdateBalanceFn>("contracts.update_balance");
+    uint8_t* fn = ready ? sco::Sig("contracts.async_update_balance") : nullptr;
     const bool ok = fn && g_updateBalance && HookFunction(fn, 15, reinterpret_cast<void*>(&AsyncUpdateBalanceHook),
                                                           reinterpret_cast<void**>(&g_asyncUpdateBalanceOrig));
     Log("[shops] wallet payments %s", ok ? "taken here (no ledger service offline)" : "NOT hooked: shops can't take money");
 }
 
-static void HookContractSteps(const Section& text, const Section& rdata) {
-    const int checks = PatchReputationServiceChecks(text, rdata);
+static void HookContractSteps() {
+    const int checks = PatchReputationServiceChecks();
     if (checks < 0) Log("[!] contracts: reputation service checks: the internal services weren't found; finishing a contract may freeze the game");
     else Log("[contracts] reputation service checks: %d site(s) patched (offline a contract's reputation reward fails instead of freezing)", checks);
-    const bool skip = SkipGameRewards(text, rdata);
+    const bool rewards = ContractsCap("contracts.rewards");
+    const bool skip = SkipGameRewards(rewards);
     if (!skip) Log("[!] contracts: the game's reward processing couldn't be switched off; finishing a contract may freeze the game");
-    FindPayout(text, rdata);
+    FindPayout(rewards);
     Log("[contracts] rewards: game's processing %s, mission log entry %s (client's %s), total reward %s, wallet update %s", skip ? "off" : "ON",
         g_findEntry ? "ok" : "MISSING", g_findEntryAny ? "ok" : "MISSING", g_totalReward ? "ok" : "MISSING", g_updateBalance ? "ok" : "MISSING");
-    HookShopPayments(text, rdata);
-    int n = 0;
-    g_endMission = reinterpret_cast<EndMissionFn>(FindUniquePattern(text,
-        "48 89 5C 24 10 48 89 6C 24 18 56 57 41 56 48 83 EC 40 48 8B F9 41 8B F1 48 83 C1 08 41 8B E8 4C 8B F2 E8", n));
+    HookShopPayments();
+    const bool steps = ContractsCap("contracts.steps");
+    g_endMission = steps ? SigAs<EndMissionFn>("contracts.end_mission") : nullptr;
     const bool payHook = g_endMission && HookFunction(reinterpret_cast<uint8_t*>(g_endMission), 10,
         reinterpret_cast<void*>(&EndMissionHook), reinterpret_cast<void**>(&g_endMissionOrig));
     if (!payHook) Log("[!] contracts: EndMission not hooked; contracts finished by their own scripts won't pay");
-    uint8_t* fn = FunctionNaming(text, rdata,
-        "void __cdecl CEnvironmentalMissionManager::OnMissionModuleFinished(const class EntityId &,enum EMissionModuleStopReason)",
-        "44 89 44 24 18 48 89 54 24 10 48 89 4C 24 08 55 53 56 57");
+    uint8_t* fn = steps ? sco::Sig("contracts.em_module_finished") : nullptr;
     const bool emHook = fn && HookFunction(fn, 15, reinterpret_cast<void*>(&EmFinishedHook), reinterpret_cast<void**>(&g_emFinishedOrig));
-    fn = FunctionNaming(text, rdata, "CActor::Kill", "4C 89 44 24 18 48 89 54 24 10 55 53 57 41 54");
+    fn = steps ? sco::Sig("contracts.actor_kill") : nullptr;
     const bool killHook = fn && HookFunction(fn, 10, reinterpret_cast<void*>(&ActorKillHook), reinterpret_cast<void**>(&g_actorKillOrig));
-    g_sendComms = reinterpret_cast<SendCommsFn>(FunctionNaming(text, rdata,
-        "SendCommsNotification Record GUID [$$] is invalid - Mission: [$$], Player: $$[$$]", "48 8B C4 4C 89 40 18 48 89 50 10 55 53 56 57 41 56 41 57"));
+    g_sendComms = steps ? SigAs<SendCommsFn>("contracts.send_comms") : nullptr;
     if (!g_sendComms) Log("[!] contracts: mission comms (SendCommsNotification) not found; no mission-giver calls");
-    fn = FunctionNaming(text, rdata, "Succeeded to spawn delivery mission helper. entityId: $$, missionId: $$", "48 89 5C 24 10 48 89 4C 24 08 55 56 57 41 54");
+    fn = steps ? sco::Sig("contracts.helper_spawned") : nullptr;
     const bool helperHook = fn && HookFunction(fn, 10, reinterpret_cast<void*>(&HelperSpawnedHook), reinterpret_cast<void**>(&g_helperSpawnedOrig));
     Log("[contracts] contract steps: end mission %s, environmental mission end %s, actor deaths %s, delivery helpers %s",
         g_endMission ? "ok" : "MISSING", emHook ? "ok" : "MISSING", killHook ? "ok" : "MISSING", helperHook ? "ok" : "MISSING");
@@ -2205,93 +2112,59 @@ static void JoinMissionEntities() {
     }
 }
 
-static void ResolveMissionCreation(const Section& text, const Section& rdata) {
-    HookMissionDiagnostics(text, rdata);
-    HookMissionEntity(text, rdata);
-    HookMissionModules(text, rdata);
-    HookContractSteps(text, rdata);
-    FindMissionStreamRadius(text);
-    FindOfflineMissionService(text, rdata);
+static void ResolveMissionCreation() {
+    HookMissionDiagnostics();
+    HookMissionEntity();
+    HookMissionModules();
+    HookContractSteps();
+    FindMissionStreamRadius();
+    FindOfflineMissionService();
     HookPhaseEnds();
-    HookPhases(text);
+    HookPhases();
     HookHaulingEnds();
-    HookAbandon(text, rdata);
-    FindMissionLogCalls(text, rdata);
-    uint8_t* fn = FunctionStart(FindLeaTo(text, FindCString(rdata, "CMissionFactory::CreateMission")));
-    if (fn && BytesMatch(fn, "4C 89 4C 24 20 4C 89 44 24 18 48 89 54 24 10"))
-        g_factoryCreate = reinterpret_cast<FactoryCreateFn>(fn);
-    int matches = 0;
-    g_copyPropertyMap = reinterpret_cast<CopyMapFn>(FindUniquePattern(text,
-        "48 89 5C 24 20 41 56 48 83 EC 20 4C 8B F2 48 8B D9 48 3B CA 0F 84 ?? ?? ?? ?? 48 89 7C 24 40 48 8B 79 10 48 85 FF 74 ?? "
-        "48 89 6C 24 30 48 89 74 24 38 48 8B 17 48 8B CB E8 ?? ?? ?? ?? 0F B6 57 48 48 8D 4F 28 48 8B 77 08", matches));
+    HookAbandon();
+    FindMissionLogCalls();
+    if (ContractsCap("contracts.mission_creation")) {
+        g_factoryCreate   = SigAs<FactoryCreateFn>("contracts.factory_create");
+        g_copyPropertyMap = SigAs<CopyMapFn>("contracts.copy_property_map");
+        g_getShardGraph   = SigAs<GetShardGraphFn>("contracts.get_shard_graph");
+        g_shardStoreOwner = SigAs<uintptr_t*>("contracts.shard_store_owner");
+        g_shardStoreOff   = Rel32(sco::Sig("contracts.shard_store_get") + cg::kShardStoreOffDisp);
+        g_urnFromEntity   = SigAs<UrnFromEntityFn>("contracts.urn_from_entity");
+        g_assignUrn       = SigAs<AssignUrnFn>("contracts.assign_urn");
+        g_stringInit      = SigAs<StringInitFn>("contracts.string_init");
+    }
     if (!g_copyPropertyMap) Log("[!] contracts: property map copy not found; missions get new locations instead of the offer's");
-
-    fn = FunctionStart(FindLeaTo(text, FindCString(rdata,
-        "class std::shared_ptr<struct IUniverseHierarchyShardGraph> __cdecl CUniverseHierarchyShardStore::GetUniverseShardGraph(const char *) const")));
-    if (fn && BytesMatch(fn, "48 89 5C 24 10 48 89 6C 24 18 48 89 74 24 20 57"))
-        g_getShardGraph = reinterpret_cast<GetShardGraphFn>(fn);
-
-    fn = FunctionStart(FindLeaTo(text, FindCString(rdata, "soc_dumpShardGraph: no shard id supplied and gEnv->GetShardId() is empty")));
-    if (const uint8_t* p = fn ? FindInRange(fn, 0x100, "48 8B 0D ?? ?? ?? ?? E8") : nullptr) {
-        const uint8_t* get = p + 12 + Rel32(p + 8);
-        if (BytesMatch(get, "48 8B 81 ?? ?? ?? ?? C3")) {
-            g_shardStoreOwner = reinterpret_cast<uintptr_t*>(const_cast<uint8_t*>(p + 7 + Rel32(p + 3)));
-            g_shardStoreOff = Rel32(get + 3);
-        }
-    }
-
-    fn = FunctionStart(FindLeaTo(text, FindCString(rdata, "Mission service not accessible")));
-    if (fn && BytesMatch(fn, "48 8B C4 55 41 57 48 8D A8")) {
-        if (const uint8_t* p = FindInRange(fn, 0x600, "49 8B 57 18 88 85 ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 8B D0 48 8D 8D ?? ?? ?? ?? E8")) {
-            g_urnFromEntity = CallTarget<UrnFromEntityFn>(p + 10);
-            g_assignUrn = CallTarget<AssignUrnFn>(p + 25);
-        }
-        if (const uint8_t* p = FindInRange(fn, 0x600, "C6 85 ?? ?? ?? ?? 05 44 88 A5 ?? ?? ?? ?? E8"))
-            g_stringInit = CallTarget<StringInitFn>(p + 14);
-    }
 }
 
 static void* __fastcall AcceptHook(uintptr_t broker, void* out, const uint8_t* request);
 
-void ResolveContractsApi(const Section& text, const Section& rdata) {
-    const uint8_t* s = FindCString(rdata, "DebugAcceptGeneratorContract QueryAvailableContracts Success");
-    uint8_t* fn = FunctionStart(FindLeaTo(text, s));
-    if (fn && BytesMatch(fn, "48 89 4C 24 08 55 53 56 57 41 55")) {
-        g_queryReply = reinterpret_cast<QueryReplyFn>(fn);
-        FindMissionSystem(text, fn);
+void ResolveContractsApi(const Section&, const Section&) {
+    if (ContractsCap("contracts.list")) {
+        g_queryReply = SigAs<QueryReplyFn>("contracts.query_reply");
+        g_missionSystem = SigAs<uintptr_t*>("contracts.mission_system");
+        g_generatorOff = sco::Sig("contracts.mission_generator_get")[cg::kGeneratorOffDisp];
     }
-    ResolveMissionCreation(text, rdata);
+    ResolveMissionCreation();
 
-    s = FindCString(rdata, "DebugAcceptGeneratorContract AcceptContract(after creation) Sent");
-    for (const uint8_t* lea = FindLeaTo(text, s); lea && g_autoAcceptCount < 4; lea = FindLeaTo(text, s, lea + 8)) {
-        DWORD64 base = 0;
-        PRUNTIME_FUNCTION rf = FunctionOf(lea, base);
-        bool known = !rf;
-        for (int i = 0; i < g_autoAcceptCount && !known; ++i) known = g_autoAccept[i] == rf->BeginAddress;
-        if (!known) g_autoAccept[g_autoAcceptCount++] = rf->BeginAddress;
-    }
-
-    s = FindCString(rdata, "CContractBrokerOffline::AcceptContract is not implemented yet");
-    const uint8_t* lea = s ? FindRipLea(text, 0x4C, 0x8D, 0x05, s) : nullptr;
-    uint8_t* stub = lea ? const_cast<uint8_t*>(lea - 0xC) : nullptr;
-    if (stub && BytesMatch(stub, "40 53 48 81 EC D0 00 00 00 48 8B DA 4C 8D 05")) {
-        if (BytesMatch(stub + 0x5E, "E8") && BytesMatch(CallTarget<const uint8_t*>(stub + 0x5E), "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57"))
-            g_resolve = CallTarget<ResolveFn>(stub + 0x5E);
-        uintptr_t* slot = nullptr;
-        int slots = 0;
-        auto* q = reinterpret_cast<uintptr_t*>(rdata.base);
-        for (size_t i = 0; i < rdata.size / 8; ++i)
-            if (q[i] == reinterpret_cast<uintptr_t>(stub)) { slot = q + i; ++slots; }
-        if (slots == 1) {
-            const uintptr_t hook = reinterpret_cast<uintptr_t>(&AcceptHook);
-            DWORD err = 0;
-            if (WriteCode(reinterpret_cast<uint8_t*>(slot), reinterpret_cast<const uint8_t*>(&hook), sizeof(hook), err))
-                g_acceptStub = reinterpret_cast<AcceptFn>(stub);
-            else
-                Log("[contracts] couldn't hook AcceptContract (%lu)", err);
-        } else {
-            Log("[contracts] AcceptContract vtable slot: %d found", slots);
+    if (ContractsCap("contracts.auto_accept")) {
+        const uintptr_t game = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+        for (int i = 1; i <= cg::kAutoAcceptCallers && g_autoAcceptCount < 4; ++i) {
+            char id[48];
+            sprintf_s(id, "contracts.auto_accept_caller.%d", i);
+            g_autoAccept[g_autoAcceptCount++] = static_cast<DWORD>(reinterpret_cast<uintptr_t>(sco::Sig(id)) - game);
         }
+    }
+
+    if (ContractsCap("contracts.accept")) {
+        uint8_t* stub = sco::Sig("contracts.accept_stub");
+        g_resolve = SigAs<ResolveFn>("contracts.accept_resolve");
+        const uintptr_t hook = reinterpret_cast<uintptr_t>(&AcceptHook);
+        DWORD err = 0;
+        if (WriteCode(sco::Sig("contracts.accept_slot"), reinterpret_cast<const uint8_t*>(&hook), sizeof(hook), err))
+            g_acceptStub = reinterpret_cast<AcceptFn>(stub);
+        else
+            Log("[contracts] couldn't hook AcceptContract (%lu)", err);
     }
 
     Log("[contracts] list filler %s, accept hook %s, mission system %s (generator +%Xh), %d auto-accept callers",
