@@ -106,7 +106,7 @@ While you play, the helper changes three things outside the game folder and undo
 
 | Key | Going in | Coming out |
 | --- | --- | --- |
-| `block_network` | Windows Firewall rules, inbound and outbound: `sc-offline: block StarCitizen.exe` (this install's exe only), `sc-offline: block RSI Launcher.exe` (found from its install entry, beside the game library, or the default folder) and `sc-offline: block CrashHandler.exe` (`<channel>\Tools\Public\CrashHandler.exe`, CIG's crash reporter). A rule is only added if its exe exists. `sc-offline.exe` itself stays online for updates. | deleted |
+| `block_network` | Windows Firewall rules, inbound and outbound: `sc-offline: block StarCitizen.exe` (this install's exe only), `sc-offline: block RSI Launcher.exe` (found from its install entry, beside the game library, or the default folder) and `sc-offline: block CrashHandler.exe` (`<channel>\Tools\Public\CrashHandler.exe`, CIG's crash reporter). A rule is only added if its exe exists. `sc-offline.exe` itself stays online for updates. With `multiplayer = on` (the default), the `StarCitizen.exe` rule blocks every address except loopback, the private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), link-local (`169.254.0.0/16`) and `multiplayer_allow` (all IPv6 stays blocked), and one more rule, `sc-offline: allow StarCitizen.exe multiplayer (LAN)`, lets PCs on your local subnet (and `multiplayer_allow`) reach the game over UDP, for a session you host from the [Multiplayer tab](features.md#multiplayer-lan-or-vpn). If Windows refuses the narrower rule, the launcher blocks every address as before and says so. | deleted |
 | `eac_hosts` | `127.0.0.1 modules-cdn.eac-prod.on.epicgames.com # added by sc-offline…` appended to the hosts file, then `ipconfig /flushdns`. Skipped if the hosts file already blocks it | only the tagged line removed, DNS flushed |
 | `eac_rename` | `EasyAntiCheat_EOS.exe` renamed to `EasyAntiCheat_EOS.exe.bak`. Skipped if it isn't there | renamed back |
 
@@ -255,5 +255,7 @@ There is no wallet setting: your aUEC balance is kept in `data\storage\contracts
 | `start` | (empty) | Empty: the game's own spawn (Orison with `boot_map = PU`, a Pyro station with `PU_All`). `Daymar`: about 10 seconds after you spawn, `start_ship` is spawned over Daymar and you're put in its pilot seat. |
 | `plugins` | `off` | `on`: load plugins from `data\plugins\<id>\`. See [Plugins](features.md#plugins). |
 | `block_network` | `on` | Block `StarCitizen.exe`, the RSI Launcher and the game's `CrashHandler.exe` in Windows Firewall while you play. See [PC changes](#pc-changes). |
+| `multiplayer` | `on` | The [Multiplayer tab](features.md#multiplayer-lan-or-vpn). Nothing connects until you press Host or Join there; with `block_network` on, the firewall leaves your LAN open for it (see [PC changes](#pc-changes)). `off`: no tab, and the firewall blocks every address. |
+| `multiplayer_allow` | (empty) | Extra networks a session may use besides your LAN, for a VPN: up to 8 IPv4 ranges separated by commas, `/8` or narrower (Tailscale: `100.64.0.0/10`). Every address in them can reach a session you host, so allow only your VPN's range. A value that doesn't parse is ignored with a warning. |
 | `eac_hosts` | `on` | Add the EAC hosts line while you play. |
 | `eac_rename` | `on` | Rename `EasyAntiCheat_EOS.exe` while you play. |

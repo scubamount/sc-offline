@@ -21,6 +21,7 @@ constexpr int32_t kTabVehicles = 300;   // spawn.vehicles
 constexpr int32_t kTabCrew     = 400;   // crew.crew
 constexpr int32_t kTabNpcs     = 500;   // npc.npcs
 constexpr int32_t kTabBuild    = 600;   // build.build
+constexpr int32_t kTabMultiplayer = 650;   // multiplayer.session
 constexpr int32_t kTabSq42     = 700;   // loadout.sq42
 constexpr int32_t kTabTitanLink = 800;  // titanlink.titanfall (optional bridge, SCO_BRIDGE_TITANLINK)
 constexpr int32_t kTabVoxel     = 810;  // voxel_bridge.voxel (optional bridge, SCO_BRIDGE_VOXEL)
@@ -33,6 +34,7 @@ void DrawVehiclesTab(void* frame, void* ctx);   // spawn_ui.cpp
 void DrawCrewTab(void* frame, void* ctx);       // crew_ui.cpp
 void DrawNpcsTab(void* frame, void* ctx);       // npc_ui.cpp
 void DrawBuildTab(void* frame, void* ctx);      // build_ui.cpp
+void DrawMultiplayerTab(void* frame, void* ctx);   // multiplayer_ui.cpp
 void DrawTitanLinkTab(void* frame, void* ctx);  // titanlink/titanlink_ui.cpp (optional)
 void DrawVoxelTab(void* frame, void* ctx);      // voxel_bridge/voxel_ui.cpp (optional)
 

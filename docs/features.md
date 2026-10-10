@@ -1,6 +1,6 @@
 # Features
 
-Everything runs through a single in-game menu, which **M** opens. It has eight tabs: **Player**, **Travel**, **Vehicles**, **Crew**, **NPCs**, **Build**, **Squadron 42**, **Menu**. The Squadron 42 tab was written for this repository. The other seven come from upstream ChrisWareOffline 0.9.0-rc1.
+Everything runs through a single in-game menu, which **M** opens. It has nine tabs: **Player**, **Travel**, **Vehicles**, **Crew**, **NPCs**, **Build**, **Multiplayer**, **Squadron 42**, **Menu**. The Squadron 42 tab was written for this repository. The other seven come from upstream ChrisWareOffline 0.9.0-rc1.
 
 Most of the lists below are plain text files in `data/`, and the counts are taken from those files. Remove lines from a file and its list gets shorter. See [data-files.md](data-files.md).
 
@@ -87,11 +87,11 @@ sc-offline can load plugins built with the [sco SDK](https://github.com/scubamou
 
    A plugin that can't load is listed with the reason (`refused: built for api 2.0`, `missing capability 'teleport'`, ...); the others still load. To switch one plugin off, put an empty file named `disabled` in its folder.
 
-With `plugins = off`, `mod.log` shows `[plugin] 9 found, 9 loaded (plugins = off)`: only the nine built-in plugins load.
+With `plugins = off`, `mod.log` shows `[plugin] 10 found, 10 loaded (plugins = off)`: only the ten built-in plugins load.
 
 ### Built-in plugins
 
-sc-offline's features are nine plugins compiled into `dinput8.dll`: `teleport`, `spawn`, `crew`, `loadout`, `npc`, `ammo`, `quantum`, `build` and `contracts`, loaded in that order. They load first, with `plugins` on or off, and are listed as `builtin` in the `[plugin]` report (`[plugin] loaded teleport <version> (api 1.1) built in`). Each runs its feature's per-tick work from a `tick` subscription, so a fault there switches that feature off (`[plugin] <id> ... crashed`) instead of crashing the game. Each built-in also draws its own tabs in the menu through sco-core's `sco.ui` service, and binds its keys there: `build` binds F6, and `teleport` binds F7 and F8. The menu looks and works as before. A fault while a tab is drawn switches off only the built-in that owns it, along with its tabs. Their commands are the ones plugins call through the SDK's `invoke`; a command that ran but couldn't do it (an unknown name, a list not loaded yet) answers `failed` with the reason:
+sc-offline's features are ten plugins compiled into `dinput8.dll`: `teleport`, `spawn`, `crew`, `loadout`, `npc`, `ammo`, `quantum`, `build`, `contracts` and `multiplayer`, loaded in that order. They load first, with `plugins` on or off, and are listed as `builtin` in the `[plugin]` report (`[plugin] loaded teleport <version> (api 1.1) built in`). Each runs its feature's per-tick work from a `tick` subscription, so a fault there switches that feature off (`[plugin] <id> ... crashed`) instead of crashing the game. Each built-in also draws its own tabs in the menu through sco-core's `sco.ui` service, and binds its keys there: `build` binds F6, and `teleport` binds F7 and F8. The menu looks and works as before. A fault while a tab is drawn switches off only the built-in that owns it, along with its tabs. Their commands are the ones plugins call through the SDK's `invoke`; a command that ran but couldn't do it (an unknown name, a list not loaded yet) answers `failed` with the reason:
 
 | Command | Does | Key |
 | --- | --- | --- |
@@ -119,6 +119,9 @@ sc-offline's features are nine plugins compiled into `dinput8.dll`: `teleport`, 
 | `build.clear` | Removes everything you placed | |
 | `build.place <object> <ahead>` | Places one buildable (`buildables.txt`) `<ahead>` m in front of you (0 = at your feet, up to 100) without entering build mode | |
 | `contracts.status` | How many contracts are known, offered and running, and your wallet's balance | |
+| `multiplayer.status` | The session's state and how many other players are in it | |
+| `multiplayer.leave` | Leaves the session (or stops hosting) | |
+| `multiplayer.goto <player>` | Teleports you next to that player's ghost | |
 
 Each built-in's commands need the capability named after it (`teleport`, `spawn.ship`, `crew`, `npc`, `loadout`, `ammo`, `quantum`, `build`, `contracts`); one is missing when this game build's addresses for that feature aren't found, and the rest of the plugin system still starts. A built-in owns its id, command prefix and services, so a plugin folder named after one (`teleport`, `spawn`, `crew`, ...) is refused (`the id belongs to a built-in plugin`), whatever its kind.
 
@@ -131,6 +134,20 @@ The `teleport` built-in publishes `teleport.spatial` 1.0 ([`sc_spatial.h`](../ex
 A plugin can add its own menu tab (drawn with sc-offline's ImGui), a badge beside the tab title, and an overlay. It can also bind a free key chord such as `ctrl+alt+9` to any command. sc-offline keeps **M** and build mode's keys for itself. See [plugin-ui.md](plugin-ui.md) for the tab order, how to draw, and the full key table.
 
 When you quit the game (the menu's Quit, or the `quit` console command), plugins get `game.exit` and are then unloaded, newest first and built-ins last, before the game exits. `mod.log` shows `[app] game closing (CSystem::Quit): game.exit, unloading plugins` followed by one `[plugin] unloaded <id>` line per plugin. If the game crashes or is killed (Task Manager, `taskkill`), plugins get no `game.exit` and aren't unloaded; don't rely on it to save anything that matters.
+
+## Multiplayer (LAN or VPN)
+
+Play alongside friends who also run sc-offline. Everyone runs their own offline game; one of you hosts a private session from the **Multiplayer** tab and the others join it by address. Other players show up in your game as **ghosts**: stand-ins your own game spawns and moves to where they are. Nothing connects anywhere until you press **Host** or **Join**, and the game's own netcode and servers aren't used or changed: the session runs on sco-core's `sco.net`, between sc-offline games only.
+
+**Host.** Open the menu (**M**) > **Multiplayer**. Enter the name the others will see and a passphrase of at least 8 characters, keep the UDP port (64091) unless something else uses it, and press **Host**. Give the others your PC's LAN address (`ipconfig` lists it as IPv4 Address, like `192.168.1.20`), the port and the passphrase.
+
+**Join.** Same tab: your name, the host's passphrase, the host's address and port, then **Join**. A wrong passphrase, a full session or no answer is shown under the session state. Up to 8 players per session.
+
+**Where it works.** Your local network only: `10.x`, `172.16-31.x`, `192.168.x` and link-local addresses. For friends elsewhere, use a VPN that puts you on one network and add its range to `multiplayer_allow` in `sc-offline.ini` (Tailscale: `multiplayer_allow = 100.64.0.0/10`); every address in that range can reach a session you host, so allow only the range your VPN uses. With `block_network` on, the launcher's firewall rule for `StarCitizen.exe` leaves those networks open and lets PCs on your subnet reach the game over UDP; the internet stays blocked (see [launcher.md](launcher.md#pc-changes)). Messages are signed with the passphrase, so nobody without it can join or change them, but they **aren't encrypted**: anyone on the network path can read them. They hold only your chosen name, the NPC and ship classes you show as, and where you are.
+
+**What you see.** The tab lists everyone in the session and how each ghost is doing: streaming in (a fresh spawn takes a few seconds), shown, **not shown** while that player is more than 10 km from you, or **parked** when they're in a zone you haven't loaded (another system, say): the ghost is moved far out of sight and comes back when you're both in the same place. Positions travel as zone names with positions inside each zone, so ghosts line up wherever both games have the zone loaded. A player aboard a ship shows as that ship (when the ship's class can be read and spawns in your game; **Show other players' ships** turns this off); otherwise as an NPC: the class they picked under **Others' ghosts** when your `npcs.txt` has it, else your own pick (default: an unarmed civilian). **Go to** teleports you next to a ghost.
+
+**Limits.** Ghosts are visual only: no shared physics or collisions you can rely on, no damage, no shared missions, contracts, inventory, wallet or loadouts, and no voice or chat. Each player's world (NPCs, ships they spawned, build pieces) stays their own; only the player and the ship they're aboard are shown to others. A ghost's pose follows about 0.1 s behind. Sessions use IPv4. Settings are kept in `data/storage/multiplayer.db`; the passphrase only when you tick **Remember the passphrase** (stored unencrypted), and it's never written to `mod.log`. `multiplayer = off` in `sc-offline.ini` removes the tab. `mod.log` lines start with `[multiplayer]` and `[net]`.
 
 ## Bridges (optional builds only)
 
