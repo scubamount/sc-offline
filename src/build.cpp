@@ -465,26 +465,21 @@ static void Clear() {
     Log("[build] base cleared");
 }
 
-// Moves any entity within its zone (local coordinates). Used to send NPCs that can't be removed far away.
-bool MoveEntityLocal(uint64_t id, const double pos[3]) {
+// Moves (and with rot, turns) any entity within its zone, in local coordinates. Build mode's preview,
+// NPCs that can't be removed (sent far away) and spawn.entities' set_entity_transform.
+bool MoveEntityLocal(uint64_t id, const double pos[3], const double rot[4]) {
     __try {
         const uintptr_t e = EntityById(id);
         if (!e || !EntitySlotsOk(e)) return false;
         VCall<void>(e, 0x2B0, pos, 0, false);
+        if (rot) VCall<void>(e, 0x2C0, rot, 0, false);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
 }
 
-static void MovePreview(const double pos[3], const double rot[4]) {
-    __try {
-        const uintptr_t e = EntityById(g_previewId);
-        if (!e || !EntitySlotsOk(e)) return;
-        VCall<void>(e, 0x2B0, pos, 0, false);
-        VCall<void>(e, 0x2C0, rot, 0, false);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {}
-}
+static void MovePreview(const double pos[3], const double rot[4]) { MoveEntityLocal(g_previewId, pos, rot); }
 
 static bool GameWindowInFront() {
     wchar_t title[64] = L"";

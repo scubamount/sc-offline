@@ -164,7 +164,7 @@ target_link_libraries(sc-offline PRIVATE bcrypt shell32 shlwapi advapi32 ole32 w
 # teleport.spatial service, in game (tools/test-plugins).
 # Built into build/test-plugins/<id>/ with its plugin.ini, ready to copy into data/plugins/.
 add_library(spawn_probe SHARED tools/test-plugins/spawn_probe/spawn_probe.c)
-target_include_directories(spawn_probe PRIVATE external/sco-core/include src/builtins)
+target_include_directories(spawn_probe PRIVATE external/sco-core/include)
 target_link_libraries(spawn_probe PRIVATE user32)
 set(_probe_dir "${CMAKE_BINARY_DIR}/test-plugins/spawn_probe")
 set_target_properties(spawn_probe PROPERTIES

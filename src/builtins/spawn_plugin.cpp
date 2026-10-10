@@ -1,23 +1,35 @@
 // spawn: sc-offline's second built-in plugin (sco-core's docs/framework.md, Phase 4, step 2).
 //
 // The sco_api surface over spawner.cpp: the spawn.ship command, the spawn.entities service
-// (spawn_service.h) for other plugins, and the spawner's tick, run from a "tick" subscription so a
-// fault in it disables this plugin instead of the game. The mechanics stay in spawner.cpp; the
-// menu still calls them directly (its tabs move onto commands with the menu, Phase 4 step 4).
+// (sc_spawn.h, shipped in sco-core's SDK) for other plugins, and the spawner's tick, run from a
+// "tick" subscription so a fault in it disables this plugin instead of the game. The mechanics stay
+// in spawner.cpp; the menu still calls them directly (its tabs move onto commands with the menu,
+// Phase 4 step 4).
+//
+// The service's mover (1.2, set_entity_transform) moves only what the caller may move: the ids it
+// spawned through spawn_as (recorded here per plugin handle and forgotten when the runtime releases
+// that plugin), or a player vehicle sc-offline registered (mover.h). Frames convert through the
+// teleport built-in's zone tree; the move itself is build.cpp's MoveEntityLocal.
 #include "builtins.h"
 #include "tabs.h"
-#include "spawn_service.h"
+#include "mover.h"
+#include <sc_spawn.h>
+#include "../build.h"
 #include "../spawner.h"
 #include "../version.h"
 #include "sco/runtime.h"
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 namespace {
 
 const sco_api* g_api = nullptr;    // from SpawnLoad until SpawnUnload
 sco_plugin*    g_self = nullptr;
 bool           g_ticking = false;  // the tick subscription owns ProcessShipMenu
+bool           g_releaseHook = false;  // OnRelease is added (sco::AddReleaseHook)
 
 const sco_plugin_info kInfo = {
     sizeof(sco_plugin_info), SCO_API_MAJOR, SCO_API_MINOR, "spawn", SCO_VERSION, "sc-offline",
@@ -43,7 +55,38 @@ uint64_t PlayerShip() {
     return id;
 }
 
-// ---- spawn.entities (spawn_service.h) ---------------------------------------------------------
+// ---- spawn.entities (sc_spawn.h) --------------------------------------------------------------
+
+// Who may move what (game thread only, like every service call and the runtime's Release).
+struct Owned { const void* owner; uint64_t id; };
+std::vector<Owned>    g_owned;            // spawns made through spawn_as, by plugin handle
+std::vector<uint64_t> g_playerVehicles;   // RegisterPlayerVehicle (ASOP)
+constexpr size_t kMaxOwned = 4096;        // past it, ids that no longer resolve are dropped first
+
+void ForgetOwner(const void* owner) {
+    g_owned.erase(std::remove_if(g_owned.begin(), g_owned.end(), [owner](const Owned& o) { return o.owner == owner; }),
+                  g_owned.end());
+}
+
+bool Remember(const void* owner, uint64_t id) {
+    if (g_owned.size() >= kMaxOwned)
+        g_owned.erase(std::remove_if(g_owned.begin(), g_owned.end(), [](const Owned& o) { return !EntityAlive(o.id); }),
+                      g_owned.end());
+    if (g_owned.size() >= kMaxOwned) return false;
+    g_owned.push_back({ owner, id });
+    return true;
+}
+
+bool MayMove(const void* owner, uint64_t id) {
+    if (g_releaseHook)
+        for (const Owned& o : g_owned)
+            if (o.owner == owner && o.id == id) return true;
+    return std::find(g_playerVehicles.begin(), g_playerVehicles.end(), id) != g_playerVehicles.end();
+}
+
+// A plugin unloaded or crashed (sco::AddReleaseHook): its spawns are nobody's now, so a later
+// plugin given the same handle can't move them.
+void OnRelease(const void* owner) { ForgetOwner(owner); }
 
 const char* SvcSpawnNearPlayer(const char* cls, const double offset[3], uint64_t* outId) {
     if (outId) *outId = 0;
@@ -55,6 +98,32 @@ const char* SvcSpawnNearPlayer(const char* cls, const double offset[3], uint64_t
     if (!err) *outId = id;
     return err;
 }
+
+const char* SvcSpawnAs(sco_plugin* self, const char* cls, const double offset[3], uint64_t* outId) {
+    if (outId) *outId = 0;
+    if (!sco::OnGameThread()) return "game thread only";
+    if (!self) return "bad argument";
+    const char* err = SvcSpawnNearPlayer(cls, offset, outId);
+    if (!err && !Remember(self, *outId)) return "spawned, but too many entities are recorded to move it";
+    return err;
+}
+
+int SvcSetEntityTransform(sco_plugin* self, uint64_t id, uint64_t zoneId, const double pos[3], const double rot[4]) {
+    if (!sco::OnGameThread() || !SpawnerReady() || !self || !id || !pos || !rot) return 0;
+    if (!MayMove(self, id)) return 0;
+    double q[4], n = 0;
+    for (int i = 0; i < 4; ++i) n += rot[i] * rot[i];
+    n = std::sqrt(n);
+    if (!std::isfinite(n) || n < 1e-9) return 0;
+    for (int i = 0; i < 4; ++i) q[i] = rot[i] / n;
+    for (int i = 0; i < 3; ++i)
+        if (!std::isfinite(pos[i])) return 0;
+    const uint64_t in = TeleportZoneOfEntity(id);   // the zone the entity is in: MoveEntityLocal's frame
+    if (!in) return 0;
+    double localPos[3], localRot[4];
+    if (!TeleportPoseToZone(zoneId, in, pos, q, localPos, localRot)) return 0;
+    return MoveEntityLocal(id, localPos, localRot) ? 1 : 0;
+}
 int SvcClassExists(const char* cls) {
     return sco::OnGameThread() && SpawnerReady() && cls && *cls && ClassExists(cls) ? 1 : 0;
 }
@@ -64,6 +133,7 @@ int SvcEntityAlive(uint64_t id) { return sco::OnGameThread() && SpawnerReady() &
 
 const sc_spawn_service_v1 kService = {
     sizeof(sc_spawn_service_v1), SvcSpawnNearPlayer, SvcClassExists, SvcLocalPlayerId, SvcPlayerShipId, SvcEntityAlive,
+    SvcSetEntityTransform,       SvcSpawnAs,
 };
 
 // ---- spawn.ship -------------------------------------------------------------------------------
@@ -121,6 +191,10 @@ sco_result SpawnLoad(const sco_api* api, sco_plugin* self) {
     if (r == SCO_OK) r = api->provide_service(self, SC_SPAWN_SERVICE_NAME, SC_SPAWN_SERVICE_VERSION, &kService);
     if (r == SCO_OK) r = api->subscribe(self, "tick", OnTick, nullptr);
     if (r != SCO_OK) { g_api = nullptr; g_self = nullptr; return r; }   // the host releases what was registered
+    // Without the hook a reloaded plugin could inherit an unloaded one's spawns, so the mover
+    // refuses everything spawned through spawn_as then (spawn_as still spawns).
+    g_releaseHook = sco::AddReleaseHook(OnRelease) == sco::Result::Ok;
+    if (!g_releaseHook) api->log(self, SCO_LOG_WARN, "no release hook left: set_entity_transform moves no spawn_as entity");
     // Its page of the menu (and keys), through sco.ui; the menu shell draws it (tabs.h).
     RegisterBuiltinTab(api, self, "spawn.vehicles", "Vehicles", kTabVehicles, DrawVehiclesTab);
     g_ticking = true;
@@ -130,6 +204,9 @@ sco_result SpawnLoad(const sco_api* api, sco_plugin* self) {
 // A crash leaves g_ticking set: the host never calls a crashed plugin again, and dllmain doesn't
 // take ProcessShipMenu back, so a spawner that faulted stays off instead of faulting the game.
 void SpawnUnload() {
+    if (g_releaseHook) sco::RemoveReleaseHook(OnRelease);
+    g_releaseHook = false;
+    g_owned.clear();
     g_ticking = false;
     g_api = nullptr;
     g_self = nullptr;
@@ -138,5 +215,14 @@ void SpawnUnload() {
 }  // namespace
 
 bool SpawnBuiltinOwnsTick() { return g_ticking; }
+
+void RegisterPlayerVehicle(uint64_t entityId) {
+    if (entityId && std::find(g_playerVehicles.begin(), g_playerVehicles.end(), entityId) == g_playerVehicles.end())
+        g_playerVehicles.push_back(entityId);
+}
+
+void UnregisterPlayerVehicle(uint64_t entityId) {
+    g_playerVehicles.erase(std::remove(g_playerVehicles.begin(), g_playerVehicles.end(), entityId), g_playerVehicles.end());
+}
 
 const sco::plugins::Builtin kSpawnBuiltin = { "spawn", SpawnQuery, SpawnLoad, SpawnUnload };

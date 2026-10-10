@@ -1,14 +1,21 @@
 /* spawn_probe: a test plugin for in-game checks of sc-offline's spawn built-in (not shipped).
  *   Ctrl+Alt+1  logs what the spawn.entities service answers, then invokes spawn.ship with an
  *               unknown class (expect "failed") and with DRAK_Cutlass_Black at 40 m.
- *   Ctrl+Alt+2  spawns a DRAK_Cutlass_Black 30 m from you through spawn.entities.
+ *   Ctrl+Alt+2  spawn.entities 1.2's mover, one step per press, then from the top again:
+ *               1. spawns a DRAK_Cutlass_Black 30 m above you with spawn_near_player (nobody's)
+ *                  and a small ship 20 m beside you with spawn_as (this plugin's);
+ *               2. set_entity_transform in the world frame: the small ship to 60 m above you
+ *                  (expect 1), then the Cutlass, you and your ship, none spawned through
+ *                  spawn_as by this plugin (expect 0 for each);
+ *               3. set_entity_transform in the small ship's own zone frame: to 25 m beside you,
+ *                  turned as you stand (expect 1).
  *   Ctrl+Alt+3  logs what the teleport.spatial service answers about you (pose, zone name, a
  *               local -> world -> local round trip, zone_of_entity) and spawn.entities 1.1's
  *               entity_alive for you and for a made-up id.
  * (Not F-keys: sc-offline uses F6 for build mode and F7/F8 for teleport, and the game many more.)
  * Every result goes to mod.log as "[spawn_probe] ...". */
 #include "sco_api.h"
-#include "spawn_service.h"
+#include <sc_spawn.h>
 #include <sc_spatial.h>
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -20,6 +27,8 @@
 static const sco_api* g_api;
 static sco_plugin*    g_self;
 static int            g_down1, g_down2, g_down3;
+static int            g_moverStep;      /* Ctrl+Alt+2: 0 spawn, 1 world frame, 2 zone frame */
+static uint64_t       g_mine, g_theirs; /* spawned with spawn_as / spawn_near_player */
 
 static const sco_plugin_info kInfo = {
     sizeof(sco_plugin_info), SCO_API_MAJOR, SCO_API_MINOR, "spawn_probe", "1.0.0", "sc-offline tests",
@@ -87,14 +96,72 @@ static void run_checks(void) {
     ship("DRAK_Cutlass_Black", 40.0);
 }
 
-static void run_service_spawn(void) {
-    const sc_spawn_service_v1* s = spawn_service();
-    double offset[3] = { 0.0, 0.0, 30.0 };
-    uint64_t id = 0;
+static const char* small_ship(const sc_spawn_service_v1* s) {
+    static const char* const kSmall[] = { "ORIG_100i", "ANVL_Arrow", "AEGS_Gladius", "DRAK_Cutlass_Black" };
+    size_t i;
+    for (i = 0; i < sizeof(kSmall) / sizeof(kSmall[0]) - 1; ++i)
+        if (s->class_exists(kSmall[i])) return kSmall[i];
+    return kSmall[i];
+}
+
+static void mover_spawn(const sc_spawn_service_v1* s) {
+    double above[3] = { 0.0, 0.0, 30.0 }, beside[3] = { 20.0, 0.0, 5.0 };
+    const char* cls = small_ship(s);
     const char* err;
-    if (!s) return;
-    err = s->spawn_near_player("DRAK_Cutlass_Black", offset, &id);
-    say("spawn_near_player(DRAK_Cutlass_Black, 30 m) -> %s, id %llu", err ? err : "ok", (unsigned long long)id);
+    g_theirs = g_mine = 0;
+    err = s->spawn_near_player("DRAK_Cutlass_Black", above, &g_theirs);
+    say("spawn_near_player(DRAK_Cutlass_Black, 30 m) -> %s, id %llu", err ? err : "ok", (unsigned long long)g_theirs);
+    err = s->spawn_as(g_self, cls, beside, &g_mine);
+    say("spawn_as(%s, 20 m beside) -> %s, id %llu", cls, err ? err : "ok", (unsigned long long)g_mine);
+}
+
+static void mover_world(const sc_spawn_service_v1* s, const sc_spatial_v1* sp) {
+    const double ident[4] = { 0.0, 0.0, 0.0, 1.0 };
+    double pos[3], rot[4], target[3], world[3] = { 0 };
+    uint64_t zone = 0;
+    const uint64_t me = s->local_player_id(), ship = s->player_ship_id();
+    int ok = sp->player_pose(pos, rot, &zone);
+    if (ok) {
+        target[0] = pos[0]; target[1] = pos[1]; target[2] = pos[2] + 60.0;
+        ok = sp->local_to_world(zone, target, world);
+    }
+    if (!ok) { say("mover: player_pose / local_to_world failed; are you spawned?"); return; }
+    say("set_entity_transform(mine %llu, world frame, 60 m above you) -> %d (expect 1)", (unsigned long long)g_mine,
+        s->set_entity_transform(g_self, g_mine, 0, world, ident));
+    say("set_entity_transform(theirs %llu, spawn_near_player) -> %d (expect 0)", (unsigned long long)g_theirs,
+        s->set_entity_transform(g_self, g_theirs, 0, world, ident));
+    say("set_entity_transform(you %llu) -> %d (expect 0)", (unsigned long long)me,
+        s->set_entity_transform(g_self, me, 0, world, ident));
+    if (ship)
+        say("set_entity_transform(your ship %llu) -> %d (expect 0)", (unsigned long long)ship,
+            s->set_entity_transform(g_self, ship, 0, world, ident));
+}
+
+static void mover_zone(const sc_spawn_service_v1* s, const sc_spatial_v1* sp) {
+    const double ident[4] = { 0.0, 0.0, 0.0, 1.0 };
+    double pos[3], rot[4], target[3], local[3] = { 0 };
+    uint64_t zone = 0, shipZone = 0;
+    int ok = sp->player_pose(pos, rot, &zone) && sp->zone_of_entity(g_mine, &shipZone);
+    if (ok) {
+        target[0] = pos[0] + 25.0; target[1] = pos[1]; target[2] = pos[2] + 2.0;
+        ok = sp->zone_to_zone(zone, shipZone, target, local);
+    }
+    if (!ok) { say("mover: player_pose / zone_of_entity(mine %llu) / zone_to_zone failed", (unsigned long long)g_mine); return; }
+    say("set_entity_transform(mine %llu, its zone %llu (%s yours), 25 m beside you) -> %d (expect 1)",
+        (unsigned long long)g_mine, (unsigned long long)shipZone, shipZone == zone ? "same as" : "differs from",
+        s->set_entity_transform(g_self, g_mine, shipZone, local, shipZone == zone ? rot : ident));
+}
+
+static void run_mover(void) {
+    const sc_spawn_service_v1* s = spawn_service();
+    const sc_spatial_v1* sp = (const sc_spatial_v1*)service(SC_SPATIAL_SERVICE_NAME, SC_SPATIAL_SERVICE_VERSION);
+    if (!s || !sp) return;
+    if (s->size <= offsetof(sc_spawn_service_v1, spawn_as)) { say("spawn.entities table is older than 1.2 (size %u)", s->size); return; }
+    say("mover step %d of 3", g_moverStep + 1);
+    if (g_moverStep == 0) mover_spawn(s);
+    else if (g_moverStep == 1) mover_world(s, sp);
+    else mover_zone(s, sp);
+    g_moverStep = (g_moverStep + 1) % 3;
 }
 
 static double distance(const double a[3], const double b[3]) {
@@ -149,7 +216,7 @@ static void on_tick(const char* event, const void* data, void* ctx) {
     const int down3 = chord && held('3');
     (void)event; (void)data; (void)ctx;
     if (down1 && !g_down1) run_checks();
-    if (down2 && !g_down2) run_service_spawn();
+    if (down2 && !g_down2) run_mover();
     if (down3 && !g_down3) run_spatial();
     g_down1 = down1;
     g_down2 = down2;
@@ -164,7 +231,7 @@ SCO_EXPORT sco_result sco_plugin_load(const sco_api* api, sco_plugin* self) {
     g_self = self;
     r = api->subscribe(self, "tick", on_tick, NULL);
     if (r == SCO_OK)
-        say("loaded: Ctrl+Alt+1 = service checks + spawn.ship, Ctrl+Alt+2 = spawn through spawn.entities, "
+        say("loaded: Ctrl+Alt+1 = service checks + spawn.ship, Ctrl+Alt+2 = spawn.entities mover (3 steps), "
             "Ctrl+Alt+3 = teleport.spatial + entity_alive");
     return r;
 }
