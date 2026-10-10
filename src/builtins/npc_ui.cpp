@@ -1,11 +1,28 @@
-// The npc built-in's menu tab: NPCs, and the NPC picker the Crew tab shares. Moved from menu.cpp
-// unchanged; registered through sco.ui by npc_plugin.cpp and drawn by the menu shell.
+// The npc built-in's menu tab: NPCs, and the NPC picker the Crew tab shares. Registered through
+// sco.ui (RegisterNpcsTab, called by npc_plugin.cpp) and drawn by the menu shell. The buttons run
+// the built-in's npc.spawn and npc.clear commands through sco_api's invoke.
 #include "tabs.h"
 #include "../menu.h"
 #include "../menu_ui.h"
 #include "../third_party/imgui/imgui.h"
 #include <cstdio>
 #include <cstring>
+
+static const sco_api* g_api = nullptr;
+static sco_plugin*    g_self = nullptr;
+
+// The command's reply (a refusal, or "Spawning ...") in the menu's status strip, which also logs it.
+static void ShowReply(sco_result, const char* reply, void*) { SetMenuStatus("%s", reply ? reply : ""); }
+
+static void InvokeNpcCommand(const char* name, const sco_arg* args, uint32_t nargs) {
+    if (g_api && g_self) g_api->invoke(g_self, name, args, nargs, ShowReply, nullptr);
+}
+
+void RegisterNpcsTab(const sco_api* api, sco_plugin* self) {
+    g_api = api;
+    g_self = self;
+    RegisterBuiltinTab(api, self, "npc.npcs", "NPCs", kTabNpcs, DrawNpcsTab);
+}
 
 // --- NPC picker, shared by the NPCs and Crew tabs -------------------------------------------
 
@@ -45,7 +62,18 @@ void DrawNpcsTab(void*, void*) {
     static int howMany = 1;
     ImGui::SetNextItemWidth(-1);
     ImGui::SliderInt("##howMany", &howMany, 1, 10, howMany == 1 ? "1 NPC" : "%d NPCs");
-    if (PrimaryButton("Spawn in front of me")) { Menu_RequestNpc(g_npcPick, howMany); MenuClose(); }
-    if (ImGui::Button("Remove spawned NPCs", ImVec2(-1, 0))) Menu_RequestClearNpcs();
+    if (PrimaryButton("Spawn in front of me")) {
+        sco_arg args[2] = {};
+        args[0].type = SCO_ARG_STRING;
+        args[0].v.s = Menu_NpcName(g_npcPick);
+        args[1].type = SCO_ARG_INT;
+        args[1].v.i = howMany;
+        InvokeNpcCommand("npc.spawn", args, 2);
+        MenuClose();
+    }
+    if (ImGui::Button("Remove spawned NPCs", ImVec2(-1, 0))) {
+        InvokeNpcCommand("npc.clear", nullptr, 0);
+        Menu_RequestClearNpcs();   // the crew's NPCs, which the spawner tracks in npc.cpp
+    }
     Hint("Removes every NPC this menu has spawned, crew included.");
 }

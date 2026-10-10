@@ -49,7 +49,7 @@ Lists every seat on your ship and who is in it. From here you can sit in a seat,
 
 ## NPCs
 
-Spawn any of 2239 NPC archetypes in front of you, and remove them again (`npcs.txt`). If the game refuses to delete an NPC offline, the mod moves it far out of range instead.
+Spawn any of 2239 NPC archetypes in front of you, and remove them again (`npcs.txt`). The `npc` built-in spawns through sco-core's `game.actors` service (`spawn_npc` and `despawn`, `sc_actors.h`), so the game pack owns the NPCs: **Remove spawned NPCs** and `npc.clear` despawn them, and unloading or reloading the built-in despawns whatever it spawned. The tab's remove button also takes out the crew's NPCs. NPCs appear 3 m ahead at your feet's height with no ground check, so on a slope they can start a little above or inside the ground.
 
 ## Build (F6)
 
@@ -122,8 +122,8 @@ sc-offline's features are ten plugins compiled into `dinput8.dll`: `teleport`, `
 | `crew.fill <npc>` | Puts an NPC of this archetype (`npcs.txt`) in every empty seat of the target ship | |
 | `crew.clear` | Removes every NPC from the target ship's seats | |
 | `crew.power_on` | Sends the game's Flight Ready event to the target ship | |
-| `npc.spawn <npc> <count>` | Spawns 1 to 10 NPCs of an archetype (`npcs.txt`) in front of you | |
-| `npc.clear` | Removes the NPCs you spawned | |
+| `npc.spawn <npc> <count>` | Spawns 1 to 10 NPCs of an archetype (`npcs.txt`) about 3 m in front of you, through the game pack's `game.actors`; an unknown archetype answers `failed` with the game pack's reason | |
+| `npc.clear` | Despawns the NPCs `npc.spawn` made (the crew's NPCs aren't included; `crew.clear` removes those) | |
 | `loadout.equip <items>` | Equips items from `items.txt` (separated by spaces or commas, one per slot; the other slots are empty, as in the gear menu) | |
 | `loadout.wear <outfit>` | Wears a Squadron 42 outfit from `outfits.txt` | |
 | `ammo.infinite <on>` | Infinite ammo on or off (the menu's checkbox doesn't follow it) | |

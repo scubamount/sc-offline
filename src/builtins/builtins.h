@@ -10,7 +10,7 @@
 extern const sco::plugins::Builtin kTeleportBuiltin;   // teleport_plugin.cpp: teleport.save, teleport.go
 extern const sco::plugins::Builtin kSpawnBuiltin;      // spawn_plugin.cpp: spawn.ship, spawn.entities, the spawner tick
 extern const sco::plugins::Builtin kCrewBuiltin;       // crew_plugin.cpp: crew.*, seat actions and crew jobs
-extern const sco::plugins::Builtin kNpcBuiltin;        // npc_plugin.cpp: npc.spawn, npc.clear, the NPC tick
+extern const sco::plugins::Builtin kNpcBuiltin;        // npc_plugin.cpp: npc.spawn, npc.clear (a game.actors consumer; no tick)
 extern const sco::plugins::Builtin kLoadoutBuiltin;    // loadout_plugin.cpp: loadout.equip, loadout.wear, gear + outfit ticks
 extern const sco::plugins::Builtin kAmmoBuiltin;       // ammo_plugin.cpp: ammo.infinite, ammo.ship_infinite, the ammo tick
 extern const sco::plugins::Builtin kQuantumBuiltin;    // quantum_plugin.cpp: quantum.*, the quantum boost and travel ticks
@@ -27,7 +27,6 @@ bool SpawnBuiltinOwnsTick();
 // The same for the built-ins after it: true while that built-in's tick subscription runs its
 // feature's per-tick work, so RunFeatureTicks (dllmain.cpp) runs it only as the fallback.
 bool CrewBuiltinOwnsTick();
-bool NpcBuiltinOwnsTick();
 bool LoadoutBuiltinOwnsTick();
 bool AmmoBuiltinOwnsTick();
 bool QuantumBuiltinOwnsTick();
