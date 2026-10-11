@@ -3,7 +3,7 @@
 #
 #   tools/check.sh            # from the repo root
 #
-# 1. Parses every src/*.cpp, src/builtins/*.cpp, src/builtins/*/*.cpp (the optional bridges) and launcher/*.cpp with clang against mingw-w64's Windows headers (-fsyntax-only).
+# 1. Parses every src/*.cpp, src/builtins/*.cpp, src/builtins/*/*.cpp (the optional bridges), launcher/*.cpp and plugins/*/*.cpp with clang against mingw-w64's Windows headers (-fsyntax-only).
 #    MSVC accepts a few things clang rejects; those are listed in tools/check-baseline.txt and
 #    only NEW diagnostics fail the check.
 # 2. MSVC error C2712 screen: a function containing __try may not own an object that needs
@@ -35,7 +35,7 @@ SCOLUA=$ROOT/external/sco-core/plugins/lua
 n=0; broken=0
 TMP=$(mktemp)
 shopt -s nullglob
-for f in "$ROOT"/src/*.cpp "$ROOT"/src/builtins/*.cpp "$ROOT"/src/builtins/*/*.cpp "$ROOT"/launcher/*.cpp; do
+for f in "$ROOT"/src/*.cpp "$ROOT"/src/builtins/*.cpp "$ROOT"/src/builtins/*/*.cpp "$ROOT"/launcher/*.cpp "$ROOT"/plugins/*/*.cpp; do
   n=$((n+1))
   out=$("$CLANG" -fsyntax-only -std=c++20 --target=x86_64-w64-windows-gnu \
      -fms-extensions \

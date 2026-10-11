@@ -45,6 +45,14 @@
 - Docs and `sc-offline.ini`: `start_ship` only applies with `start = Daymar`, the wallet lives in `data\wallet.txt`, and a new **Not available offline** list in `docs/features.md` covers ASOP, the vehicle manager and character creation ([#26](https://github.com/scubamount/sc-offline/issues/26)).
 - README: 0.6.1 has been played in game on Windows; the "nobody has played it" note is gone. Linux through Wine is still untested.
 
+## 0.7.5 (2026-10-10) — EXPERIMENTAL
+
+For Star Citizen 4.10.2.
+
+- **Your Discord status shows the version you're actually running.** It used to be part of the launcher, with the version fixed into the launcher when it was built, so a player whose Discord showed an older sc-offline saw the wrong number. It is a plugin now, `data/plugins/discord` (`plugins/discord/`, built only from the sco SDK's headers like `creative`): the version comes from the running mod (`api->host_version()`), and the status also shows where you are (the moon, planet or station) and the ship you're aboard. Its options (where you are, your ship, the buttons) are on its page in the game's menu. The **Discord** switch in the launcher's top bar and the **Plugins** page turn it on and off; an old `discord_presence = off` is carried over once and the line removed. The launcher's own Discord code is gone.
+- **Plugins load by default** (`plugins = on` in the shipped `sc-offline.ini`), so the Discord plugin runs out of the box. `creative` still ships switched off. An existing `sc-offline.ini` keeps whatever `plugins` line it has.
+- `tools/check.sh` now also parses `plugins/*/*.cpp`.
+
 ## 0.7.4 (2026-10-10) — EXPERIMENTAL
 
 For Star Citizen 4.10.2.

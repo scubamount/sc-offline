@@ -5,7 +5,7 @@
 // Keep SCO_VERSION and the three numbers below in step (the .rc version block reads the numbers).
 #define SCO_VERSION_MAJOR 0
 #define SCO_VERSION_MINOR 7
-#define SCO_VERSION_PATCH 4
-#define SCO_VERSION  "0.7.4"
+#define SCO_VERSION_PATCH 5
+#define SCO_VERSION  "0.7.5"
 #define SCO_TITLE    "sc-offline v" SCO_VERSION
 #define SCO_BASED_ON "based on ChrisWareOffline 0.9.0-rc1"

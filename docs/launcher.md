@@ -46,7 +46,7 @@ The sidebar has three pages:
 - **Plugins**: see [below](#the-plugins-page).
 - **Output**: what the running command prints, with a **Copy** button. **Status** and **Update** switch to it.
 
-The top bar has the **Discord** switch (`discord_presence` in `sc-offline.ini`, used from the next Play), **Settings**
+The top bar has the **Discord** switch (the Discord plugin, `data\plugins\discord`, used from the next Play), **Settings**
 (opens `sc-offline.ini` in Notepad), **Logs** (opens `data`), minimize and close. Drag the empty part of the bar to
 move the window.
 
@@ -75,7 +75,7 @@ The page manages `data\plugins\<id>\` the way the host (sco-core) reads it, with
 - **The creative plugin** (`creative`: noclip, god mode, infinite ammo) ships with its `disabled` marker, so it
   starts **off**: switch it on here (and have `plugins = on`). A self-update copies every file in the release,
   that marker included, so switch it on again if it is off after an update.
-- **Plugins are off**: the host loads no plugin unless `plugins = on` in `sc-offline.ini` (the default is off).
+- **Plugins are off**: the host loads no plugin unless `plugins = on` in `sc-offline.ini` (the default is on).
   When it is off, the page says so and **Turn on** writes the key.
 - **Settings** (the gear, for a plugin whose `plugin.ini` has a `[settings]` section): edits the values the
   plugin declared (`bool`, `int`, `float`, `string`, `enum(...)`), checked against the declared range and
@@ -233,14 +233,23 @@ look up the exact source at `https://github.com/scubamount/sc-offline/tree/<comm
 
 ### Discord status
 
-With the Discord app open on the same PC, **Play** sets your Discord status once the game starts:
+The Discord status is a plugin, `data\plugins\discord` (source: `plugins/discord/`), built only from the sco SDK's
+headers. With the Discord app open on the same PC it shows, while the game runs:
 
-- **Playing sc-offline**: `Star Citizen offline mod`, `v<version> · single player`, and the time played
+- **Playing sc-offline**, with where you are (the moon, planet or station) and the ship you're aboard
+- the version the running mod reports (`sc-offline v<version>`), and the time played
 - the sc-offline logo, and two buttons other people can click: **Join the Discord** and **Get sc-offline**
 
-The launcher talks only to the Discord app on your PC (its local pipe). It sends nothing over the network, and it needs no Discord login or token. The status clears when the game closes. If Discord isn't running, nothing happens and `launcher.log` says `Discord: not running`; if Discord starts later, the launcher picks it up within 15 seconds. Under Wine or Proton the Discord pipe usually isn't reachable, so nothing is shown.
+Every value is read from the running game, so the status always names the version you are actually playing. The plugin
+talks only to the Discord app on your PC (its local pipe). It sends nothing over the network, and it needs no Discord login
+or token. The status clears when the game closes. If Discord isn't running, nothing happens and `mod.log` says
+`[discord] Discord isn't running`; if Discord starts later, the plugin picks it up within 15 seconds. Under Wine or Proton
+the Discord pipe usually isn't reachable, so nothing is shown.
 
-To turn it off, untick **Show on Discord** in the window or set `discord_presence = off` in `sc-offline.ini`. The change applies from the next **Play**.
+Its settings (where you are, your ship, the buttons) are on the plugin's page in the game's menu. To turn the status off,
+switch **Discord** off in the window's top bar or on the **Plugins** page (both create `data\plugins\discord\disabled`).
+The change applies from the next **Play**. An old `discord_presence = off` in `sc-offline.ini` is carried over: the first
+0.7.5 run turns the plugin off and removes the line.
 
 ### Crash reports
 
@@ -285,7 +294,6 @@ There is no wallet setting: your aUEC balance is kept in `data\storage\contracts
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `game` | (found automatically) | Your Star Citizen folder. You can point at `Roberts Space Industries`, at `StarCitizen`, at the channel folder, or at the folder that holds `StarCitizen`. |
-| `discord_presence` | `on` | While the game runs, your Discord profile shows **Playing sc-offline** with the version, time played and two buttons (the sc-offline Discord, the download page). Your Discord friends and servers see it. Also the **Show on Discord** box in the window. See [Discord status](#discord-status). |
 | `check_updates` | `on` | Check GitHub for a newer release on `play` and `status` and offer to install it. |
 | `update_channel` | `stable` | `stable`: only full releases are offered. `prerelease`: pre-releases (test builds) are offered too. |
 | `crash_reports` | `on` | After a crash, offer a redacted log bundle and the bug form. See [Crash reports](#crash-reports). |
@@ -294,7 +302,7 @@ There is no wallet setting: your aUEC balance is kept in `data\storage\contracts
 | `boot_map` | `PU_All` | `PU_All` loads every star system, so Travel can reach Pyro and Nyx. |
 | `start_ship` | `DRAK_Cutlass_Black` | The ship used by `start = Daymar`. **Without `start = Daymar` it does nothing.** |
 | `start` | (empty) | Empty: the game's own spawn (Orison with `boot_map = PU`, a Pyro station with `PU_All`). `Daymar`: about 10 seconds after you spawn, `start_ship` is spawned over Daymar and you're put in its pilot seat. |
-| `plugins` | `off` | `on`: load plugins from `data\plugins\<id>\`. See [Plugins](features.md#plugins). |
+| `plugins` | `on` | `on`: load plugins from `data\plugins\<id>\`. See [Plugins](features.md#plugins). |
 | `asop_fleet_list` | `ships` | Which ship list the terminals show with `asop = on`: `game` (the game's own; offline its entitlement query fails, so it's empty) or `ships` (every ship in `data\ships.txt`). |
 | `mining` | `off` | `on`: natural mining, the rocks of the nearby ecosystem cells are built as the game does online. Experimental. See [Natural mining](features.md#natural-mining). `mining_debug = on` (default `off`) adds its counters to `mod.log`. |
 | `asop` | `on` | `off`: leave the ship terminals, personal hangars, the hangar lift and ATC hails as the game has them offline. See [Ship terminals, hangars and ATC](features.md#ship-terminals-hangars-and-atc). |
