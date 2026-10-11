@@ -262,3 +262,24 @@ set_target_properties(sc-offline-creative PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY "${_creative_dir}/$<0:>"
   ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib/plugins")
 configure_file(data/plugins/creative/plugin.ini "${_creative_dir}/plugin.ini" COPYONLY)
+
+# --- the discord plugin (plugins/discord, data/plugins/discord) -----------------------------------
+# "Playing sc-offline" on the player's Discord profile, as a plain SDK consumer (the version from
+# api->host_version(), place from teleport.spatial, ship from game.vehicles + game.entities,
+# settings through sco.settings). Same layout as creative; ships enabled (no `disabled` marker).
+add_library(sc-offline-discord MODULE plugins/discord/discord.cpp)
+target_include_directories(sc-offline-discord PRIVATE external/sco-core/include)
+target_compile_definitions(sc-offline-discord PRIVATE ${SCO_COMMON_DEFINES})
+target_compile_options(sc-offline-discord PRIVATE ${SCO_COMMON_OPTIONS} /W4 /WX)
+set(_discord_dir "${CMAKE_BINARY_DIR}/data/plugins/discord")
+set_target_properties(sc-offline-discord PROPERTIES
+  OUTPUT_NAME discord
+  PREFIX ""
+  SUFFIX ".dll"
+  CXX_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN ON
+  INTERPROCEDURAL_OPTIMIZATION_RELEASE ON
+  RUNTIME_OUTPUT_DIRECTORY "${_discord_dir}/$<0:>"
+  LIBRARY_OUTPUT_DIRECTORY "${_discord_dir}/$<0:>"
+  ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib/plugins")
+configure_file(data/plugins/discord/plugin.ini "${_discord_dir}/plugin.ini" COPYONLY)

@@ -111,24 +111,25 @@ The Gladius' new quantum drive (hold Caps Lock, or B for NAV mode then hold left
 
 ## Plugins
 
-sc-offline can load plugins built with the [sco SDK](https://github.com/scubamount/sco-core/blob/main/sdk/README.md): native DLLs, Lua scripts and data packs. Loading is **off by default**.
+sc-offline can load plugins built with the [sco SDK](https://github.com/scubamount/sco-core/blob/main/sdk/README.md): native DLLs, Lua scripts and data packs. Loading is **on by default** (`plugins = on` in `sc-offline.ini`); sc-offline ships `discord` (on) and `creative` (off).
 
-1. Set `plugins = on` in `sc-offline.ini`.
+1. Keep `plugins = on` in `sc-offline.ini`.
 2. Put each plugin in its own folder, `data/plugins/<id>/`, with its `plugin.ini` (for example `data/plugins/hello/plugin.ini` and `hello.dll`). The SDK's examples (`hello`, `greeter`, `travel_pack`) are ready to copy.
 3. Start the game. `mod.log` reports what was found, after the startup lines:
 
    ```
-   [plugin] 12 found, 11 loaded (plugins = on)
+   [plugin] 13 found, 12 loaded (plugins = on)
    [plugin] teleport <version> builtin loaded
    [plugin] spawn <version> builtin loaded
    ...
    [plugin] contracts <version> builtin loaded
    [plugin] creative <version> <kind> disabled
+   [plugin] discord <version> native loaded
    [plugin] greeter 1.0.0 lua loaded
    ...
    ```
 
-   Here the ten built-ins, `creative` (found, but not loaded while its `disabled` marker is there) and `greeter` make 12 found, 11 loaded. A plugin that can't load is listed with the reason (`refused: built for api 2.0`, `missing capability 'teleport'`, ...); the others still load. To switch one plugin off, put an empty file named `disabled` in its folder (the launcher's Plugins page does the same, see [launcher.md](launcher.md#the-plugins-page)).
+   Here the ten built-ins, `creative` (found, but not loaded while its `disabled` marker is there), `discord` and `greeter` make 13 found, 12 loaded. A plugin that can't load is listed with the reason (`refused: built for api 2.0`, `missing capability 'teleport'`, ...); the others still load. To switch one plugin off, put an empty file named `disabled` in its folder (the launcher's Plugins page does the same, see [launcher.md](launcher.md#the-plugins-page)).
 
 With `plugins = off`, `mod.log` shows `[plugin] 10 found, 10 loaded (plugins = off)`: only the ten built-in plugins load (two more in a build with the optional bridges).
 

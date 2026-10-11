@@ -171,7 +171,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: creative-plugin
-          path: build/data/plugins/creative/creative.dll
+          path: |
+            build/data/plugins/creative/creative.dll
+            build/data/plugins/discord/discord.dll
           if-no-files-found: error
           retention-days: 30
 
@@ -268,8 +270,12 @@ jobs:
           git ls-files -z data | xargs -0 cp --parents -t "stage/$pkg/"
           # The creative plugin: its DLL from CI next to the tracked plugin.ini and `disabled` marker
           # (off until the player turns it on in the launcher's Plugins page).
-          cp built-creative/creative.dll "stage/$pkg/data/plugins/creative/"
+          cp built-creative/creative/creative.dll "stage/$pkg/data/plugins/creative/"
           for f in plugin.ini disabled creative.dll; do test -f "stage/$pkg/data/plugins/creative/$f"; done
+          # The discord plugin: on by default (no `disabled` marker).
+          cp built-creative/discord/discord.dll "stage/$pkg/data/plugins/discord/"
+          for f in plugin.ini discord.dll; do test -f "stage/$pkg/data/plugins/discord/$f"; done
+          test ! -e "stage/$pkg/data/plugins/discord/disabled"
           chmod +x "stage/$pkg/sc-offline.sh"
           python3 tools/release-manifest.py write "stage/$pkg" --tag "$TAG" --commit "$SHA" --version-h src/version.h
           (cd stage && zip -qrX "../$pkg.zip" "$pkg")
